@@ -2,7 +2,6 @@ import base64
 import json
 import os
 import re
-import subprocess
 import time
 import warnings
 warnings.filterwarnings("ignore")  # กัน NotOpenSSLWarning ของ urllib3 เปื้อน log
@@ -16,13 +15,6 @@ JSON_PATH = "/tmp/weather_meta.json"
 
 HEADERS = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}
 MIN_IMAGE_BYTES = 5000  # กันภาพเสีย/หน้า error มาแทนภาพจริง
-
-# แจ้งเตือนโอกาสฝนตก (Open-Meteo, กรุงเทพ) หลัง 16:00 ครั้งเดียวต่อวัน
-FORECAST_URL = ("https://api.open-meteo.com/v1/forecast?latitude=13.75&longitude=100.50"
-                "&hourly=precipitation_probability&timezone=Asia%2FBangkok&forecast_days=1")
-NOTIFY_STATE = "/tmp/weather_notify_state.json"
-NOTIFY_AFTER_HOUR = 16
-RAIN_PROB_THRESHOLD = 50  # % ขึ้นไปถึงจะเตือน
 
 
 def atomic_write(path, obj):
@@ -68,45 +60,6 @@ def main():
     print("✅ radar updated ({} KB)".format(len(img_data) // 1024))
 
 
-def maybe_notify_rain():
-    now = datetime.now()
-    if now.hour < NOTIFY_AFTER_HOUR:
-        return
-
-    # ครั้งเดียวต่อวัน
-    today = now.strftime("%Y-%m-%d")
-    try:
-        with open(NOTIFY_STATE) as f:
-            if json.load(f).get("date") == today:
-                return
-    except Exception:
-        pass
-
-    r = requests.get(FORECAST_URL, headers=HEADERS, timeout=15)
-    r.raise_for_status()
-    hourly = r.json()["hourly"]
-
-    # ดูความน่าจะเป็นฝนตั้งแต่ชั่วโมงนี้จนหมดวัน
-    candidates = [
-        (prob, int(t[11:13]))
-        for t, prob in zip(hourly["time"], hourly["precipitation_probability"])
-        if prob is not None and int(t[11:13]) >= now.hour
-    ]
-    if not candidates:
-        return
-    prob, at_hour = max(candidates)
-    if prob < RAIN_PROB_THRESHOLD:
-        return
-
-    msg = "โอกาสฝนตก {}% ช่วงประมาณ {:02d}:00".format(prob, at_hour)
-    subprocess.run([
-        "osascript", "-e",
-        'display notification "{}" with title "BMA Weather" sound name "Glass"'.format(msg),
-    ], check=True)
-    atomic_write(NOTIFY_STATE, {"date": today, "prob": prob, "hour": at_hour})
-    print("🔔 rain notification sent ({}% @{:02d}:00)".format(prob, at_hour))
-
-
 if __name__ == "__main__":
     exit_code = 0
     try:
@@ -116,10 +69,12 @@ if __name__ == "__main__":
         print("❌ Error: {}".format(e))
         exit_code = 1
 
-    # แจ้งเตือนฝนแยกอิสระจากการดึงภาพเรดาร์ — พังฝั่งหนึ่งอีกฝั่งยังทำงาน
+    # แจ้งเตือนฝนจากเรดาร์ (nowcasting) แยกอิสระจากการดึงภาพ — พังฝั่งหนึ่งอีกฝั่งยังทำงาน
+    # ตัดสินใจเฉพาะ 16:00/16:15/16:30/16:45 เจอครั้งเดียวหยุดทั้งวัน (ดู rain_nowcast.py)
     try:
-        maybe_notify_rain()
+        import rain_nowcast
+        rain_nowcast.run_check()
     except Exception as e:
-        print("⚠️ rain notify check failed: {}".format(e))
+        print("⚠️ rain nowcast check failed: {}".format(e))
 
     raise SystemExit(exit_code)

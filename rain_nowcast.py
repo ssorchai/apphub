@@ -24,8 +24,8 @@ LOOP_URL = "https://weather.tmd.go.th/pic_bmancLoop.gif"
 STATE_PATH = "/tmp/weather_notify_state.json"  # ครั้งเดียวต่อวัน
 HEADERS = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}
 
-# ---- Georeference (calibrate จากภาพจริง 2026-07-02) ----
-RADAR_LATLON = (13.855, 100.856)   # เรดาร์หนองจอก = ศูนย์กลางวงแหวน
+# ---- Georeference (calibrate จากภาพจริง + ตรวจกับ landmark ชายฝั่ง 2026-07-02) ----
+RADAR_LATLON = (13.8348127, 100.8463349)  # สถานีเรดาร์หนองจอก (pin จริงจาก Google Maps)
 CENTER_PX = (483.0, 400.0)         # pixel ศูนย์กลางวงแหวนในภาพ 965x800
 KM_PER_PX = 120.0 / 399.0          # วง 120 km รัศมี 399 px -> 0.3008 km/px
 

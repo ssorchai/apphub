@@ -55,8 +55,9 @@ def fetch_yahoo_futures_open(session):
     r = session.get(YAHOO_URL, headers=UA_HEADERS, timeout=15)
     r.raise_for_status()
     quote = r.json()["chart"]["result"][0]["indicators"]["quote"][0]
+    # range=1d อาจได้หลายแท่งช่วงรอยต่อวันเทรด — เอาแท่งล่าสุด (วันปัจจุบัน) เสมอ
     opens = [v for v in quote.get("open", []) if v is not None]
-    return round(opens[0], 2) if opens else None
+    return round(opens[-1], 2) if opens else None
 
 
 def fetch_investing(session, pair_id):

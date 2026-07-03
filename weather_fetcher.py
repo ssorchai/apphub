@@ -1,16 +1,17 @@
 import base64
 import json
 import os
-import re
 import time
 import warnings
 warnings.filterwarnings("ignore")  # กัน NotOpenSSLWarning ของ urllib3 เปื้อน log
 import requests
 from datetime import datetime
 
-# ดึงภาพเรดาร์ BMA (หนองจอก) จากหน้า TMD ตรงๆ ด้วย HTTP — ไม่ต้องใช้ Playwright
-PAGE_URL = "https://weather.tmd.go.th/bma_nck.php"
-FALLBACK_IMG_URL = "https://weather.tmd.go.th/pic_bmanck.jpg"
+# ดึงภาพเรดาร์ BMA (หนองจอก) — ลอง TMD (mirror) ก่อน ถ้าโดน WAF block/ล่ม
+# fallback ไปดึงจากเว็บสำนักการระบายน้ำ กทม. ซึ่งเป็นต้นทางเรดาร์ตัวจริง
+TMD_IMG_URL = "https://weather.tmd.go.th/pic_bmanck.jpg"
+BMA_PAGE_URL = "https://weather.bangkok.go.th/Radar/RadarNongchok.aspx"
+BMA_IMG_URL = "https://weather.bangkok.go.th/Radar/ImageHandlerNongchok.ashx"
 JSON_PATH = "/tmp/weather_meta.json"
 
 HEADERS = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}
@@ -24,40 +25,55 @@ def atomic_write(path, obj):
     os.replace(temp, path)
 
 
-def find_radar_url(session):
-    """หา src ของภาพเรดาร์จากหน้าเว็บ ถ้าโครงหน้าเปลี่ยนก็ fallback เป็น URL ตรง"""
-    try:
-        html = session.get(PAGE_URL, headers=HEADERS, timeout=30).text
-        for src in re.findall(r'<img[^>]+src="([^"]+)"', html, re.IGNORECASE):
-            if "bmanck" in src.lower() or "bma" in src.lower():
-                if src.startswith("http"):
-                    return src
-                return "https://weather.tmd.go.th/" + src.lstrip("/")
-    except Exception as e:
-        print("⚠️ page fetch failed, using fallback URL: {}".format(e))
-    return FALLBACK_IMG_URL
+def fetch_tmd(session):
+    r = session.get(TMD_IMG_URL, headers=HEADERS, timeout=20)
+    r.raise_for_status()
+    return r.content, r.headers.get("Content-Type", "image/jpeg").split(";")[0]
+
+
+def fetch_bma(session):
+    """เว็บ กทม. ต้องแวะหน้า aspx เอา cookie + ส่ง Referer ถึงจะยอมให้ดึงภาพ
+    (cert chain ของเขาไม่ครบ เลยต้อง verify=False)"""
+    session.get(BMA_PAGE_URL, headers=HEADERS, timeout=20, verify=False)
+    r = session.get(
+        "{}?{}".format(BMA_IMG_URL, datetime.now().strftime("%Y%m%d%H%M%S")),
+        headers=dict(HEADERS, Referer=BMA_PAGE_URL), timeout=30, verify=False)
+    r.raise_for_status()
+    ct = r.headers.get("Content-Type", "")
+    if not ct.startswith("image"):
+        raise ValueError("got {} instead of image".format(ct or "unknown"))
+    return r.content, ct.split(";")[0]
 
 
 def main():
     session = requests.Session()
-    img_url = find_radar_url(session)
+    img_data = mime = via = None
+    errors = []
+    for name, fetch in (("TMD", fetch_tmd), ("BMA", fetch_bma)):
+        try:
+            img_data, mime = fetch(session)
+            if len(img_data) < MIN_IMAGE_BYTES:
+                raise ValueError("image too small ({} bytes)".format(len(img_data)))
+            via = name
+            break
+        except Exception as e:
+            errors.append("{}: {}".format(name, e))
+            img_data = None
+    if img_data is None:
+        raise RuntimeError("all sources failed — " + "; ".join(errors))
+    if errors:
+        print("⚠️ fallback in use: {}".format("; ".join(errors)))
 
-    r = session.get(img_url, headers=HEADERS, timeout=60)
-    r.raise_for_status()
-    img_data = r.content
-    if len(img_data) < MIN_IMAGE_BYTES:
-        raise ValueError("image too small ({} bytes), keeping previous data".format(len(img_data)))
-
-    mime = r.headers.get("Content-Type", "image/jpeg").split(";")[0]
     metadata = {
         "last_update": datetime.now().strftime("%H:%M"),
         "source": "BMA Radar (Nong Chok)",
+        "via": via,
         "mime": mime,
         "img_base64": base64.b64encode(img_data).decode("utf-8"),
         "ts": int(time.time()),
     }
     atomic_write(JSON_PATH, metadata)
-    print("✅ radar updated ({} KB)".format(len(img_data) // 1024))
+    print("✅ radar updated ({} KB via {})".format(len(img_data) // 1024, via))
 
 
 if __name__ == "__main__":

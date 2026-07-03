@@ -75,17 +75,24 @@ crontab ปัจจุบัน:
 
 ## ที่มาของข้อมูล
 
-| ข้อมูล | แหล่งหลัก | แหล่งสำรอง (fallback อัตโนมัติ) |
+| ข้อมูล | แหล่งหลัก: เว็บ กทม. (ต้นทางจริง) | แหล่งสำรอง: TMD (mirror) |
 |---|---|---|
-| ภาพเรดาร์นิ่ง (แสดงบน widget) | `https://weather.tmd.go.th/pic_bmanck.jpg` (965×800) | `weather.bangkok.go.th/Radar/ImageHandlerNongchok.ashx` |
-| ภาพเรดาร์เคลื่อนไหว (ใช้ทำ nowcast) | `https://weather.tmd.go.th/pic_bmancLoop.gif` — GIF **12 frames ห่าง 5 นาที** (~55 นาทีย้อนหลัง) | `weather.bangkok.go.th/Radar/ImageHandlerNongchokAni.ashx` |
+| ภาพเรดาร์นิ่ง (แสดงบน widget) | `weather.bangkok.go.th/Radar/ImageHandlerNongchok.ashx` | `weather.tmd.go.th/pic_bmanck.jpg` |
+| ภาพเรดาร์เคลื่อนไหว (nowcast) | `weather.bangkok.go.th/Radar/ImageHandlerNongchokAni.ashx` — GIF **12 frames ห่าง 5 นาที** (~55 นาทีย้อนหลัง) | `weather.tmd.go.th/pic_bmancLoop.gif` |
 
-เรดาร์เป็นของ**สำนักการระบายน้ำ กทม. (BMA)** สถานีหนองจอก — TMD เป็นแค่ mirror
-(อยู่หลัง Imperva WAF ซึ่งเคย soft-block IP บ้านมาแล้ว: connect ได้แต่กลืน request เงียบๆ
-เกิดเมื่อ 2026-07-03) แหล่งสำรองคือเว็บ กทม. ต้นทางจริง ให้ภาพ**ตัวเดียวกัน 965×800**
-แต่มีเงื่อนไข: ต้องแวะหน้า `.aspx` เอา session cookie + ส่ง `Referer` และ cert chain
-ของเขาไม่ครบต้อง `verify=False` — fetcher ลอง TMD ก่อนเสมอ พลาดค่อยสลับ (ดู field
-`via` ใน JSON ว่ารอบนั้นมาจากแหล่งไหน)
+เรดาร์เป็นของ**สำนักการระบายน้ำ กทม. (BMA)** สถานีหนองจอก ทั้งสองแหล่งให้ภาพ
+**ตัวเดียวกัน 965×800** (field `via` ใน JSON บอกว่ารอบนั้นมาจากไหน)
+
+เหตุที่เรียงลำดับแบบนี้ + มาตรการกันโดน block (บทเรียน 2026-07-03 ที่ Imperva WAF
+ของ TMD soft-block IP บ้าน — connect ได้แต่กลืน request เงียบๆ นาน ~11 ชม.):
+- เว็บ กทม. เป็นหลัก: ตัว `.ashx` ต้องการแค่ header `Referer` ที่ถูกต้อง (กัน hotlink)
+  ไม่ต้องมี cookie → **1 request ต่อ 5 นาที** เท่า browser ปกติ / cert chain
+  ของเขาไม่ครบ ต้อง `verify=False`
+- TMD จะถูกแตะ**เฉพาะรอบที่ กทม. ล่ม**เท่านั้น โอกาสสะสม request จนโดน WAF ต่ำมาก
+- ไม่ retry รัวในรอบเดียว (พลาดแล้วรอ cron รอบถัดไป 5 นาที) และ loop GIF (4MB)
+  ถูกดึงแค่ ~4 ครั้ง/วันตามรอบเช็คฝน
+- ไฟล์นิ่งใน `weather.bangkok.go.th/Images/Radar/` เป็นของค้างเก่า (หยุดอัปเดต
+  มิ.ย. 2026) **ห้ามใช้** — ต้องผ่าน ImageHandler เท่านั้น
 
 ภาพส่งต่อเป็น JPEG เดิมไม่ re-encode (base64 ฝังใน JSON) — ต้นทางเป็น jpg อยู่แล้ว
 แปลงเป็น PNG ไม่ได้ความคมคืนมา มีแต่ไฟล์บวม

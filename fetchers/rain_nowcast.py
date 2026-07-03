@@ -23,10 +23,10 @@ from PIL import Image, ImageSequence
 STATE_PATH = "/tmp/weather_notify_state.json"  # ครั้งเดียวต่อวัน
 HEADERS = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}
 
-# แหล่ง loop GIF: TMD (mirror) ก่อน แล้ว fallback เว็บ กทม. (ต้นทางจริง ต้องมี cookie+Referer)
-LOOP_TMD_URL = "https://weather.tmd.go.th/pic_bmancLoop.gif"
+# แหล่ง loop GIF: เว็บ กทม. (ต้นทางจริง ต้องส่ง Referer) ก่อน แล้ว fallback TMD (mirror)
 LOOP_BMA_PAGE = "https://weather.bangkok.go.th/Radar/RadarAnimation.aspx"
 LOOP_BMA_URL = "https://weather.bangkok.go.th/Radar/ImageHandlerNongchokAni.ashx"
+LOOP_TMD_URL = "https://weather.tmd.go.th/pic_bmancLoop.gif"
 
 # ---- Georeference (calibrate จากภาพจริง + ตรวจกับ landmark ชายฝั่ง 2026-07-02) ----
 RADAR_LATLON = (13.8348127, 100.8463349)  # สถานีเรดาร์หนองจอก (pin จริงจาก Google Maps)
@@ -178,15 +178,6 @@ def fetch_loop_gif():
     session = requests.Session()
     errors = []
     try:
-        r = session.get(LOOP_TMD_URL, headers=HEADERS, timeout=30)
-        r.raise_for_status()
-        if r.headers.get("Content-Type", "").startswith("image"):
-            return r.content
-        errors.append("TMD: not an image")
-    except Exception as e:
-        errors.append("TMD: {}".format(e))
-    try:
-        session.get(LOOP_BMA_PAGE, headers=HEADERS, timeout=20, verify=False)
         r = session.get(
             "{}?{}".format(LOOP_BMA_URL, datetime.now().strftime("%Y%m%d%H%M%S")),
             headers=dict(HEADERS, Referer=LOOP_BMA_PAGE), timeout=60, verify=False)
@@ -196,6 +187,14 @@ def fetch_loop_gif():
         errors.append("BMA: not an image")
     except Exception as e:
         errors.append("BMA: {}".format(e))
+    try:
+        r = session.get(LOOP_TMD_URL, headers=HEADERS, timeout=30)
+        r.raise_for_status()
+        if r.headers.get("Content-Type", "").startswith("image"):
+            return r.content
+        errors.append("TMD: not an image")
+    except Exception as e:
+        errors.append("TMD: {}".format(e))
     raise RuntimeError("loop gif unavailable — " + "; ".join(errors))
 
 

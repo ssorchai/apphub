@@ -7,11 +7,12 @@ warnings.filterwarnings("ignore")  # กัน NotOpenSSLWarning ของ urlli
 import requests
 from datetime import datetime
 
-# ดึงภาพเรดาร์ BMA (หนองจอก) — ลอง TMD (mirror) ก่อน ถ้าโดน WAF block/ล่ม
-# fallback ไปดึงจากเว็บสำนักการระบายน้ำ กทม. ซึ่งเป็นต้นทางเรดาร์ตัวจริง
-TMD_IMG_URL = "https://weather.tmd.go.th/pic_bmanck.jpg"
+# ดึงภาพเรดาร์หนองจอก — แหล่งหลัก: เว็บสำนักการระบายน้ำ กทม. (ต้นทางเรดาร์จริง)
+# fallback: TMD (mirror, อยู่หลัง Imperva WAF ที่เคย block IP เรา — แตะเฉพาะตอน กทม. ล่ม)
+# มารยาทกันโดน block: 1 request ต่อรอบ, Referer ถูกต้อง, ไม่ retry รัวในรอบเดียว
 BMA_PAGE_URL = "https://weather.bangkok.go.th/Radar/RadarNongchok.aspx"
 BMA_IMG_URL = "https://weather.bangkok.go.th/Radar/ImageHandlerNongchok.ashx"
+TMD_IMG_URL = "https://weather.tmd.go.th/pic_bmanck.jpg"
 JSON_PATH = "/tmp/weather_meta.json"
 
 HEADERS = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}
@@ -25,16 +26,9 @@ def atomic_write(path, obj):
     os.replace(temp, path)
 
 
-def fetch_tmd(session):
-    r = session.get(TMD_IMG_URL, headers=HEADERS, timeout=20)
-    r.raise_for_status()
-    return r.content, r.headers.get("Content-Type", "image/jpeg").split(";")[0]
-
-
 def fetch_bma(session):
-    """เว็บ กทม. ต้องแวะหน้า aspx เอา cookie + ส่ง Referer ถึงจะยอมให้ดึงภาพ
-    (cert chain ของเขาไม่ครบ เลยต้อง verify=False)"""
-    session.get(BMA_PAGE_URL, headers=HEADERS, timeout=20, verify=False)
+    """ตัวส่งภาพของเว็บ กทม. ยอมให้ดึงเมื่อมี Referer ถูกต้อง (กัน hotlink)
+    cert chain ของเขาไม่ครบ เลยต้อง verify=False"""
     r = session.get(
         "{}?{}".format(BMA_IMG_URL, datetime.now().strftime("%Y%m%d%H%M%S")),
         headers=dict(HEADERS, Referer=BMA_PAGE_URL), timeout=30, verify=False)
@@ -45,11 +39,17 @@ def fetch_bma(session):
     return r.content, ct.split(";")[0]
 
 
+def fetch_tmd(session):
+    r = session.get(TMD_IMG_URL, headers=HEADERS, timeout=20)
+    r.raise_for_status()
+    return r.content, r.headers.get("Content-Type", "image/jpeg").split(";")[0]
+
+
 def main():
     session = requests.Session()
     img_data = mime = via = None
     errors = []
-    for name, fetch in (("TMD", fetch_tmd), ("BMA", fetch_bma)):
+    for name, fetch in (("BMA", fetch_bma), ("TMD", fetch_tmd)):
         try:
             img_data, mime = fetch(session)
             if len(img_data) < MIN_IMAGE_BYTES:

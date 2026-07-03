@@ -75,10 +75,17 @@ crontab ปัจจุบัน:
 
 ## ที่มาของข้อมูล
 
-| ข้อมูล | แหล่ง | หมายเหตุ |
+| ข้อมูล | แหล่งหลัก | แหล่งสำรอง (fallback อัตโนมัติ) |
 |---|---|---|
-| ภาพเรดาร์นิ่ง (แสดงบน widget) | `https://weather.tmd.go.th/pic_bmanck.jpg` (965×800) | เรดาร์ของ**สำนักการระบายน้ำ กทม. (BMA)** สถานีหนองจอก — TMD แค่ host หน้าเพจ |
-| ภาพเรดาร์เคลื่อนไหว (ใช้ทำ nowcast) | `https://weather.tmd.go.th/pic_bmancLoop.gif` | animated GIF **12 frames ห่างกัน 5 นาที** = ย้อนหลัง ~55 นาที มี timestamp ในภาพ |
+| ภาพเรดาร์นิ่ง (แสดงบน widget) | `https://weather.tmd.go.th/pic_bmanck.jpg` (965×800) | `weather.bangkok.go.th/Radar/ImageHandlerNongchok.ashx` |
+| ภาพเรดาร์เคลื่อนไหว (ใช้ทำ nowcast) | `https://weather.tmd.go.th/pic_bmancLoop.gif` — GIF **12 frames ห่าง 5 นาที** (~55 นาทีย้อนหลัง) | `weather.bangkok.go.th/Radar/ImageHandlerNongchokAni.ashx` |
+
+เรดาร์เป็นของ**สำนักการระบายน้ำ กทม. (BMA)** สถานีหนองจอก — TMD เป็นแค่ mirror
+(อยู่หลัง Imperva WAF ซึ่งเคย soft-block IP บ้านมาแล้ว: connect ได้แต่กลืน request เงียบๆ
+เกิดเมื่อ 2026-07-03) แหล่งสำรองคือเว็บ กทม. ต้นทางจริง ให้ภาพ**ตัวเดียวกัน 965×800**
+แต่มีเงื่อนไข: ต้องแวะหน้า `.aspx` เอา session cookie + ส่ง `Referer` และ cert chain
+ของเขาไม่ครบต้อง `verify=False` — fetcher ลอง TMD ก่อนเสมอ พลาดค่อยสลับ (ดู field
+`via` ใน JSON ว่ารอบนั้นมาจากแหล่งไหน)
 
 ภาพส่งต่อเป็น JPEG เดิมไม่ re-encode (base64 ฝังใน JSON) — ต้นทางเป็น jpg อยู่แล้ว
 แปลงเป็น PNG ไม่ได้ความคมคืนมา มีแต่ไฟล์บวม

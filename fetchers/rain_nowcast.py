@@ -20,9 +20,13 @@ from datetime import datetime
 from io import BytesIO
 from PIL import Image, ImageSequence
 
-LOOP_URL = "https://weather.tmd.go.th/pic_bmancLoop.gif"
 STATE_PATH = "/tmp/weather_notify_state.json"  # ครั้งเดียวต่อวัน
 HEADERS = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}
+
+# แหล่ง loop GIF: TMD (mirror) ก่อน แล้ว fallback เว็บ กทม. (ต้นทางจริง ต้องมี cookie+Referer)
+LOOP_TMD_URL = "https://weather.tmd.go.th/pic_bmancLoop.gif"
+LOOP_BMA_PAGE = "https://weather.bangkok.go.th/Radar/RadarAnimation.aspx"
+LOOP_BMA_URL = "https://weather.bangkok.go.th/Radar/ImageHandlerNongchokAni.ashx"
 
 # ---- Georeference (calibrate จากภาพจริง + ตรวจกับ landmark ชายฝั่ง 2026-07-02) ----
 RADAR_LATLON = (13.8348127, 100.8463349)  # สถานีเรดาร์หนองจอก (pin จริงจาก Google Maps)
@@ -170,6 +174,31 @@ def save_state(today, extra):
     os.replace(temp, STATE_PATH)
 
 
+def fetch_loop_gif():
+    session = requests.Session()
+    errors = []
+    try:
+        r = session.get(LOOP_TMD_URL, headers=HEADERS, timeout=30)
+        r.raise_for_status()
+        if r.headers.get("Content-Type", "").startswith("image"):
+            return r.content
+        errors.append("TMD: not an image")
+    except Exception as e:
+        errors.append("TMD: {}".format(e))
+    try:
+        session.get(LOOP_BMA_PAGE, headers=HEADERS, timeout=20, verify=False)
+        r = session.get(
+            "{}?{}".format(LOOP_BMA_URL, datetime.now().strftime("%Y%m%d%H%M%S")),
+            headers=dict(HEADERS, Referer=LOOP_BMA_PAGE), timeout=60, verify=False)
+        r.raise_for_status()
+        if r.headers.get("Content-Type", "").startswith("image"):
+            return r.content
+        errors.append("BMA: not an image")
+    except Exception as e:
+        errors.append("BMA: {}".format(e))
+    raise RuntimeError("loop gif unavailable — " + "; ".join(errors))
+
+
 def run_check(force=False, dry_run=False):
     now = datetime.now()
     if not force:
@@ -179,9 +208,7 @@ def run_check(force=False, dry_run=False):
         if already_notified_today(now.strftime("%Y-%m-%d")):
             return
 
-    r = requests.get(LOOP_URL, headers=HEADERS, timeout=60)
-    r.raise_for_status()
-    gif = Image.open(BytesIO(r.content))
+    gif = Image.open(BytesIO(fetch_loop_gif()))
     frames = [f.convert("RGB") for f in ImageSequence.Iterator(gif)]
     if len(frames) < 2:
         raise ValueError("loop gif has {} frame(s)".format(len(frames)))

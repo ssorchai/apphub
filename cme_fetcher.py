@@ -171,16 +171,15 @@ def sd_levels(open_price, iv, iv_chg):
 
 
 def top_changes(rows_now, prev_map, n=2):
-    """เทียบ per-strike กับรอบก่อน คืน n อันดับที่เปลี่ยนมากสุด [{strike, dp, dc}]"""
-    now_map = {str(s): (p, c) for s, p, c in rows_now}
+    """เทียบ per-strike กับรอบก่อน คืน n อันดับที่เปลี่ยนมากสุด [{strike, dp, dc}]
+    นับเฉพาะ strike ที่อยู่ในรอบปัจจุบัน — ตัวที่หายไปมักเป็นเพราะหน้าต่างชาร์ตเลื่อน
+    (จะกลายเป็น delta ลบปลอมก้อนใหญ่) ไม่ใช่การปิดสัญญาจริง"""
     changes = []
-    for k in set(now_map) | set(prev_map):
-        p_now, c_now = now_map.get(k, (0, 0))
-        p_old, c_old = prev_map.get(k, (0, 0))
-        dp, dc = p_now - p_old, c_now - c_old
+    for s, p, c in rows_now:
+        p_old, c_old = prev_map.get(str(s), (0, 0))
+        dp, dc = p - p_old, c - c_old
         if dp or dc:
-            s = float(k)
-            changes.append({"strike": int(s) if s == int(s) else s, "dp": dp, "dc": dc})
+            changes.append({"strike": s, "dp": dp, "dc": dc})
     changes.sort(key=lambda x: -(abs(x["dp"]) + abs(x["dc"])))
     return changes[:n]
 
@@ -212,8 +211,8 @@ def main():
         prev = {}
     changes = {
         "since": prev.get("time"),
-        "intraday": top_changes(id_rows, prev.get("id", {})) if prev else [],
-        "oi": top_changes(oi_rows, prev.get("oi", {})) if prev else [],
+        "intraday": top_changes(id_rows, prev.get("id", {}), n=3) if prev else [],
+        "oi": top_changes(oi_rows, prev.get("oi", {}), n=3) if prev else [],
     }
 
     header = (f"F:{meta['F']}|D:{now:%Y-%m-%d %H:%M}|S:{meta['series']}"

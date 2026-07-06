@@ -36,6 +36,34 @@ const Marker = ({ m }) => (
   }} />
 );
 
+
+// ⌥-drag ย้ายการ์ด: กด Option ค้างแล้วลาก — ตำแหน่งเก็บ localStorage ข้าม reboot
+const POS_KEY = 'radar-weather.pos';
+const savedPos = () => {
+  try { return JSON.parse(localStorage.getItem(POS_KEY)) || {}; } catch (e) { return {}; }
+};
+const altDrag = (e) => {
+  if (!e.altKey) return;
+  e.preventDefault();
+  e.stopPropagation();
+  const el = e.currentTarget;
+  const sx = e.clientX, sy = e.clientY;
+  const rect = el.getBoundingClientRect();
+  const left0 = rect.left, top0 = rect.top;
+  const move = (ev) => {
+    const pos = { left: `${left0 + ev.clientX - sx}px`, top: `${top0 + (ev.clientY - sy)}px` };
+    el.style.left = pos.left;
+    el.style.top = pos.top;
+    localStorage.setItem(POS_KEY, JSON.stringify(pos));
+  };
+  const up = () => {
+    window.removeEventListener('mousemove', move);
+    window.removeEventListener('mouseup', up);
+  };
+  window.addEventListener('mousemove', move);
+  window.addEventListener('mouseup', up);
+};
+
 export const render = ({ output, error }) => {
   if (error) return null;
   if (!output) return null;
@@ -47,7 +75,7 @@ export const render = ({ output, error }) => {
 
     const container = {
       // 344px = ความกว้าง medium widget ของ macOS (วัดจากหน้าจอจริง)
-      position: 'fixed', top: '390px', left: '35px', width: '344px',
+      position: 'fixed', top: savedPos().top || '390px', left: savedPos().left || '35px', width: '344px',
       padding: '16px', borderRadius: macos.radius,
       color: macos.label, fontFamily: macos.font,
       background: macos.material,
@@ -57,12 +85,13 @@ export const render = ({ output, error }) => {
     };
 
     const handleClick = (e) => {
+      if (e.altKey) return;
       e.preventDefault();
       run("open -a 'Google Chrome' 'https://weather.tmd.go.th/bma_ncLoop.php'");
     };
 
     return (
-      <div style={container} onClick={handleClick}>
+      <div style={container} onClick={handleClick} onMouseDown={altDrag}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
           <span style={{ fontSize: '11px', color: macos.secondary, fontWeight: '600', letterSpacing: '0.5px', textTransform: 'uppercase' }}>
             {data.source}

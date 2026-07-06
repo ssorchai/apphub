@@ -34,6 +34,35 @@ const macos = {
 };
 
 const fmt = (v) => (v == null ? '--' : Number(v).toLocaleString());
+
+// ⌥-drag ย้ายการ์ด: กด Option ค้างแล้วลาก — ตำแหน่งเก็บ localStorage ข้าม reboot
+// (Übersicht ไม่มี drag ในตัว ตำแหน่งในโค้ดเป็นแค่ค่าเริ่มต้น)
+const POS_KEY = 'cme-putcall.pos';
+const savedPos = () => {
+  try { return JSON.parse(localStorage.getItem(POS_KEY)) || {}; } catch (e) { return {}; }
+};
+const altDrag = (e) => {
+  if (!e.altKey) return;
+  e.preventDefault();
+  e.stopPropagation();
+  const el = e.currentTarget;
+  const sx = e.clientX, sy = e.clientY;
+  const rect = el.getBoundingClientRect();
+  const left0 = rect.left, bottom0 = window.innerHeight - rect.bottom;
+  const move = (ev) => {
+    const pos = { left: `${left0 + ev.clientX - sx}px`, bottom: `${bottom0 - (ev.clientY - sy)}px` };
+    el.style.left = pos.left;
+    el.style.bottom = pos.bottom;
+    // เขียนทุกจังหวะ กัน re-render กลางลากแล้วการ์ดดีดกลับ
+    localStorage.setItem(POS_KEY, JSON.stringify(pos));
+  };
+  const up = () => {
+    window.removeEventListener('mousemove', move);
+    window.removeEventListener('mouseup', up);
+  };
+  window.addEventListener('mousemove', move);
+  window.addEventListener('mouseup', up);
+};
 const secTitle = {
   fontSize: '10px', color: macos.secondary, fontWeight: '600',
   letterSpacing: '0.4px', textTransform: 'uppercase',
@@ -143,7 +172,7 @@ export const render = (state, dispatch) => {
   try { data = JSON.parse(output); } catch (e) { data = null; }
 
   const container = {
-    position: 'fixed', bottom: '25px', left: '35px', width: '740px',
+    position: 'fixed', bottom: savedPos().bottom || '25px', left: savedPos().left || '35px', width: '740px',
     minHeight: '285px', display: 'flex', flexDirection: 'column',
     padding: '14px 16px', borderRadius: macos.radius,
     color: macos.label, fontFamily: macos.font,
@@ -154,14 +183,16 @@ export const render = (state, dispatch) => {
     boxSizing: 'border-box',
   };
 
-  // คลิกการ์ด = copy string สำหรับ paste ลง oi_block.pine
+  // คลิกการ์ด = copy string สำหรับ paste ลง oi_block.pine (⌥+คลิก = ลากย้าย ไม่ copy)
   const handleCopy = (e) => {
+    if (e.altKey) return;
     e.preventDefault();
     run('cat /tmp/cme_putcall_clip.txt | pbcopy');
   };
 
   // ปุ่ม ↻ = รัน fetcher เดี๋ยวนั้น เสร็จแล้ว copy ให้อัตโนมัติ (กันกดซ้ำระหว่างรัน)
   const handleRefresh = (e) => {
+    if (e.altKey) return;
     e.preventDefault();
     e.stopPropagation();
     if (refreshing) return;
@@ -191,7 +222,7 @@ export const render = (state, dispatch) => {
   // — ขึ้นโครงเปล่าพร้อมปุ่ม refresh ให้กดดึงเองได้เลย
   if (!data) {
     return (
-      <div style={{ ...container, justifyContent: 'space-between' }}>
+      <div style={{ ...container, justifyContent: 'space-between' }} onMouseDown={altDrag}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <span style={{ fontSize: '11px', fontWeight: '700', letterSpacing: '0.6px', color: macos.label }}>
             CME GOLD
@@ -222,7 +253,7 @@ export const render = (state, dispatch) => {
   const strikeColor = (s) => (data.F == null ? macos.label : s >= data.F ? macos.green : macos.red);
 
   return (
-    <div style={container} onClick={handleCopy} title="Click = copy P/C data for TradingView">
+    <div style={container} onClick={handleCopy} onMouseDown={altDrag} title="Click = copy P/C data for TradingView · ⌥-drag = move">
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <span style={{ fontSize: '11px', fontWeight: '700', letterSpacing: '0.6px', color: macos.label }}>
           CME GOLD {data.series || ''}

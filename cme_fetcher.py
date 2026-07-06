@@ -211,8 +211,8 @@ def main():
         prev = {}
     changes = {
         "since": prev.get("time"),
-        "intraday": top_changes(id_rows, prev.get("id", {}), n=3) if prev else [],
-        "oi": top_changes(oi_rows, prev.get("oi", {}), n=3) if prev else [],
+        "intraday": top_changes(id_rows, prev.get("id", {}), n=4) if prev else [],
+        "oi": top_changes(oi_rows, prev.get("oi", {}), n=4) if prev else [],
     }
 
     header = (f"F:{meta['F']}|D:{now:%Y-%m-%d %H:%M}|S:{meta['series']}"
@@ -240,12 +240,12 @@ def main():
         "intraday": {
             "put": sum(r[1] for r in id_rows),
             "call": sum(r[2] for r in id_rows),
-            "top": top_actives(id_rows),
+            "top": top_actives(id_rows, n=4),
         },
         "oi": {
             "put": sum(r[1] for r in oi_rows),
             "call": sum(r[2] for r in oi_rows),
-            "top": top_actives(oi_rows),
+            "top": top_actives(oi_rows, n=4),
         },
         "sd": sd,
         "changes": changes,

@@ -139,15 +139,12 @@ const SdBlock = ({ sd }) => {
 
 export const render = (state, dispatch) => {
   const { output, refreshing } = state || {};
-  if (!output) return null;
-  let data;
-  try { data = JSON.parse(output); } catch (e) { return null; }
-
-  // fetcher รันรายชั่วโมง — เกิน 2 ชม. = ข้อมูลค้าง (cron ตาย/วันหยุด)
-  const stale = data.ts && Date.now() / 1000 - data.ts > 7200;
+  let data = null;
+  try { data = JSON.parse(output); } catch (e) { data = null; }
 
   const container = {
     position: 'fixed', bottom: '25px', left: '35px', width: '740px',
+    minHeight: '285px', display: 'flex', flexDirection: 'column',
     padding: '14px 16px', borderRadius: macos.radius,
     color: macos.label, fontFamily: macos.font,
     background: macos.material,
@@ -175,6 +172,47 @@ export const render = (state, dispatch) => {
       .then((out) => dispatch({ type: 'REFRESH_DONE', output: out }))
       .catch(() => dispatch({ type: 'REFRESH_DONE', output: null }));
   };
+
+  const refreshPill = (
+    <span
+      onClick={handleRefresh}
+      title="Refresh CME data now + copy"
+      style={{
+        fontSize: '12px', fontWeight: '700', lineHeight: '1',
+        color: refreshing ? macos.yellow : macos.secondary,
+        background: 'rgba(255,255,255,0.15)', borderRadius: '999px',
+        padding: '4px 10px',
+      }}>
+      {refreshing ? 'refreshing…' : '↻ refresh'}
+    </span>
+  );
+
+  // ยังไม่มีไฟล์ข้อมูล (เช่นเพิ่งเปิดเครื่อง /tmp ถูกล้าง และ cron ยังไม่ถึงนาทีที่ 7)
+  // — ขึ้นโครงเปล่าพร้อมปุ่ม refresh ให้กดดึงเองได้เลย
+  if (!data) {
+    return (
+      <div style={{ ...container, justifyContent: 'space-between' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span style={{ fontSize: '11px', fontWeight: '700', letterSpacing: '0.6px', color: macos.label }}>
+            CME GOLD
+          </span>
+        </div>
+        <div style={{ textAlign: 'center', color: macos.tertiary, fontSize: '13px' }}>
+          no data yet — press refresh to fetch
+        </div>
+        <div style={{
+          borderTop: `0.5px solid ${macos.divider}`, paddingTop: '8px',
+          display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+        }}>
+          {refreshPill}
+          <span style={{ fontSize: '10px', color: macos.tertiary }}>Sync --</span>
+        </div>
+      </div>
+    );
+  }
+
+  // fetcher รันรายชั่วโมง — เกิน 2 ชม. = ข้อมูลค้าง (cron ตาย/วันหยุด)
+  const stale = data.ts && Date.now() / 1000 - data.ts > 7200;
 
   const ivChg = data.iv_chg;
   // Vol Chg พอง >2-3 จุด = ตลาด reprice vol — กรอบ SD จาก settle แคบเกินจริง
@@ -233,21 +271,11 @@ export const render = (state, dispatch) => {
 
       <div style={{
         borderTop: `0.5px solid ${macos.divider}`,
-        marginTop: '12px', paddingTop: '8px',
+        marginTop: 'auto', paddingTop: '8px',
         display: 'flex', justifyContent: 'space-between', alignItems: 'center',
       }}>
         <span style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-          <span
-            onClick={handleRefresh}
-            title="Refresh CME data now + copy"
-            style={{
-              fontSize: '12px', fontWeight: '700', lineHeight: '1',
-              color: refreshing ? macos.yellow : macos.secondary,
-              background: 'rgba(255,255,255,0.15)', borderRadius: '999px',
-              padding: '4px 10px',
-            }}>
-            {refreshing ? 'refreshing…' : '↻ refresh'}
-          </span>
+          {refreshPill}
           <span style={{ fontSize: '10px', color: macos.tertiary }}>
             click card → copy for TV
           </span>

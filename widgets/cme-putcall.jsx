@@ -87,7 +87,7 @@ const ChangeRow = ({ title, rows, since }) => {
   const dfmt = (v) => (v > 0 ? `+${fmt(v)}` : fmt(v));
   return (
     <div style={{ marginTop: '8px' }}>
-      <div style={secTitle}>Δ {title}{since ? ` · ตั้งแต่ ${since}` : ''}</div>
+      <div style={secTitle}>Δ {title}{since ? ` · since ${since}` : ''}</div>
       {rows.map((r) => (
         <div key={r.strike} style={{ display: 'flex', alignItems: 'baseline', gap: '8px', fontSize: '12px', marginTop: '3px' }}>
           <span style={{ fontWeight: '600', color: macos.label, minWidth: '38px' }}>{r.strike}</span>
@@ -119,11 +119,14 @@ const SdBlock = ({ sd }) => {
         SD · open {fmt(sd.open)} · vol {sd.vol_used} · dte {sd.dte}
       </div>
       {rows.map(([n, b, s]) => (
-        <div key={n} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', marginTop: '3px', fontWeight: '600' }}>
-          <span style={{ color: macos.tertiary, fontWeight: '600' }}>{n}σ</span>
-          <span style={{ color: macos.green }}>{b.toFixed(1)}</span>
-          <span style={{ color: macos.tertiary }}>·</span>
-          <span style={{ color: macos.red }}>{s.toFixed(1)}</span>
+        <div key={n} style={{ display: 'flex', alignItems: 'baseline', gap: '8px', fontSize: '12px', marginTop: '3px', fontWeight: '600' }}>
+          <span style={{ color: macos.tertiary }}>{n}σ</span>
+          <span style={{ color: macos.secondary }}>±{(n * sd.sd1).toFixed(1)}</span>
+          <span style={{ marginLeft: 'auto' }}>
+            <span style={{ color: macos.green }}>{b.toFixed(1)}</span>
+            <span style={{ color: macos.tertiary }}> / </span>
+            <span style={{ color: macos.red }}>{s.toFixed(1)}</span>
+          </span>
         </div>
       ))}
     </div>
@@ -140,7 +143,7 @@ export const render = (state, dispatch) => {
   const stale = data.ts && Date.now() / 1000 - data.ts > 7200;
 
   const container = {
-    position: 'fixed', bottom: '25px', left: '345px', width: '540px',
+    position: 'fixed', bottom: '25px', left: '345px', width: '740px',
     padding: '14px 16px', borderRadius: macos.radius,
     color: macos.label, fontFamily: macos.font,
     background: macos.material,
@@ -180,21 +183,8 @@ export const render = (state, dispatch) => {
           CME GOLD {data.series || ''}
           {stale && <span style={{ color: macos.orange, marginLeft: '8px' }}>● STALE</span>}
         </span>
-        <span style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-          <span style={{ fontSize: '10px', color: macos.tertiary, fontWeight: '600' }}>
-            DTE {data.dte != null ? data.dte.toFixed(2) : '--'}
-          </span>
-          <span
-            onClick={handleRefresh}
-            title="Refresh CME data now + copy"
-            style={{
-              fontSize: '13px', fontWeight: '700', lineHeight: '1',
-              color: refreshing ? macos.yellow : macos.secondary,
-              background: 'rgba(255,255,255,0.15)', borderRadius: '999px',
-              padding: '4px 9px',
-            }}>
-            {refreshing ? 'refreshing…' : '↻'}
-          </span>
+        <span style={{ fontSize: '10px', color: macos.tertiary, fontWeight: '600' }}>
+          DTE {data.dte != null ? data.dte.toFixed(2) : '--'}
         </span>
       </div>
 
@@ -219,12 +209,22 @@ export const render = (state, dispatch) => {
           <SdBlock sd={data.sd} />
         </div>
 
-        {/* คอลัมน์ขวา: Top Active + ของที่เติมเข้ามาตั้งแต่ refresh ก่อน */}
+        {/* คอลัมน์กลาง: Top Active สองชุด */}
         <div style={{ flex: 1, minWidth: 0, borderLeft: `0.5px solid ${macos.divider}`, paddingLeft: '16px' }}>
           <TopActive title="Intraday" top={data.intraday && data.intraday.top} />
           <TopActive title="OI" top={data.oi && data.oi.top} />
+        </div>
+
+        {/* คอลัมน์ขวา: ของที่เติมเข้ามาตั้งแต่ refresh ก่อน (3 อันดับ) */}
+        <div style={{ flex: 1, minWidth: 0, borderLeft: `0.5px solid ${macos.divider}`, paddingLeft: '16px' }}>
           <ChangeRow title="Intraday" rows={data.changes && data.changes.intraday} since={data.changes && data.changes.since} />
           <ChangeRow title="OI" rows={data.changes && data.changes.oi} since={data.changes && data.changes.since} />
+          {(!data.changes || (!data.changes.intraday.length && !data.changes.oi.length)) && (
+            <div style={{ marginTop: '8px' }}>
+              <div style={secTitle}>Δ Changes</div>
+              <div style={{ fontSize: '12px', color: macos.tertiary, marginTop: '2px' }}>no fills since last refresh</div>
+            </div>
+          )}
         </div>
       </div>
 
@@ -233,8 +233,21 @@ export const render = (state, dispatch) => {
         marginTop: '12px', paddingTop: '8px',
         display: 'flex', justifyContent: 'space-between', alignItems: 'center',
       }}>
-        <span style={{ fontSize: '10px', color: macos.tertiary }}>
-          click card → copy for TV · ↻ → refresh + copy
+        <span style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <span
+            onClick={handleRefresh}
+            title="Refresh CME data now + copy"
+            style={{
+              fontSize: '12px', fontWeight: '700', lineHeight: '1',
+              color: refreshing ? macos.yellow : macos.secondary,
+              background: 'rgba(255,255,255,0.15)', borderRadius: '999px',
+              padding: '4px 10px',
+            }}>
+            {refreshing ? 'refreshing…' : '↻ refresh'}
+          </span>
+          <span style={{ fontSize: '10px', color: macos.tertiary }}>
+            click card → copy for TV
+          </span>
         </span>
         <span style={{ fontSize: '10px', color: macos.tertiary }}>
           Sync {data.system_time || '--'}

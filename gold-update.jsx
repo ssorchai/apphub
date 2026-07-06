@@ -116,9 +116,9 @@ export const render = ({ output }) => {
             {fmt(asset.price)}
           </span>
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end' }}>
-            <span style={{ fontSize: '13px', fontWeight: '600', color: up ? macos.green : macos.red }}>
+            <span style={{ fontSize: '12px', fontWeight: '600', color: up ? macos.green : macos.red }}>
               {up ? '+' : ''}{fmt(change)}
-              <span style={{ opacity: 0.75, marginLeft: '5px', fontSize: '11px' }}>
+              <span style={{ opacity: 0.75, marginLeft: '5px', fontSize: '10px' }}>
                 {up ? '+' : ''}{fmt(asset.percent)}%
               </span>
             </span>

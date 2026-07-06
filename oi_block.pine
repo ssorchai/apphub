@@ -111,16 +111,16 @@ if barstate.isfirst and str.length(pc_paste) > 0
 pc_oi_on = pc_source != "Intraday"
 pc_id_on = pc_source != "OI"
 
-// สัญญารวมทั้งหมดของ strike หนึ่ง: Put+Call ของทั้ง OI และ Intraday เสมอ
-// (ใช้ตัดสิน WormHole — ไม่ขึ้นกับโหมด Source ที่เลือกแสดงบนกราฟ)
+// สัญญารวม (Total Put+Call) ของ strike หนึ่ง ตามชุดข้อมูลที่เลือกในโหมด Source
+// — ใช้ตัดสิน WormHole: เลือกดู OI ก็วัดจาก OI, เลือก OI+Intraday ก็วัดจากผลรวมทั้งคู่
 pc_total_at(float s) =>
     j = array.indexof(pc_m_strikes, s)
-    j == -1 ? 0 : array.get(pc_m_oip, j) + array.get(pc_m_oic, j) + array.get(pc_m_idp, j) + array.get(pc_m_idc, j)
+    j == -1 ? 0 : (pc_oi_on ? array.get(pc_m_oip, j) + array.get(pc_m_oic, j) : 0) + (pc_id_on ? array.get(pc_m_idp, j) + array.get(pc_m_idc, j) : 0)
 
 // ตั้งค่า TradingView WormHole: แรเงาช่วงราคาที่แทบไม่มีสัญญา P/C (สุญญากาศ ราคาไหลผ่านเร็ว)
 group_wh = "TradingView WormHole"
 wh_show = input.bool(true, title="Show WormHole", inline="wh0", group=group_wh)
-wh_count = input.int(5, title=" WormHole Count", minval=0, inline="wh0", group=group_wh, tooltip="strike ที่ Total Put+Call (OI + Intraday รวมกันเสมอ ไม่ขึ้นกับโหมด Source) ไม่เกินค่านี้ = โซนสุญญากาศ — แรเงาจากจุดเริ่มกราฟ P/C ยาวไปจนจบวัน")
+wh_count = input.int(5, title=" WormHole Count", minval=0, inline="wh0", group=group_wh, tooltip="strike ที่ Total Put+Call (ของชุดข้อมูลตามโหมด Source) ไม่เกินค่านี้ = โซนสุญญากาศ — แรเงาจากจุดเริ่มกราฟ P/C ยาวไปจนจบวัน")
 wh_color = input.color(color.new(color.rgb(126, 116, 160), 82), title=" ", inline="wh0", group=group_wh)
 
 // ตั้งค่า Mean Reversion SD (mean = ราคาเปิด Futures, ค่าทั้งหมดเป็นสเกล Futures)

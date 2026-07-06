@@ -559,8 +559,8 @@ if barstate.islast
     // (ใช้บันไดจากเส้น VS เพราะครบทุก strike รวมตัวที่ volume ศูนย์)
     // แรเงาตั้งแต่จุดเริ่มกราф P/C (bar_index - offset) ยาวไปถึงจบวัน (แปลงเวลาที่เหลือเป็นจำนวนแท่ง)
     if wh_show and array.size(pc_v_strikes) > 1 and array.size(pc_m_strikes) > 0
-        // Layout แยกฝั่ง: แถบกางซ้ายจากแกนด้วย — เลื่อนจุดเริ่มแรเงาไปคลุมขอบซ้ายจริง
-        wh_x1 = bar_index - pc_back_off - (pc_split ? pc_bar_len : 0)
+        // เริ่มแรเงาที่แกนของ profile เสมอ (Layout แยกฝั่ง = แกนกลางระหว่างสองปีก)
+        wh_x1 = bar_index - pc_back_off
         // clamp 480 แท่ง: TV ห้าม object ล้ำอนาคตเกิน 500 แท่ง (timeframe เล็กๆ เวลาเหลือทั้งวันอาจเกิน)
         wh_x2 = bar_index + math.min(math.max(math.round((time("D") + 86400000 - time) / (timeframe.in_seconds() * 1000)), 1), 480)
         wh_n = array.size(pc_v_strikes)

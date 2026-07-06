@@ -23,7 +23,8 @@ manual_futures_open_input = input.float(4237.0, title="Manual Futures Daily Open
 group_pc = "Put/Call Profile (CME)"
 pc_paste = input.text_area("", title="Paste P/C Data", group=group_pc, tooltip="คลิก widget CME บน desktop เพื่อ copy แล้ววางที่นี่ Format: บรรทัดแรก meta (F:...|D:...|S:...) ตามด้วยบรรทัด ID;strike:put:call;... และ OI;strike:put:call;...")
 show_pc = input.bool(true, title="Show", inline="pc0", group=group_pc)
-pc_source = input.string("OI+Intraday", title=" Source", options=["OI", "Intraday", "OI+Intraday"], inline="pc0", group=group_pc, tooltip="OI+Intraday = แถบต่อกัน: ท่อน OI (จาง, สัญญาคงค้าง) แล้วต่อด้วยท่อน Intraday (ทึบ, ความสนใจวันนี้) ความยาวรวม = OI+Intraday")
+pc_source = input.string("OI+Intraday", title=" Source", options=["OI", "Intraday", "OI+Intraday"], inline="pc0", group=group_pc, tooltip="OI+Intraday = แสดงทั้งสองชุด (รูปแบบเลือกที่ Layout)")
+pc_layout = input.string("Stacked", title="Layout", options=["Stacked", "OI | Intraday", "Intraday | OI"], group=group_pc, tooltip="Stacked = ต่อกันฝั่งเดียว (OI จางแล้วต่อ Intraday ทึบ) | แบบแยกฝั่ง = กางออกซ้าย|ขวาจากแกนเดียวกัน ตามลำดับชื่อ (ใช้ได้เมื่อ Source = OI+Intraday)")
 pc_back_off = input.int(100, title="Start Offset (แท่งย้อนหลัง)", minval=0, maxval=480, inline="pc1", group=group_pc, tooltip="เริ่มวาดแถบก่อนแท่งล่าสุดกี่แท่ง — profile จะทาบอยู่บนกราฟบริเวณราคาล่าสุด")
 pc_bar_len = input.int(25, title=" Max Length", minval=5, maxval=100, inline="pc1", group=group_pc, tooltip="ความยาวแถบ (จำนวนแท่ง) ของ strike ที่ค่ารวมสูงสุด")
 pc_thick = input.int(45, title="Bar Thickness %", minval=10, maxval=100, inline="pc2", group=group_pc, tooltip="ความหนาแถบเทียบกับช่องว่างระหว่าง strike (100 = สองฝั่งชนกันเต็มช่อง)")
@@ -110,6 +111,9 @@ if barstate.isfirst and str.length(pc_paste) > 0
 // โหมดข้อมูลที่เลือกแสดง (global — ใช้ทั้งแถบ P/C และ WormHole)
 pc_oi_on = pc_source != "Intraday"
 pc_id_on = pc_source != "OI"
+// แยกฝั่งได้เฉพาะตอนแสดงทั้งสองชุด
+pc_split = pc_layout != "Stacked" and pc_oi_on and pc_id_on
+pc_oi_left = pc_layout == "OI | Intraday"
 
 // Total Put+Call ของ strike หนึ่ง แยกรายชุดข้อมูล (0 ถ้าไม่อยู่ในตาราง)
 pc_tot_id(float s) =>
@@ -373,6 +377,15 @@ pc_draw_side(int x0, float y_top, float y_bot, int v_oi, int v_id, float vmax, c
         array.push(pc_boxes, bx2)
     len_total
 
+// วาดแถบชุดเดียวกางออกทิศ dir (+1 ขวา / -1 ซ้าย) จากแกน x0 — ใช้กับ Layout แบบแยกฝั่ง
+// คืนตำแหน่งปลายแถบ (ไว้วางจุด hover)
+pc_draw_bar_dir(int x0, float y_top, float y_bot, int v, float vmax, color side_color, int transp, int dir) =>
+    len = v > 0 ? math.max(math.round(v / vmax * pc_bar_len), 1) : 0
+    if len > 0
+        bx = box.new(left=dir > 0 ? x0 : x0 - len, top=y_top, right=dir > 0 ? x0 + len : x0, bottom=y_bot, bgcolor=color.new(side_color, transp), border_color=na)
+        array.push(pc_boxes, bx)
+    x0 + dir * len
+
 // ทำงานเฉพาะแท่งล่าสุด
 if barstate.islast
     // ลบของเก่าทิ้ง
@@ -455,12 +468,15 @@ if barstate.islast
     // โหมด OI+Intraday: แถบสองท่อนต่อกัน ท่อน OI จาง (สัญญาคงค้าง) + ท่อน Intraday ทึบ (วันนี้)
     // ไม่มีตัวเลขบนกราฟ — ชี้เมาส์ที่จุดปลายแถบเพื่อดูค่าเต็ม (popup)
     if show_pc and array.size(pc_m_strikes) > 0
-        // สเกลร่วม: ค่ารวมต่อด้าน (ตามโหมด) ที่มากสุดยาวเท่า pc_bar_len แท่ง
+        // สเกลร่วม: Stacked = ค่ารวมต่อด้านมากสุดยาวเท่า pc_bar_len / แยกฝั่ง = ค่าชุดเดี่ยวมากสุด
         pc_vmax = 1.0
         for pc_i = 0 to array.size(pc_m_strikes) - 1
-            pc_pv = (pc_oi_on ? array.get(pc_m_oip, pc_i) : 0) + (pc_id_on ? array.get(pc_m_idp, pc_i) : 0)
-            pc_cv = (pc_oi_on ? array.get(pc_m_oic, pc_i) : 0) + (pc_id_on ? array.get(pc_m_idc, pc_i) : 0)
-            pc_vmax := math.max(pc_vmax, pc_pv, pc_cv)
+            if pc_split
+                pc_vmax := math.max(pc_vmax, array.get(pc_m_oip, pc_i), array.get(pc_m_oic, pc_i), array.get(pc_m_idp, pc_i), array.get(pc_m_idc, pc_i))
+            else
+                pc_pv = (pc_oi_on ? array.get(pc_m_oip, pc_i) : 0) + (pc_id_on ? array.get(pc_m_idp, pc_i) : 0)
+                pc_cv = (pc_oi_on ? array.get(pc_m_oic, pc_i) : 0) + (pc_id_on ? array.get(pc_m_idc, pc_i) : 0)
+                pc_vmax := math.max(pc_vmax, pc_pv, pc_cv)
 
         // ครึ่งช่องของ strike ที่ชิดกันสุด = ความสูง lane กันแถบล้ำข้าม strike ข้างเคียง
         pc_sorted = array.copy(pc_m_strikes)
@@ -489,37 +505,62 @@ if barstate.islast
               + "\nIntraday  P:" + str.tostring(pc_idp) + "   C:" + str.tostring(pc_idc)
               + "\nTotal     P:" + str.tostring(pc_oip + pc_idp) + "   C:" + str.tostring(pc_oic + pc_idc)
 
-            // ฝั่ง Put = ครึ่งบนของช่อง strike
-            pc_pv = (pc_oi_on ? pc_oip : 0) + (pc_id_on ? pc_idp : 0)
-            if pc_pv > 0
-                pc_tip = pc_draw_side(pc_x0, pc_y + pc_lane, pc_y + pc_lane * 0.12, pc_oip, pc_idp, pc_vmax, pc_put_color, pc_oi_on, pc_id_on)
-                pc_dot = label.new(x=pc_x0 + pc_tip, y=pc_y + pc_lane * 0.56, text="•", style=label.style_none, textcolor=color.new(pc_put_color, 25), size=size.small, tooltip=pc_tt)
-                array.push(labels_arr, pc_dot)
+            if pc_split
+                // แยกฝั่งซ้าย|ขวาจากแกน pc_x0 ตามลำดับใน Layout (OI จางกว่า Intraday เสมอ)
+                pc_lp = pc_oi_left ? pc_oip : pc_idp
+                pc_rp = pc_oi_left ? pc_idp : pc_oip
+                pc_lc = pc_oi_left ? pc_oic : pc_idc
+                pc_rc = pc_oi_left ? pc_idc : pc_oic
+                pc_ltr = pc_oi_left ? 55 : 22
+                pc_rtr = pc_oi_left ? 22 : 55
+                if pc_lp > 0
+                    pc_tipl = pc_draw_bar_dir(pc_x0, pc_y + pc_lane, pc_y + pc_lane * 0.12, pc_lp, pc_vmax, pc_put_color, pc_ltr, -1)
+                    array.push(labels_arr, label.new(x=pc_tipl, y=pc_y + pc_lane * 0.56, text="•", style=label.style_none, textcolor=color.new(pc_put_color, 25), size=size.small, tooltip=pc_tt))
+                if pc_rp > 0
+                    pc_tipr = pc_draw_bar_dir(pc_x0, pc_y + pc_lane, pc_y + pc_lane * 0.12, pc_rp, pc_vmax, pc_put_color, pc_rtr, 1)
+                    array.push(labels_arr, label.new(x=pc_tipr, y=pc_y + pc_lane * 0.56, text="•", style=label.style_none, textcolor=color.new(pc_put_color, 25), size=size.small, tooltip=pc_tt))
+                if pc_lc > 0
+                    pc_tipl2 = pc_draw_bar_dir(pc_x0, pc_y - pc_lane * 0.12, pc_y - pc_lane, pc_lc, pc_vmax, pc_call_color, pc_ltr, -1)
+                    array.push(labels_arr, label.new(x=pc_tipl2, y=pc_y - pc_lane * 0.56, text="•", style=label.style_none, textcolor=color.new(pc_call_color, 25), size=size.small, tooltip=pc_tt))
+                if pc_rc > 0
+                    pc_tipr2 = pc_draw_bar_dir(pc_x0, pc_y - pc_lane * 0.12, pc_y - pc_lane, pc_rc, pc_vmax, pc_call_color, pc_rtr, 1)
+                    array.push(labels_arr, label.new(x=pc_tipr2, y=pc_y - pc_lane * 0.56, text="•", style=label.style_none, textcolor=color.new(pc_call_color, 25), size=size.small, tooltip=pc_tt))
+            else
+                // ฝั่ง Put = ครึ่งบนของช่อง strike
+                pc_pv = (pc_oi_on ? pc_oip : 0) + (pc_id_on ? pc_idp : 0)
+                if pc_pv > 0
+                    pc_tip = pc_draw_side(pc_x0, pc_y + pc_lane, pc_y + pc_lane * 0.12, pc_oip, pc_idp, pc_vmax, pc_put_color, pc_oi_on, pc_id_on)
+                    pc_dot = label.new(x=pc_x0 + pc_tip, y=pc_y + pc_lane * 0.56, text="•", style=label.style_none, textcolor=color.new(pc_put_color, 25), size=size.small, tooltip=pc_tt)
+                    array.push(labels_arr, pc_dot)
 
-            // ฝั่ง Call = ครึ่งล่าง
-            pc_cv = (pc_oi_on ? pc_oic : 0) + (pc_id_on ? pc_idc : 0)
-            if pc_cv > 0
-                pc_tip2 = pc_draw_side(pc_x0, pc_y - pc_lane * 0.12, pc_y - pc_lane, pc_oic, pc_idc, pc_vmax, pc_call_color, pc_oi_on, pc_id_on)
-                pc_dot2 = label.new(x=pc_x0 + pc_tip2, y=pc_y - pc_lane * 0.56, text="•", style=label.style_none, textcolor=color.new(pc_call_color, 25), size=size.small, tooltip=pc_tt)
-                array.push(labels_arr, pc_dot2)
+                // ฝั่ง Call = ครึ่งล่าง
+                pc_cv = (pc_oi_on ? pc_oic : 0) + (pc_id_on ? pc_idc : 0)
+                if pc_cv > 0
+                    pc_tip2 = pc_draw_side(pc_x0, pc_y - pc_lane * 0.12, pc_y - pc_lane, pc_oic, pc_idc, pc_vmax, pc_call_color, pc_oi_on, pc_id_on)
+                    pc_dot2 = label.new(x=pc_x0 + pc_tip2, y=pc_y - pc_lane * 0.56, text="•", style=label.style_none, textcolor=color.new(pc_call_color, 25), size=size.small, tooltip=pc_tt)
+                    array.push(labels_arr, pc_dot2)
 
-        // Volatility smile: settle vol รายสไตรค์เป็นเส้นประ (เหมือนเว็บ CME แต่หมุนตามแกนราคา)
-        // สเกลแกนนอน: min-max ของ vol ยืดเต็มโซนแถบ (0.1–0.95 ของ pc_bar_len) ให้เห็นทรง smile ชัด
+        // Volatility smile: settle vol รายสไตรค์ (เหมือนเว็บ CME แต่หมุนตามแกนราคา)
+        // สเกลแกนนอน: min-max ของ vol ยืดเต็มโซนแถบ (0.1–0.95 ของ pc_bar_len)
+        // ใช้พิกัดเวลา (ละเอียดระดับ ms) แทน bar_index ที่ปัดเป็นแท่งเต็ม — เส้นเรียบไม่เป็นขั้นบันได
         if pc_smile_show and array.size(pc_v_strikes) > 1
             pc_vv_min = array.min(pc_v_vols)
             pc_vv_max = array.max(pc_v_vols)
             if pc_vv_max > pc_vv_min
+                pc_sm_ms = timeframe.in_seconds() * 1000
+                pc_sm_t0 = time - pc_back_off * pc_sm_ms
                 for pc_i = 1 to array.size(pc_v_strikes) - 1
                     pc_fx1 = 0.1 + 0.85 * (array.get(pc_v_vols, pc_i - 1) - pc_vv_min) / (pc_vv_max - pc_vv_min)
                     pc_fx2 = 0.1 + 0.85 * (array.get(pc_v_vols, pc_i) - pc_vv_min) / (pc_vv_max - pc_vv_min)
-                    pc_sln = line.new(x1=pc_x0 + math.round(pc_fx1 * pc_bar_len), y1=array.get(pc_v_strikes, pc_i - 1) + delta_diff, x2=pc_x0 + math.round(pc_fx2 * pc_bar_len), y2=array.get(pc_v_strikes, pc_i) + delta_diff, color=color.new(pc_smile_color, 20), width=1, style=line.style_dotted)
+                    pc_sln = line.new(x1=pc_sm_t0 + math.round(pc_fx1 * pc_bar_len * pc_sm_ms), y1=array.get(pc_v_strikes, pc_i - 1) + delta_diff, x2=pc_sm_t0 + math.round(pc_fx2 * pc_bar_len * pc_sm_ms), y2=array.get(pc_v_strikes, pc_i) + delta_diff, xloc=xloc.bar_time, color=color.new(pc_smile_color, 0), width=2, style=line.style_solid)
                     array.push(lines_arr, pc_sln)
 
     // WormHole: หาช่วง strike ติดกันที่เข้าเกณฑ์ wh_is_hole จากบันได strike เต็ม
     // (ใช้บันไดจากเส้น VS เพราะครบทุก strike รวมตัวที่ volume ศูนย์)
     // แรเงาตั้งแต่จุดเริ่มกราф P/C (bar_index - offset) ยาวไปถึงจบวัน (แปลงเวลาที่เหลือเป็นจำนวนแท่ง)
     if wh_show and array.size(pc_v_strikes) > 1 and array.size(pc_m_strikes) > 0
-        wh_x1 = bar_index - pc_back_off
+        // Layout แยกฝั่ง: แถบกางซ้ายจากแกนด้วย — เลื่อนจุดเริ่มแรเงาไปคลุมขอบซ้ายจริง
+        wh_x1 = bar_index - pc_back_off - (pc_split ? pc_bar_len : 0)
         // clamp 480 แท่ง: TV ห้าม object ล้ำอนาคตเกิน 500 แท่ง (timeframe เล็กๆ เวลาเหลือทั้งวันอาจเกิน)
         wh_x2 = bar_index + math.min(math.max(math.round((time("D") + 86400000 - time) / (timeframe.in_seconds() * 1000)), 1), 480)
         wh_n = array.size(pc_v_strikes)

@@ -9,6 +9,11 @@ crontab (ทุก 5 นาที)
  ├─ gold_fetcher.py ──── loop ~290s, poll ทุก 5s ──▶ /tmp/gold_data.json ──▶ gold-update.jsx    (อ่านทุก 1.5s)
  └─ weather_fetcher.py ─ ครั้งเดียวต่อรอบ ─────────▶ /tmp/weather_meta.json ▶ radar-weather.jsx (อ่านทุก 60s)
       └─ rain_nowcast.py ─ เฉพาะ 16:00/15/30/45 ──▶ macOS Notification
+
+crontab (รายชั่วโมง นาทีที่ 7)
+ └─ cme_fetcher.py ──── ครั้งเดียวต่อรอบ ──▶ /tmp/cme_putcall.json ─────▶ cme-putcall.jsx (อ่านทุก 60s)
+                                        └─▶ /tmp/cme_putcall_clip.txt ─▶ คลิก widget = pbcopy
+                                             แล้วไป paste ลงช่อง "Paste P/C Data" ของ oi_block.pine (tdw_indi)
 ```
 
 ## ตำแหน่งไฟล์จริงที่ระบบใช้ (โฟลเดอร์นี้เป็นสำเนาเก็บ + เอกสาร)
@@ -24,7 +29,27 @@ crontab ปัจจุบัน:
 ```
 */5 * * * * /usr/bin/python3 /Users/sorachai/src/my-cronjob/weather_fetcher.py >> /tmp/weather_cron.log 2>&1
 */5 * * * * /usr/bin/python3 /Users/sorachai/src/my-cronjob/gold_fetcher.py >> /tmp/gold_cron.log 2>&1
+7 * * * * /usr/bin/python3 /Users/sorachai/src/my-cronjob/cme_fetcher.py >> /tmp/cme_cron.log 2>&1
 ```
+
+# Project 3: CME Put/Call Widget (Gold 0DTE)
+
+ดึง Put/Call รายสไตรค์ (Intraday volume + Open Interest) ของ Gold option series
+ใกล้หมดอายุสุด จาก CME QuikStrike Vol2Vol แล้วส่งต่อขึ้น TradingView ผ่าน clipboard
+
+- **แหล่งข้อมูล**: `cmegroup-tools.quikstrike.net/User/QuikStrikeView.aspx?pid=40&pf=6&viewitemid=IntegratedV2VExpectedRange`
+  — backend auto-login ให้เมื่อ Referer เป็น cmegroup.com (ไม่ต้องมี account) GET แรกได้แท็บ
+  Intraday แล้ว POST จำลอง `__doPostBack` (WebForms: ส่ง `__VIEWSTATE` กลับ + `__EVENTTARGET`
+  = `...lbOI`) เพื่อสลับไปแท็บ Open Interest — ข้อมูลฝังใน HTML เป็น `$create(...Chart, {...})`
+  รายละเอียดกลไก/ข้อจำกัดของข้อมูล (Vol คือ settle เมื่อคืน ฯลฯ) ดูโปรเจกต์ `~/src/claude_code/cme_scraping`
+- **cme_fetcher.py**: รายชั่วโมงพอ (Intraday สะสมทั้งวัน / OI นิ่งจนถึง refresh เช้า) เขียน
+  `/tmp/cme_putcall.json` (ให้ widget) + `/tmp/cme_putcall_clip.txt` (string สำหรับ Pine)
+- **cme-putcall.jsx**: สรุป P/C + ratio bar + Top Active + ธงแดงเมื่อ |IV Chg| > 2 (ตลาด
+  reprice vol — กรอบ SD จาก settle เชื่อไม่ได้) **คลิก widget = copy clip ลง clipboard**
+  แล้วไปวางในช่อง "Paste P/C Data" ของ indicator `oi_block.pine` (โปรเจกต์ `tdw_indi`)
+- format ของ clip: บรรทัด meta `F:...|D:...|S:...|IV:...|IVCHG:...|DTE:...` ตามด้วย
+  `ID;strike:put:call;...` และ `OI;strike:put:call;...` (เฉพาะ strike ที่ put+call > 0)
+  และ `VS;strike:vol%;...` (settle vol ทุก strike — ฝั่ง Pine ใช้วาด volatility smile)
 
 ---
 

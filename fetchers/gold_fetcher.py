@@ -50,14 +50,21 @@ def to_float(s):
     return float(str(s).replace(",", ""))
 
 
-def fetch_yahoo_futures_open(session):
-    """ดึงราคาเปิดวันของ GC=F จาก Yahoo (แม่นกว่า investing) — เรียกครั้งเดียวต่อรอบ"""
+def fetch_yahoo_futures(session):
+    """ดึงราคาเปิดวัน + Last Price (LP) ของ GC=F จาก Yahoo — เรียกครั้งเดียวต่อรอบ
+    open ของ Yahoo แม่นกว่า investing / LP ดีเลย์ ~10 นาที เก็บไว้ cross-check + fallback"""
     r = session.get(YAHOO_URL, headers=UA_HEADERS, timeout=15)
     r.raise_for_status()
-    quote = r.json()["chart"]["result"][0]["indicators"]["quote"][0]
+    result = r.json()["chart"]["result"][0]
+    meta = result["meta"]
+    quote = result["indicators"]["quote"][0]
     # range=1d อาจได้หลายแท่งช่วงรอยต่อวันเทรด — เอาแท่งล่าสุด (วันปัจจุบัน) เสมอ
     opens = [v for v in quote.get("open", []) if v is not None]
-    return round(opens[-1], 2) if opens else None
+    last = meta.get("regularMarketPrice")
+    return {
+        "open": round(opens[-1], 2) if opens else None,
+        "last": round(last, 2) if last is not None else None,
+    }
 
 
 def fetch_investing(session, pair_id):
@@ -95,7 +102,7 @@ def theory_diff(fut, spot):
         return None
 
 
-def tick(executor, sessions, yahoo_open):
+def tick(executor, sessions, yahoo_ref):
     # ยิง request ทั้ง 2 ตัวพร้อมกัน (คนละ thread) เพราะ diff ต้องมาจากราคา ณ เวลาเดียวกัน
     job_fut = executor.submit(fetch_investing, sessions[0], PAIR_FUTURES)
     job_spot = executor.submit(fetch_investing, sessions[1], PAIR_SPOT)
@@ -111,16 +118,28 @@ def tick(executor, sessions, yahoo_open):
     except Exception as e:
         errors.append("spot {}: {}".format(type(e).__name__, e))
 
-    # ห้ามใช้ค่าเก่า: ฝั่งไหนดึงไม่ได้เขียนเป็น null และ diff เป็น null (widget แสดง N/A)
-    output = {
-        "future": {
+    # future: open ใช้ Yahoo (แม่นกว่า) / change,percent = เทียบ prev close (จาก investing)
+    # เพิ่ม change_open,percent_open = last price เทียบ open ของวัน (เฉพาะ future)
+    fut_future = None
+    if fut:
+        fut_open = yahoo_ref["open"] if yahoo_ref.get("open") is not None else fut["open"]
+        change_open = round(fut["last"] - fut_open, 2) if fut_open else None
+        percent_open = round(change_open / fut_open * 100, 2) if change_open is not None else None
+        fut_future = {
             "name": "Gold Futures ({})".format(fut["month"]) if fut["month"] else "Gold Futures",
             "price": fut["last"],
-            "open": yahoo_open if yahoo_open is not None else fut["open"],
+            "open": fut_open,
             "change": fut["change"],
             "percent": fut["percent"],
+            "change_open": change_open,
+            "percent_open": percent_open,
+            "yahoo_last": yahoo_ref.get("last"),
             "time": fut["time"],
-        } if fut else None,
+        }
+
+    # ห้ามใช้ค่าเก่า: ฝั่งไหนดึงไม่ได้เขียนเป็น null และ diff เป็น null (widget แสดง N/A)
+    output = {
+        "future": fut_future,
         "spot": {
             "name": "XAU/USD Spot",
             "price": spot["last"],
@@ -147,16 +166,16 @@ def main():
     print("🚀 gold_fetcher (HTTP mode) started {}".format(datetime.now().strftime("%H:%M:%S")))
 
     try:
-        yahoo_open = fetch_yahoo_futures_open(sessions[0])
+        yahoo_ref = fetch_yahoo_futures(sessions[0])
     except Exception as e:
-        print("⚠️ yahoo open failed, fallback to investing open: {}".format(e))
-        yahoo_open = None
+        print("⚠️ yahoo fetch failed, fallback to investing open: {}".format(e))
+        yahoo_ref = {"open": None, "last": None}
 
     start = time.time()
     last_error = None
     while True:
         try:
-            tick(executor, sessions, yahoo_open)
+            tick(executor, sessions, yahoo_ref)
             last_error = None
         except Exception as e:
             msg = "{}: {}".format(type(e).__name__, e)

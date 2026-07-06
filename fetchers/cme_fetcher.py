@@ -1,0 +1,197 @@
+#!/usr/bin/env python3
+"""
+CME QuikStrike Vol2Vol -- Gold 0DTE Put/Call fetcher (Intraday + OI)
+
+HTTP ล้วน ไม่มี headless browser: backend ของ QuikStrike auto-login ให้เมื่อ
+request มี Referer จาก cmegroup.com (pid=40/pf=6 = Gold, ไม่ใส่ insid = series
+ใกล้หมดอายุสุด) หน้าแรก GET = แท็บ Intraday Volume แล้ว POST (__doPostBack
+จำลอง WebForms) สลับไปแท็บ Open Interest -- ข้อมูลฝังใน HTML เป็น
+$create(...Chart, {"JSONSettings": "<json>"})
+
+Output (atomic เขียน .tmp แล้ว os.replace เหมือน fetcher ตัวอื่น):
+  /tmp/cme_putcall.json      ให้ cme-putcall.jsx (Übersicht) อ่านแสดงผล
+  /tmp/cme_putcall_clip.txt  string สำหรับ paste ลงช่อง P/C ของ oi_block.pine:
+      F:4187.0|D:2026-07-03 17:55|S:G1MN6|IV:23.57|IVCHG:0.02|DTE:3.419
+      ID;4090:12:5;4100:44:10;...        (strike:put:call เฉพาะที่มีของ)
+      OI;4000:821:66;...
+      VS;3900:31.87;3925:30.12;...       (strike:settle vol% ทุก strike ในชาร์ต ใช้วาด smile)
+
+cron รายชั่วโมง:
+  7 * * * * /usr/bin/python3 /Users/sorachai/src/my-cronjob/cme_fetcher.py >> /tmp/cme_cron.log 2>&1
+ทดสอบ: python3 cme_fetcher.py --once  (โหมดเดียวที่มี -- รันครั้งเดียวเสมอ)
+"""
+
+import json
+import os
+import re
+import sys
+import urllib.parse
+import urllib.request
+import http.cookiejar
+from datetime import datetime
+
+URL = ("https://cmegroup-tools.quikstrike.net/User/QuikStrikeView.aspx"
+       "?pid=40&pf=6&viewitemid=IntegratedV2VExpectedRange")
+REFERER = "https://www.cmegroup.com/"
+UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+      "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
+OI_TARGET = "ctl00$MainContent$ucViewControl_IntegratedV2VExpectedRange$lbOI"
+MARKER = "UserControlsV2.QuikOptionsV2V.Chart, "
+
+JSON_OUT = "/tmp/cme_putcall.json"
+CLIP_OUT = "/tmp/cme_putcall_clip.txt"
+
+
+def _grab_object(s, start):
+    depth, in_str, esc, j = 0, False, False, start
+    while j < len(s):
+        c = s[j]
+        if in_str:
+            if esc:
+                esc = False
+            elif c == "\\":
+                esc = True
+            elif c == '"':
+                in_str = False
+        else:
+            if c == '"':
+                in_str = True
+            elif c == "{":
+                depth += 1
+            elif c == "}":
+                depth -= 1
+                if depth == 0:
+                    return s[start:j + 1]
+        j += 1
+    raise ValueError("unbalanced braces")
+
+
+def extract_payload(html):
+    """settings dict ของ chart แรกที่เจอในหน้า (แต่ละแท็บมี chart เดียว)"""
+    i = html.find(MARKER)
+    if i < 0:
+        raise ValueError("chart payload not found")
+    outer = json.loads(_grab_object(html, html.index("{", i)))
+    return json.loads(outer["JSONSettings"])
+
+
+def series_points(settings, key):
+    return {round(p["x"], 4): p["y"] for p in settings.get(key, {}).get("data", [])}
+
+
+def fetch_both_tabs():
+    jar = http.cookiejar.CookieJar()
+    op = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
+    op.addheaders = [("User-Agent", UA), ("Referer", REFERER)]
+    r = op.open(URL, timeout=60)
+    html = r.read().decode()
+    final_url = r.geturl()
+    intraday = extract_payload(html)
+
+    fields = dict(re.findall(
+        r'<input type="hidden" name="([^"]+)"[^>]*value="([^"]*)"', html))
+    fields["__EVENTTARGET"] = OI_TARGET
+    fields["__EVENTARGUMENT"] = ""
+    req = urllib.request.Request(
+        final_url, data=urllib.parse.urlencode(fields).encode(),
+        headers={"User-Agent": UA, "Referer": final_url,
+                 "Content-Type": "application/x-www-form-urlencoded"})
+    oi = extract_payload(op.open(req, timeout=60).read().decode())
+    return intraday, oi
+
+
+def strike_rows(settings):
+    """[(strike, put, call)] เฉพาะ strike ที่มี put+call > 0"""
+    put, call = series_points(settings, "Put"), series_points(settings, "Call")
+    rows = []
+    for k in sorted(set(put) | set(call)):
+        p, c = int(put.get(k, 0) or 0), int(call.get(k, 0) or 0)
+        if p + c > 0:
+            rows.append((int(k) if k == int(k) else k, p, c))
+    return rows
+
+
+def meta_of(settings):
+    sub = re.sub("<[^>]+>", "", settings.get("Subtitle", ""))
+    sub = sub.replace("&nbsp;", " ").replace("\xa0", " ")
+    m = re.search(r"Future Chg:\s*(-?[\d.]+)", sub)
+    value_name = settings.get("ValueName", "")
+    return {
+        "series": settings.get("Title", "").replace(value_name, "").strip(),
+        "F": settings.get("FuturePrice"),
+        "dte": settings.get("DTE"),
+        "iv": round((settings.get("ATMVol") or 0) * 100, 2),
+        "future_chg": float(m.group(1)) if m else None,
+    }
+
+
+def top_actives(rows, n=2):
+    return [{"strike": s, "total": p + c, "put": p, "call": c}
+            for s, p, c in sorted(rows, key=lambda r: -(r[1] + r[2]))[:n]]
+
+
+def main():
+    now = datetime.now()
+    intraday, oi = fetch_both_tabs()
+    meta = meta_of(oi)
+    id_rows, oi_rows = strike_rows(intraday), strike_rows(oi)
+
+    # หา Vol Chg จาก subtitle ฝั่งไหนก็ได้ (ค่าเดียวกัน)
+    sub = re.sub("<[^>]+>", "", oi.get("Subtitle", "")).replace("\xa0", " ")
+    mv = re.search(r"Vol Chg:\s*(-?[\d.]+)", sub)
+    iv_chg = float(mv.group(1)) if mv else None
+
+    header = (f"F:{meta['F']}|D:{now:%Y-%m-%d %H:%M}|S:{meta['series']}"
+              f"|IV:{meta['iv']}|IVCHG:{iv_chg if iv_chg is not None else ''}"
+              f"|DTE:{round(meta['dte'], 3) if meta['dte'] is not None else ''}")
+    # smile: settle vol ทุก strike ในชาร์ต (รวม strike ที่ไม่มี volume — เส้นจะได้เนียนเต็มช่วง)
+    vs = series_points(oi, "VolSettle")
+    vs_rows = [(int(k) if k == int(k) else k, v * 100) for k, v in sorted(vs.items()) if v and v > 0]
+    clip = "\n".join([
+        header,
+        "ID;" + ";".join(f"{s}:{p}:{c}" for s, p, c in id_rows),
+        "OI;" + ";".join(f"{s}:{p}:{c}" for s, p, c in oi_rows),
+        "VS;" + ";".join(f"{s}:{v:.2f}" for s, v in vs_rows),
+    ]) + "\n"
+
+    data = {
+        "ts": now.timestamp(),
+        "system_time": f"{now:%H:%M}",
+        "series": meta["series"],
+        "F": meta["F"],
+        "dte": round(meta["dte"], 3) if meta["dte"] is not None else None,
+        "iv": meta["iv"],
+        "iv_chg": iv_chg,
+        "future_chg": meta["future_chg"],
+        "intraday": {
+            "put": sum(r[1] for r in id_rows),
+            "call": sum(r[2] for r in id_rows),
+            "top": top_actives(id_rows),
+        },
+        "oi": {
+            "put": sum(r[1] for r in oi_rows),
+            "call": sum(r[2] for r in oi_rows),
+            "top": top_actives(oi_rows),
+        },
+    }
+
+    for path, content in [(JSON_OUT, json.dumps(data, ensure_ascii=False)),
+                          (CLIP_OUT, clip)]:
+        tmp = path + ".tmp"
+        with open(tmp, "w") as f:
+            f.write(content)
+        os.replace(tmp, path)
+
+    print(f"[{now:%Y-%m-%d %H:%M:%S}] ok {meta['series']} F={meta['F']} "
+          f"ID {data['intraday']['put']}/{data['intraday']['call']} "
+          f"OI {data['oi']['put']}/{data['oi']['call']} "
+          f"strikes {len(id_rows)}/{len(oi_rows)} clip {len(clip)}B")
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception as e:
+        print(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] ERROR {type(e).__name__}: {e}",
+              file=sys.stderr)
+        sys.exit(1)

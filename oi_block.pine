@@ -1,6 +1,6 @@
 //@version=5
 //By Sorachai
-indicator("Gold OI Block SD", overlay=true, max_lines_count=200 ,max_labels_count=300)
+indicator("Gold OI Block SD OI+Intraday", overlay=true, max_lines_count=500, max_labels_count=500, max_boxes_count=500)
 
 // --- 1. Configuration (การตั้งค่า) ---
 group_calc = "Diff Calculation"
@@ -17,6 +17,110 @@ direct_diff_input = input.float(30.0, title="Diff (Futures - CFD)", group=group_
 use_auto_futures_open = input.bool(true, title="Auto-fetch Futures Daily Open", group=group_calc, tooltip="ดึงราคาเปิดจาก Futures Symbol ด้านล่างอัตโนมัติ ปิดถ้าอยากกรอกเอง")
 futures_symbol_input = input.symbol("COMEX:GC1!", title="Futures Symbol", group=group_calc, tooltip="ปรับได้ถ้า Symbol นี้ไม่ตรงกับที่ TDW รองรับ")
 manual_futures_open_input = input.float(4237.0, title="Manual Futures Daily Open", group=group_calc, tooltip="ใช้เมื่อปิด Auto-fetch")
+
+// ตั้งค่า Put/Call Profile — วางไว้บนสุดเพราะเป็นช่องที่ paste ใหม่ทุกชั่วโมง
+// (TradingView ไม่ให้ทำ custom tab ใน settings — จัดลำดับกลุ่มแทน)
+group_pc = "Put/Call Profile (CME)"
+pc_paste = input.text_area("", title="Paste P/C Data", group=group_pc, tooltip="คลิก widget CME บน desktop เพื่อ copy แล้ววางที่นี่ Format: บรรทัดแรก meta (F:...|D:...|S:...) ตามด้วยบรรทัด ID;strike:put:call;... และ OI;strike:put:call;...")
+show_pc = input.bool(true, title="Show", inline="pc0", group=group_pc)
+pc_source = input.string("OI+Intraday", title=" Source", options=["OI", "Intraday", "OI+Intraday"], inline="pc0", group=group_pc, tooltip="OI+Intraday = แถบต่อกัน: ท่อน OI (จาง, สัญญาคงค้าง) แล้วต่อด้วยท่อน Intraday (ทึบ, ความสนใจวันนี้) ความยาวรวม = OI+Intraday")
+pc_back_off = input.int(100, title="Start Offset (แท่งย้อนหลัง)", minval=0, maxval=480, inline="pc1", group=group_pc, tooltip="เริ่มวาดแถบก่อนแท่งล่าสุดกี่แท่ง — profile จะทาบอยู่บนกราฟบริเวณราคาล่าสุด")
+pc_bar_len = input.int(25, title=" Max Length", minval=5, maxval=100, inline="pc1", group=group_pc, tooltip="ความยาวแถบ (จำนวนแท่ง) ของ strike ที่ค่ารวมสูงสุด")
+pc_thick = input.int(45, title="Bar Thickness %", minval=10, maxval=100, inline="pc2", group=group_pc, tooltip="ความหนาแถบเทียบกับช่องว่างระหว่าง strike (100 = สองฝั่งชนกันเต็มช่อง)")
+pc_put_color = input.color(color.rgb(252, 180, 65), title=" Put", inline="pc2", group=group_pc)
+pc_call_color = input.color(color.rgb(65, 140, 240), title=" Call", inline="pc2", group=group_pc)
+pc_smile_show = input.bool(true, title="Vol Smile", inline="pc3", group=group_pc, tooltip="เส้น settle vol รายสไตรค์ (แบบเส้นประแดงในเว็บ CME แต่หมุนตามแกนราคา) สเกลความยาวเดียวกับแถบ")
+pc_smile_color = input.color(color.rgb(229, 80, 80), title=" ", inline="pc3", group=group_pc)
+pc_wm_show = input.bool(true, title="Data Info", inline="pc4", group=group_pc, tooltip="แสดง series / เวลา update / DTE / IV / IV Chg เป็น watermark มุมจอ (แบบเดียวกับ Futures-CFD)")
+pc_wm_pos = input.string(position.bottom_right, title=" ", options=[position.bottom_right, position.top_right, position.bottom_left, position.top_left, position.bottom_center, position.top_center], inline="pc4", group=group_pc)
+pc_wm_color = input.color(color.new(color.gray, 30), title=" ", inline="pc4", group=group_pc)
+
+// helper: parse บรรทัด "OI;strike:put:call;..." ลง arrays (strike เป็นสเกล Futures)
+pc_parse_row(string row, float[] ss, int[] pp, int[] cc) =>
+    toks = str.split(row, ";")
+    for ti = 1 to array.size(toks) - 1
+        kv = str.split(array.get(toks, ti), ":")
+        if array.size(kv) == 3
+            s = str.tonumber(array.get(kv, 0))
+            p = str.tonumber(array.get(kv, 1))
+            c = str.tonumber(array.get(kv, 2))
+            if not (na(s) or na(p) or na(c))
+                array.push(ss, s)
+                array.push(pp, math.round(p))
+                array.push(cc, math.round(c))
+
+// parse ครั้งเดียวตอนแท่งแรก (pattern เดียวกับ sd_paste) แล้ว merge สองชุดเป็นตารางเดียว
+// ต่อ strike: (OI put, OI call, Intraday put, Intraday call) — strike ของสองชุดไม่ตรงกันเสมอ
+var float[] pc_m_strikes = array.new_float()
+var int[] pc_m_oip = array.new_int()
+var int[] pc_m_oic = array.new_int()
+var int[] pc_m_idp = array.new_int()
+var int[] pc_m_idc = array.new_int()
+var float[] pc_v_strikes = array.new_float()   // vol smile (เรียงตาม strike มาแล้วจาก fetcher)
+var float[] pc_v_vols = array.new_float()
+var string pc_meta = ""
+if barstate.isfirst and str.length(pc_paste) > 0
+    pc_oi_ss = array.new_float()
+    pc_oi_pp = array.new_int()
+    pc_oi_cc = array.new_int()
+    pc_id_ss = array.new_float()
+    pc_id_pp = array.new_int()
+    pc_id_cc = array.new_int()
+    pc_rows = str.split(pc_paste, "\n")
+    for pc_ri = 0 to array.size(pc_rows) - 1
+        pc_row = array.get(pc_rows, pc_ri)
+        if str.startswith(pc_row, "F:")
+            pc_meta := pc_row
+        if str.startswith(pc_row, "OI;")
+            pc_parse_row(pc_row, pc_oi_ss, pc_oi_pp, pc_oi_cc)
+        if str.startswith(pc_row, "ID;")
+            pc_parse_row(pc_row, pc_id_ss, pc_id_pp, pc_id_cc)
+        if str.startswith(pc_row, "VS;")
+            pc_vtoks = str.split(pc_row, ";")
+            for pc_ti = 1 to array.size(pc_vtoks) - 1
+                pc_vkv = str.split(array.get(pc_vtoks, pc_ti), ":")
+                if array.size(pc_vkv) == 2
+                    pc_vs = str.tonumber(array.get(pc_vkv, 0))
+                    pc_vv = str.tonumber(array.get(pc_vkv, 1))
+                    if not (na(pc_vs) or na(pc_vv))
+                        array.push(pc_v_strikes, pc_vs)
+                        array.push(pc_v_vols, pc_vv)
+    // merge: ลง OI ก่อน แล้วเติม Intraday ทับ/เพิ่มแถวใหม่ตาม strike
+    if array.size(pc_oi_ss) > 0
+        for pc_i = 0 to array.size(pc_oi_ss) - 1
+            array.push(pc_m_strikes, array.get(pc_oi_ss, pc_i))
+            array.push(pc_m_oip, array.get(pc_oi_pp, pc_i))
+            array.push(pc_m_oic, array.get(pc_oi_cc, pc_i))
+            array.push(pc_m_idp, 0)
+            array.push(pc_m_idc, 0)
+    if array.size(pc_id_ss) > 0
+        for pc_i = 0 to array.size(pc_id_ss) - 1
+            pc_s = array.get(pc_id_ss, pc_i)
+            pc_j = array.indexof(pc_m_strikes, pc_s)
+            if pc_j == -1
+                array.push(pc_m_strikes, pc_s)
+                array.push(pc_m_oip, 0)
+                array.push(pc_m_oic, 0)
+                array.push(pc_m_idp, array.get(pc_id_pp, pc_i))
+                array.push(pc_m_idc, array.get(pc_id_cc, pc_i))
+            else
+                array.set(pc_m_idp, pc_j, array.get(pc_id_pp, pc_i))
+                array.set(pc_m_idc, pc_j, array.get(pc_id_cc, pc_i))
+
+// โหมดข้อมูลที่เลือกแสดง (global — ใช้ทั้งแถบ P/C และ WormHole)
+pc_oi_on = pc_source != "Intraday"
+pc_id_on = pc_source != "OI"
+
+// สัญญารวมของ strike หนึ่งตามโหมดที่เลือก (0 ถ้าไม่อยู่ในตาราง)
+pc_total_at(float s) =>
+    j = array.indexof(pc_m_strikes, s)
+    j == -1 ? 0 : (pc_oi_on ? array.get(pc_m_oip, j) + array.get(pc_m_oic, j) : 0) + (pc_id_on ? array.get(pc_m_idp, j) + array.get(pc_m_idc, j) : 0)
+
+// ตั้งค่า TradingView WormHole: แรเงาช่วงราคาที่แทบไม่มีสัญญา P/C (สุญญากาศ ราคาไหลผ่านเร็ว)
+group_wh = "TradingView WormHole"
+wh_show = input.bool(true, title="Show WormHole", inline="wh0", group=group_wh)
+wh_count = input.int(5, title=" WormHole Count", minval=0, inline="wh0", group=group_wh, tooltip="strike ที่สัญญารวม (Put+Call ตามโหมด Source) ไม่เกินค่านี้ถือเป็นโซนสุญญากาศ — แรเงาจากแท่งปัจจุบันยาวไปจนจบวัน")
+wh_color = input.color(color.new(color.rgb(126, 116, 160), 82), title=" ", inline="wh0", group=group_wh)
 
 // ตั้งค่า Mean Reversion SD (mean = ราคาเปิด Futures, ค่าทั้งหมดเป็นสเกล Futures)
 group_sd = "Mean Reversion SD"
@@ -139,6 +243,7 @@ plot(show_sd_on_scale ? sd_sell3_f + delta_diff : na, title="Sell 3SD (Spot)", c
 
 var line[] lines_arr = array.new_line()
 var label[] labels_arr = array.new_label()
+var box[] pc_boxes = array.new_box()
 //var label close_label = label.new(na, na, style=label.style_label_right, color=color.blue, textcolor=color.white)
 
 // --- 4. Watermark Section (ส่วนลายน้ำ) ---
@@ -152,6 +257,7 @@ wm_pos   = input.string(position.top_center, title="Position", options=[position
 // สร้างตารางเพื่อแสดงผล
 // ใช้ var เพื่อสร้างตัวแปร table แค่ครั้งเดียว
 var table wm_table = table.new(wm_pos, 1, 1)
+var table pc_wm_table = table.new(position.bottom_right, 1, 1)
 
 // ฟังก์ชันวาดเส้น
 draw_level(idx) =>
@@ -235,6 +341,21 @@ draw_sd_tag(x_pos, level_futures, tag_color, txt, is_sell) =>
     lb = label.new(x=x_pos, y=level_futures + delta_diff, text=txt, xloc=xloc.bar_time, style=lb_style, color=color.new(color.white, 100), textcolor=tag_color, size=size.small)
     array.push(labels_arr, lb)
 
+// วาดแถบ P/C แนวนอนหนึ่งด้าน (put หรือ call) แบบสองท่อนต่อกัน: OI ก่อน (จาง) แล้วต่อ Intraday (ทึบ)
+// พิกัดเป็น bar_index / ความยาวคิดสะสมกันเศษปัดหาย / คืนตำแหน่งปลายแถบไว้วางจุด hover
+pc_draw_side(int x0, float y_top, float y_bot, int v_oi, int v_id, float vmax, color side_color, bool oi_on, bool id_on) =>
+    len1 = oi_on and v_oi > 0 ? math.max(math.round(v_oi / vmax * pc_bar_len), 1) : 0
+    len_total = len1
+    if id_on and v_id > 0
+        len_total := math.max(math.round((v_oi * (oi_on ? 1 : 0) + v_id) / vmax * pc_bar_len), len1 + 1)
+    if len1 > 0
+        bx = box.new(left=x0, top=y_top, right=x0 + len1, bottom=y_bot, bgcolor=color.new(side_color, id_on ? 68 : 40), border_color=na)
+        array.push(pc_boxes, bx)
+    if len_total > len1
+        bx2 = box.new(left=x0 + len1, top=y_top, right=x0 + len_total, bottom=y_bot, bgcolor=color.new(side_color, 18), border_color=na)
+        array.push(pc_boxes, bx2)
+    len_total
+
 // ทำงานเฉพาะแท่งล่าสุด
 if barstate.islast
     // ลบของเก่าทิ้ง
@@ -244,9 +365,13 @@ if barstate.islast
     if array.size(labels_arr) > 0
         for i = 0 to array.size(labels_arr) - 1
             label.delete(array.get(labels_arr, i))
-    
+    if array.size(pc_boxes) > 0
+        for i = 0 to array.size(pc_boxes) - 1
+            box.delete(array.get(pc_boxes, i))
+
     array.clear(lines_arr)
     array.clear(labels_arr)
+    array.clear(pc_boxes)
 
     // set position ใหม่กรณีมีการเปลี่ยน input
     if show_wm
@@ -306,3 +431,124 @@ if barstate.islast
         draw_sd_tag(sd_tag_x, sd_sell2_f, sd_sell2_color, "Sell 2SD", true)
         draw_sd_tag(sd_tag_x, sd_buy3_f, sd_buy3_color, "Buy 3SD", false)
         draw_sd_tag(sd_tag_x, sd_sell3_f, sd_sell3_color, "Sell 3SD", true)
+
+    // Put/Call Profile: barchart แนวนอนแบบหน้าเว็บ CME (แกน strike = แกนราคา, ความยาว = ปริมาณ)
+    // เริ่มวาดย้อนหลัง pc_back_off แท่งจากแท่งล่าสุด — ขยับตามเองเมื่อแท่งใหม่เกิด
+    // (Pine ผูก object กับแกนแท่งเทียน ตามการ pan กราฟด้วยมือไม่ได้ — ข้อจำกัดของ TradingView)
+    // โหมด OI+Intraday: แถบสองท่อนต่อกัน ท่อน OI จาง (สัญญาคงค้าง) + ท่อน Intraday ทึบ (วันนี้)
+    // ไม่มีตัวเลขบนกราฟ — ชี้เมาส์ที่จุดปลายแถบเพื่อดูค่าเต็ม (popup)
+    if show_pc and array.size(pc_m_strikes) > 0
+        // สเกลร่วม: ค่ารวมต่อด้าน (ตามโหมด) ที่มากสุดยาวเท่า pc_bar_len แท่ง
+        pc_vmax = 1.0
+        for pc_i = 0 to array.size(pc_m_strikes) - 1
+            pc_pv = (pc_oi_on ? array.get(pc_m_oip, pc_i) : 0) + (pc_id_on ? array.get(pc_m_idp, pc_i) : 0)
+            pc_cv = (pc_oi_on ? array.get(pc_m_oic, pc_i) : 0) + (pc_id_on ? array.get(pc_m_idc, pc_i) : 0)
+            pc_vmax := math.max(pc_vmax, pc_pv, pc_cv)
+
+        // ครึ่งช่องของ strike ที่ชิดกันสุด = ความสูง lane กันแถบล้ำข้าม strike ข้างเคียง
+        pc_sorted = array.copy(pc_m_strikes)
+        array.sort(pc_sorted, order.ascending)
+        pc_gap = 5.0
+        if array.size(pc_sorted) > 1
+            pc_gap := array.get(pc_sorted, 1) - array.get(pc_sorted, 0)
+            for pc_i = 1 to array.size(pc_sorted) - 1
+                pc_d = array.get(pc_sorted, pc_i) - array.get(pc_sorted, pc_i - 1)
+                if pc_d > 0
+                    pc_gap := math.min(pc_gap, pc_d)
+        pc_lane = pc_gap * 0.5 * (pc_thick / 100.0)
+        pc_x0 = bar_index - pc_back_off
+
+        for pc_i = 0 to array.size(pc_m_strikes) - 1
+            pc_strike_f = array.get(pc_m_strikes, pc_i)
+            pc_y = pc_strike_f + delta_diff
+            pc_oip = array.get(pc_m_oip, pc_i)
+            pc_oic = array.get(pc_m_oic, pc_i)
+            pc_idp = array.get(pc_m_idp, pc_i)
+            pc_idc = array.get(pc_m_idc, pc_i)
+
+            // tooltip เดียวกันทั้งสองฝั่ง: Strike / OI / Intraday / Total (P กับ C ครบในอันเดียว)
+            pc_tt = "Strike " + str.tostring(pc_strike_f, "#")
+              + "\nOI        P:" + str.tostring(pc_oip) + "   C:" + str.tostring(pc_oic)
+              + "\nIntraday  P:" + str.tostring(pc_idp) + "   C:" + str.tostring(pc_idc)
+              + "\nTotal     P:" + str.tostring(pc_oip + pc_idp) + "   C:" + str.tostring(pc_oic + pc_idc)
+
+            // ฝั่ง Put = ครึ่งบนของช่อง strike
+            pc_pv = (pc_oi_on ? pc_oip : 0) + (pc_id_on ? pc_idp : 0)
+            if pc_pv > 0
+                pc_tip = pc_draw_side(pc_x0, pc_y + pc_lane, pc_y + pc_lane * 0.12, pc_oip, pc_idp, pc_vmax, pc_put_color, pc_oi_on, pc_id_on)
+                pc_dot = label.new(x=pc_x0 + pc_tip, y=pc_y + pc_lane * 0.56, text="•", style=label.style_none, textcolor=color.new(pc_put_color, 25), size=size.small, tooltip=pc_tt)
+                array.push(labels_arr, pc_dot)
+
+            // ฝั่ง Call = ครึ่งล่าง
+            pc_cv = (pc_oi_on ? pc_oic : 0) + (pc_id_on ? pc_idc : 0)
+            if pc_cv > 0
+                pc_tip2 = pc_draw_side(pc_x0, pc_y - pc_lane * 0.12, pc_y - pc_lane, pc_oic, pc_idc, pc_vmax, pc_call_color, pc_oi_on, pc_id_on)
+                pc_dot2 = label.new(x=pc_x0 + pc_tip2, y=pc_y - pc_lane * 0.56, text="•", style=label.style_none, textcolor=color.new(pc_call_color, 25), size=size.small, tooltip=pc_tt)
+                array.push(labels_arr, pc_dot2)
+
+        // Volatility smile: settle vol รายสไตรค์เป็นเส้นประ (เหมือนเว็บ CME แต่หมุนตามแกนราคา)
+        // สเกลแกนนอน: min-max ของ vol ยืดเต็มโซนแถบ (0.1–0.95 ของ pc_bar_len) ให้เห็นทรง smile ชัด
+        if pc_smile_show and array.size(pc_v_strikes) > 1
+            pc_vv_min = array.min(pc_v_vols)
+            pc_vv_max = array.max(pc_v_vols)
+            if pc_vv_max > pc_vv_min
+                for pc_i = 1 to array.size(pc_v_strikes) - 1
+                    pc_fx1 = 0.1 + 0.85 * (array.get(pc_v_vols, pc_i - 1) - pc_vv_min) / (pc_vv_max - pc_vv_min)
+                    pc_fx2 = 0.1 + 0.85 * (array.get(pc_v_vols, pc_i) - pc_vv_min) / (pc_vv_max - pc_vv_min)
+                    pc_sln = line.new(x1=pc_x0 + math.round(pc_fx1 * pc_bar_len), y1=array.get(pc_v_strikes, pc_i - 1) + delta_diff, x2=pc_x0 + math.round(pc_fx2 * pc_bar_len), y2=array.get(pc_v_strikes, pc_i) + delta_diff, color=color.new(pc_smile_color, 20), width=1, style=line.style_dotted)
+                    array.push(lines_arr, pc_sln)
+
+    // TradingView WormHole: หาช่วง strike ติดกันที่สัญญารวม <= wh_count จากบันได strike เต็ม
+    // (ใช้บันไดจากเส้น VS เพราะครบทุก strike รวมตัวที่ volume ศูนย์) แล้วแรเงาจากตอนนี้ถึงจบวัน
+    if wh_show and array.size(pc_v_strikes) > 1 and array.size(pc_m_strikes) > 0
+        wh_x2 = time("D") + 86400000
+        wh_n = array.size(pc_v_strikes)
+        wh_i = 0
+        while wh_i < wh_n
+            if pc_total_at(array.get(pc_v_strikes, wh_i)) <= wh_count
+                // ขยาย run ไปจนเจอ strike ที่มีสัญญาเกินเกณฑ์
+                wh_k = wh_i
+                wh_go = true
+                while wh_go and wh_k + 1 < wh_n
+                    if pc_total_at(array.get(pc_v_strikes, wh_k + 1)) <= wh_count
+                        wh_k += 1
+                    else
+                        wh_go := false
+                // ขอบแถบ = กึ่งกลางระหว่าง strike เพื่อนบ้านที่มีของ (ขอบบันไดใช้ครึ่งช่องมาตรฐาน)
+                wh_bot = wh_i > 0 ? (array.get(pc_v_strikes, wh_i) + array.get(pc_v_strikes, wh_i - 1)) / 2 : array.get(pc_v_strikes, wh_i) - 2.5
+                wh_top = wh_k < wh_n - 1 ? (array.get(pc_v_strikes, wh_k) + array.get(pc_v_strikes, wh_k + 1)) / 2 : array.get(pc_v_strikes, wh_k) + 2.5
+                wh_bx = box.new(left=time, top=wh_top + delta_diff, right=wh_x2, bottom=wh_bot + delta_diff, xloc=xloc.bar_time, bgcolor=wh_color, border_color=na)
+                array.push(pc_boxes, wh_bx)
+                wh_i := wh_k + 1
+            else
+                wh_i += 1
+
+    // Watermark ข้อมูล P/C: series / เวลา update / DTE / IV / IV Chg (สไตล์เดียวกับ Futures-CFD)
+    pc_wm_txt = ""
+    if pc_wm_show and str.length(pc_meta) > 0
+        pc_f_s = ""
+        pc_d_s = ""
+        pc_s_s = ""
+        pc_iv_s = ""
+        pc_ivc_s = ""
+        pc_dte_s = ""
+        pc_mtoks = str.split(pc_meta, "|")
+        for pc_i = 0 to array.size(pc_mtoks) - 1
+            pc_tok = array.get(pc_mtoks, pc_i)
+            pc_cpos = str.pos(pc_tok, ":")
+            if not na(pc_cpos)
+                pc_k = str.substring(pc_tok, 0, pc_cpos)
+                pc_v = str.substring(pc_tok, pc_cpos + 1)
+                if pc_k == "D"
+                    pc_d_s := pc_v
+                if pc_k == "S"
+                    pc_s_s := pc_v
+                if pc_k == "IV"
+                    pc_iv_s := pc_v
+                if pc_k == "IVCHG"
+                    pc_ivc_s := pc_v
+                if pc_k == "DTE"
+                    pc_dte_s := pc_v
+        pc_wm_txt := pc_s_s + "  @ " + pc_d_s + "\nDTE " + pc_dte_s + "  ·  IV " + pc_iv_s + (str.length(pc_ivc_s) > 0 ? " (" + pc_ivc_s + ")" : "")
+    table.set_position(pc_wm_table, pc_wm_pos)
+    table.cell(pc_wm_table, column=0, row=0, text=pc_wm_txt, text_color=pc_wm_color, text_size=size.normal, text_halign=text.align_right)

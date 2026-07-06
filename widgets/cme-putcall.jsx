@@ -112,8 +112,13 @@ const TopActive = ({ top, sc }) => {
 };
 
 // ของที่เติมเข้ามาตั้งแต่ refresh รอบก่อน (แบบวงเล็บ +28 ของบอท telegram)
+// ป้าย P/C คงสีฝั่ง (ส้ม/ฟ้า) แต่ตัวเลขให้สีตามทิศ: บวกเขียว / ลบแดง — เห็นค่าลบชัดทันที
 const ChangeRow = ({ rows, since, sc }) => {
-  const dfmt = (v) => (v > 0 ? `+${fmt(v)}` : fmt(v));
+  const dnum = (v) => (
+    <span style={{ color: v > 0 ? macos.green : macos.red, fontWeight: '700' }}>
+      {v > 0 ? '+' : '−'}{fmt(Math.abs(v))}
+    </span>
+  );
   return (
     <div style={{ marginTop: '10px' }}>
       <div style={secTitle}>Δ Changes{since ? ` · since ${since}` : ''}</div>
@@ -124,9 +129,9 @@ const ChangeRow = ({ rows, since, sc }) => {
         <div key={r.strike} style={{ display: 'flex', alignItems: 'baseline', gap: '8px', fontSize: '12px', marginTop: '3px' }}>
           <span style={{ fontWeight: '600', color: sc(r.strike), minWidth: '38px' }}>{r.strike}</span>
           <span style={{ marginLeft: 'auto' }}>
-            {r.dp !== 0 && <span style={{ color: macos.orange, fontWeight: '600' }}>P {dfmt(r.dp)}</span>}
+            {r.dp !== 0 && <span style={{ color: macos.orange, fontWeight: '600' }}>P {dnum(r.dp)}</span>}
             {r.dp !== 0 && r.dc !== 0 && <span style={{ color: macos.tertiary }}> · </span>}
-            {r.dc !== 0 && <span style={{ color: macos.blue, fontWeight: '600' }}>C {dfmt(r.dc)}</span>}
+            {r.dc !== 0 && <span style={{ color: macos.blue, fontWeight: '600' }}>C {dnum(r.dc)}</span>}
           </span>
         </div>
       ))}

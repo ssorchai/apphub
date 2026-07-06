@@ -89,7 +89,7 @@ export const render = ({ output }) => {
   const renderAsset = (asset, fallbackName, { accent, showOpen, showOpenChange } = {}) => {
     if (!asset) {
       return (
-        <div style={{ marginTop: '10px' }}>
+        <div style={{ marginTop: '8px' }}>
           <div style={{ fontSize: '10px', color: macos.secondary, fontWeight: '600', letterSpacing: '0.4px', textTransform: 'uppercase', marginBottom: '2px' }}>
             {fallbackName}
           </div>
@@ -104,7 +104,7 @@ export const render = ({ output }) => {
     const changeOpen = num(asset.change_open);
     const upOpen = changeOpen >= 0;
     return (
-      <div style={{ marginTop: '10px' }}>
+      <div style={{ marginTop: '8px' }}>
         <div style={{ fontSize: '10px', color: macos.secondary, fontWeight: '600', letterSpacing: '0.4px', textTransform: 'uppercase', marginBottom: '2px' }}>
           {asset.name}
           {showOpen && asset.open != null && (
@@ -115,7 +115,7 @@ export const render = ({ output }) => {
           <span style={{ fontSize: '23px', fontWeight: '600', letterSpacing: '-0.4px', color: accent || macos.label }}>
             {fmt(asset.price)}
           </span>
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', lineHeight: '1.1' }}>
             <span style={{ fontSize: '12px', fontWeight: '600', color: up ? macos.green : macos.red }}>
               {up ? '+' : ''}{fmt(change)}
               <span style={{ opacity: 0.75, marginLeft: '5px', fontSize: '10px' }}>
@@ -123,10 +123,10 @@ export const render = ({ output }) => {
               </span>
             </span>
             {hasOpenChange && (
-              <span style={{ fontSize: '11px', fontWeight: '600', color: upOpen ? macos.green : macos.red, marginTop: '1px' }}>
+              <span style={{ fontSize: '10px', fontWeight: '600', color: upOpen ? macos.green : macos.red }}>
                 <span style={{ color: macos.tertiary, marginRight: '4px', fontWeight: '700' }}>O</span>
                 {upOpen ? '+' : ''}{fmt(changeOpen)}
-                <span style={{ opacity: 0.75, marginLeft: '5px', fontSize: '10px' }}>
+                <span style={{ opacity: 0.75, marginLeft: '5px', fontSize: '9px' }}>
                   {upOpen ? '+' : ''}{fmt(asset.percent_open)}%
                 </span>
               </span>

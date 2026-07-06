@@ -4,6 +4,17 @@ import { run } from 'uebersicht';
 export const command = "cat /tmp/cme_putcall.json";
 export const refreshFrequency = 60000;
 
+// state แบบ redux ของ Übersicht: รองรับปุ่ม refresh (รัน fetcher ทันที + copy อัตโนมัติ)
+export const initialState = { output: null, refreshing: false };
+export const updateState = (event, prev) => {
+  switch (event.type) {
+    case 'UB/COMMAND_RAN': return { ...prev, output: event.output };
+    case 'REFRESH_START': return { ...prev, refreshing: true };
+    case 'REFRESH_DONE': return { ...prev, refreshing: false, output: event.output || prev.output };
+    default: return prev;
+  }
+};
+
 // ---- macOS system palette (shared theme กับ gold-update.jsx) ----
 const macos = {
   material: 'rgba(255, 255, 255, 0.25)',
@@ -23,8 +34,12 @@ const macos = {
 };
 
 const fmt = (v) => (v == null ? '--' : Number(v).toLocaleString());
+const secTitle = {
+  fontSize: '10px', color: macos.secondary, fontWeight: '600',
+  letterSpacing: '0.4px', textTransform: 'uppercase',
+};
 
-// แถวสรุป Put/Call หนึ่งชุด (Intraday หรือ OI) พร้อมแถบสัดส่วน
+// แถบสัดส่วน Put/Call หนึ่งชุด (คอลัมน์ซ้าย)
 const PcRow = ({ title, pc }) => {
   if (!pc) return null;
   const total = pc.put + pc.call;
@@ -32,9 +47,7 @@ const PcRow = ({ title, pc }) => {
   return (
     <div style={{ marginTop: '10px' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-        <span style={{ fontSize: '10px', color: macos.secondary, fontWeight: '600', letterSpacing: '0.4px', textTransform: 'uppercase' }}>
-          {title}
-        </span>
+        <span style={secTitle}>{title}</span>
         <span style={{ fontSize: '13px', fontWeight: '600' }}>
           <span style={{ color: macos.orange }}>P {fmt(pc.put)}</span>
           <span style={{ color: macos.tertiary, margin: '0 4px' }}>/</span>
@@ -45,20 +58,66 @@ const PcRow = ({ title, pc }) => {
         <div style={{ width: `${putShare}%`, background: macos.orange }} />
         <div style={{ flex: 1, background: macos.blue }} />
       </div>
-      {(pc.top || []).map((t) => (
-        <div key={t.strike} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', marginTop: '3px' }}>
-          <span style={{ color: macos.label, fontWeight: '600' }}>{t.strike}</span>
-          <span style={{ color: macos.secondary }}>
-            {fmt(t.total)}
-            <span style={{ color: macos.tertiary, marginLeft: '6px' }}>P:{fmt(t.put)} C:{fmt(t.call)}</span>
-          </span>
+    </div>
+  );
+};
+
+// TOP ACTIVE สไตล์โพสต์ Telegram: อันดับ | strike | รวม แล้วบรรทัดย่อย P/C
+const TopActive = ({ title, top }) => {
+  if (!top || !top.length) return null;
+  return (
+    <div style={{ marginTop: '8px' }}>
+      <div style={secTitle}>📍 Top Active · {title}</div>
+      {top.map((t, i) => (
+        <div key={t.strike} style={{ marginTop: '3px' }}>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: '6px' }}>
+            <span style={{
+              fontSize: '9px', fontWeight: '700', color: macos.label,
+              background: 'rgba(255,255,255,0.22)', borderRadius: '4px',
+              padding: '1px 5px',
+            }}>{i + 1}</span>
+            <span style={{ fontSize: '13px', fontWeight: '600', color: macos.label }}>{t.strike}</span>
+            <span style={{ fontSize: '12px', color: macos.secondary, marginLeft: 'auto' }}>{fmt(t.total)}</span>
+          </div>
+          <div style={{ fontSize: '11px', color: macos.tertiary, paddingLeft: '24px' }}>
+            └ <span style={{ color: macos.orange }}>P:{fmt(t.put)}</span> / <span style={{ color: macos.blue }}>C:{fmt(t.call)}</span>
+          </div>
         </div>
       ))}
     </div>
   );
 };
 
-export const render = ({ output }) => {
+// กรอบ SD: mean = ราคาเปิด Yahoo, DTE 0.6, vol = Vol + Vol Chg (คำนวณโดย fetcher)
+const SdBlock = ({ sd }) => {
+  if (!sd) {
+    return (
+      <div style={{ marginTop: '10px' }}>
+        <div style={secTitle}>SD Range</div>
+        <div style={{ fontSize: '12px', color: macos.tertiary, marginTop: '2px' }}>N/A</div>
+      </div>
+    );
+  }
+  const rows = [[1, sd.b1, sd.s1], [2, sd.b2, sd.s2], [3, sd.b3, sd.s3]];
+  return (
+    <div style={{ marginTop: '10px' }}>
+      <div style={secTitle}>
+        SD · open {fmt(sd.open)} · vol {sd.vol_used} · dte {sd.dte}
+      </div>
+      {rows.map(([n, b, s]) => (
+        <div key={n} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', marginTop: '3px', fontWeight: '600' }}>
+          <span style={{ color: macos.tertiary, fontWeight: '600' }}>{n}σ</span>
+          <span style={{ color: macos.green }}>{b.toFixed(1)}</span>
+          <span style={{ color: macos.tertiary }}>·</span>
+          <span style={{ color: macos.red }}>{s.toFixed(1)}</span>
+        </div>
+      ))}
+    </div>
+  );
+};
+
+export const render = (state, dispatch) => {
+  const { output, refreshing } = state || {};
   if (!output) return null;
   let data;
   try { data = JSON.parse(output); } catch (e) { return null; }
@@ -67,7 +126,7 @@ export const render = ({ output }) => {
   const stale = data.ts && Date.now() / 1000 - data.ts > 7200;
 
   const container = {
-    position: 'fixed', bottom: '25px', left: '345px', width: '265px',
+    position: 'fixed', bottom: '25px', left: '345px', width: '540px',
     padding: '14px 16px', borderRadius: macos.radius,
     color: macos.label, fontFamily: macos.font,
     background: macos.material,
@@ -77,10 +136,23 @@ export const render = ({ output }) => {
     boxSizing: 'border-box',
   };
 
-  // คลิก = copy string สำหรับ paste ลง oi_block.pine บน TradingView
-  const handleClick = (e) => {
+  // คลิกการ์ด = copy string สำหรับ paste ลง oi_block.pine
+  const handleCopy = (e) => {
     e.preventDefault();
     run('cat /tmp/cme_putcall_clip.txt | pbcopy');
+  };
+
+  // ปุ่ม ↻ = รัน fetcher เดี๋ยวนั้น เสร็จแล้ว copy ให้อัตโนมัติ (กันกดซ้ำระหว่างรัน)
+  const handleRefresh = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (refreshing) return;
+    dispatch({ type: 'REFRESH_START' });
+    run('/usr/bin/python3 /Users/sorachai/src/my-cronjob/cme_fetcher.py')
+      .then(() => run('cat /tmp/cme_putcall_clip.txt | pbcopy'))
+      .then(() => run('cat /tmp/cme_putcall.json'))
+      .then((out) => dispatch({ type: 'REFRESH_DONE', output: out }))
+      .catch(() => dispatch({ type: 'REFRESH_DONE', output: null }));
   };
 
   const ivChg = data.iv_chg;
@@ -88,32 +160,57 @@ export const render = ({ output }) => {
   const ivAlert = ivChg != null && Math.abs(ivChg) > 2;
 
   return (
-    <div style={container} onClick={handleClick} title="Click = copy P/C data for TradingView">
+    <div style={container} onClick={handleCopy} title="Click = copy P/C data for TradingView">
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <span style={{ fontSize: '11px', fontWeight: '700', letterSpacing: '0.6px', color: macos.label }}>
           CME GOLD {data.series || ''}
+          {stale && <span style={{ color: macos.orange, marginLeft: '8px' }}>● STALE</span>}
         </span>
-        <span style={{ fontSize: '10px', color: stale ? macos.orange : macos.tertiary, fontWeight: '600' }}>
-          {stale ? '● STALE' : `DTE ${data.dte != null ? data.dte.toFixed(2) : '--'}`}
+        <span style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <span style={{ fontSize: '10px', color: macos.tertiary, fontWeight: '600' }}>
+            DTE {data.dte != null ? data.dte.toFixed(2) : '--'}
+          </span>
+          <span
+            onClick={handleRefresh}
+            title="Refresh CME data now + copy"
+            style={{
+              fontSize: '13px', fontWeight: '700', lineHeight: '1',
+              color: refreshing ? macos.yellow : macos.secondary,
+              background: 'rgba(255,255,255,0.15)', borderRadius: '999px',
+              padding: '4px 9px',
+            }}>
+            {refreshing ? 'refreshing…' : '↻'}
+          </span>
         </span>
       </div>
 
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginTop: '6px' }}>
-        <span style={{ fontSize: '20px', fontWeight: '600', letterSpacing: '-0.3px' }}>
-          F {fmt(data.F)}
-        </span>
-        <span style={{ fontSize: '12px', fontWeight: '600', color: ivAlert ? macos.red : macos.secondary }}>
-          IV {data.iv != null ? data.iv.toFixed(2) : '--'}
-          {ivChg != null && (
-            <span style={{ marginLeft: '4px', color: ivAlert ? macos.red : macos.tertiary }}>
-              {ivChg > 0 ? '+' : ''}{ivChg.toFixed(2)}
+      <div style={{ display: 'flex', gap: '18px' }}>
+        {/* คอลัมน์ซ้าย: ราคา + สัดส่วน P/C */}
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginTop: '6px' }}>
+            <span style={{ fontSize: '20px', fontWeight: '600', letterSpacing: '-0.3px' }}>
+              F {fmt(data.F)}
             </span>
-          )}
-        </span>
-      </div>
+            <span style={{ fontSize: '12px', fontWeight: '600', color: ivAlert ? macos.red : macos.secondary }}>
+              IV {data.iv != null ? data.iv.toFixed(2) : '--'}
+              {ivChg != null && (
+                <span style={{ marginLeft: '4px', color: ivAlert ? macos.red : macos.tertiary }}>
+                  {ivChg > 0 ? '+' : ''}{ivChg.toFixed(2)}
+                </span>
+              )}
+            </span>
+          </div>
+          <PcRow title="Intraday" pc={data.intraday} />
+          <PcRow title="Open Interest" pc={data.oi} />
+          <SdBlock sd={data.sd} />
+        </div>
 
-      <PcRow title="Intraday" pc={data.intraday} />
-      <PcRow title="Open Interest" pc={data.oi} />
+        {/* คอลัมน์ขวา: Top Active สองชุด สไตล์ Telegram */}
+        <div style={{ flex: 1, minWidth: 0, borderLeft: `0.5px solid ${macos.divider}`, paddingLeft: '16px' }}>
+          <TopActive title="Intraday" top={data.intraday && data.intraday.top} />
+          <TopActive title="OI" top={data.oi && data.oi.top} />
+        </div>
+      </div>
 
       <div style={{
         borderTop: `0.5px solid ${macos.divider}`,
@@ -121,7 +218,7 @@ export const render = ({ output }) => {
         display: 'flex', justifyContent: 'space-between', alignItems: 'center',
       }}>
         <span style={{ fontSize: '10px', color: macos.tertiary }}>
-          click → copy for TV
+          click card → copy for TV · ↻ → refresh + copy
         </span>
         <span style={{ fontSize: '10px', color: macos.tertiary }}>
           Sync {data.system_time || '--'}

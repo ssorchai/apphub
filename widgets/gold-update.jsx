@@ -76,6 +76,7 @@ export const render = ({ output }) => {
 
   const container = {
     position: 'fixed', bottom: '25px', left: '795px', width: '290px',
+    minHeight: '285px', display: 'flex', flexDirection: 'column', justifyContent: 'space-between',
     padding: '18px 16px 14px', borderRadius: macos.radius,
     color: macos.label, fontFamily: macos.font,
     background: macos.material,
@@ -90,10 +91,10 @@ export const render = ({ output }) => {
     if (!asset) {
       return (
         <div style={{ marginTop: '8px' }}>
-          <div style={{ fontSize: '10px', color: macos.secondary, fontWeight: '600', letterSpacing: '0.4px', textTransform: 'uppercase', marginBottom: '2px' }}>
+          <div style={{ fontSize: '11px', color: macos.secondary, fontWeight: '600', letterSpacing: '0.4px', textTransform: 'uppercase', marginBottom: '2px' }}>
             {fallbackName}
           </div>
-          <span style={{ fontSize: '23px', fontWeight: '600', color: macos.tertiary }}>N/A</span>
+          <span style={{ fontSize: '26px', fontWeight: '600', color: macos.tertiary }}>N/A</span>
         </div>
       );
     }
@@ -105,25 +106,25 @@ export const render = ({ output }) => {
     const upOpen = changeOpen >= 0;
     return (
       <div style={{ marginTop: '8px' }}>
-        <div style={{ fontSize: '10px', color: macos.secondary, fontWeight: '600', letterSpacing: '0.4px', textTransform: 'uppercase', marginBottom: '2px' }}>
+        <div style={{ fontSize: '11px', color: macos.secondary, fontWeight: '600', letterSpacing: '0.4px', textTransform: 'uppercase', marginBottom: '2px' }}>
           {asset.name}
           {showOpen && asset.open != null && (
             <span style={{ color: macos.tertiary, marginLeft: '6px', textTransform: 'none' }}>O {fmt(asset.open)}</span>
           )}
         </div>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-          <span style={{ fontSize: '23px', fontWeight: '600', letterSpacing: '-0.4px', color: accent || macos.label }}>
+          <span style={{ fontSize: '26px', fontWeight: '600', letterSpacing: '-0.4px', color: accent || macos.label }}>
             {fmt(asset.price)}
           </span>
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', lineHeight: '1.1' }}>
-            <span style={{ fontSize: '12px', fontWeight: '600', color: up ? macos.green : macos.red }}>
+            <span style={{ fontSize: '13px', fontWeight: '600', color: up ? macos.green : macos.red }}>
               {up ? '+' : ''}{fmt(change)}
               <span style={{ opacity: 0.75, marginLeft: '5px', fontSize: '10px' }}>
                 {up ? '+' : ''}{fmt(asset.percent)}%
               </span>
             </span>
             {hasOpenChange && (
-              <span style={{ fontSize: '12px', fontWeight: '600', color: upOpen ? macos.green : macos.red }}>
+              <span style={{ fontSize: '13px', fontWeight: '600', color: upOpen ? macos.green : macos.red }}>
                 <span style={{ color: macos.tertiary, marginRight: '4px', fontWeight: '700' }}>O</span>
                 {upOpen ? '+' : ''}{fmt(changeOpen)}
                 <span style={{ opacity: 0.75, marginLeft: '5px', fontSize: '10px' }}>
@@ -177,7 +178,7 @@ export const render = ({ output }) => {
         <span style={{ fontSize: '11px', color: macos.secondary, fontWeight: '600', letterSpacing: '0.4px' }}>
           SPREAD DIFF
         </span>
-        <span style={{ fontSize: '15px', fontWeight: '600', color: spreadColor }}>
+        <span style={{ fontSize: '17px', fontWeight: '600', color: spreadColor }}>
           {hasDiff ? `${num(data.diff) > 0 ? '+' : ''}${fmt(data.diff)}` : 'N/A'}
         </span>
       </div>
@@ -187,7 +188,7 @@ export const render = ({ output }) => {
           <span style={{ fontSize: '11px', color: macos.secondary, fontWeight: '600', letterSpacing: '0.4px' }}>
             THEORY DIFF · {data.theory.days}D
           </span>
-          <span style={{ fontSize: '20px', fontWeight: '700', letterSpacing: '-0.3px', color: macos.label }}>
+          <span style={{ fontSize: '22px', fontWeight: '700', letterSpacing: '-0.3px', color: macos.label }}>
             {delta != null && (
               <span style={{ fontSize: '11px', fontWeight: '600', color: deltaAlert ? macos.red : macos.tertiary, marginRight: '8px' }}>
                 Δ {delta > 0 ? '+' : ''}{fmt(delta)}

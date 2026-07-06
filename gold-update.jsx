@@ -22,6 +22,34 @@ const macos = {
   orange: '#ffb340',
 };
 
+
+// ⌥-drag ย้ายการ์ด: กด Option ค้างแล้วลาก — ตำแหน่งเก็บ localStorage ข้าม reboot
+const POS_KEY = 'gold-update.pos';
+const savedPos = () => {
+  try { return JSON.parse(localStorage.getItem(POS_KEY)) || {}; } catch (e) { return {}; }
+};
+const altDrag = (e) => {
+  if (!e.altKey) return;
+  e.preventDefault();
+  e.stopPropagation();
+  const el = e.currentTarget;
+  const sx = e.clientX, sy = e.clientY;
+  const rect = el.getBoundingClientRect();
+  const left0 = rect.left, bottom0 = window.innerHeight - rect.bottom;
+  const move = (ev) => {
+    const pos = { left: `${left0 + ev.clientX - sx}px`, bottom: `${bottom0 - (ev.clientY - sy)}px` };
+    el.style.left = pos.left;
+    el.style.bottom = pos.bottom;
+    localStorage.setItem(POS_KEY, JSON.stringify(pos));
+  };
+  const up = () => {
+    window.removeEventListener('mousemove', move);
+    window.removeEventListener('mouseup', up);
+  };
+  window.addEventListener('mousemove', move);
+  window.addEventListener('mouseup', up);
+};
+
 const num = (v) => (typeof v === 'number' ? v : parseFloat(String(v).replace(/[,%+]/g, '')) || 0);
 const fmt = (v, d = 2) => num(v).toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d });
 
@@ -75,7 +103,7 @@ export const render = ({ output }) => {
   const stale = data.ts && Date.now() / 1000 - data.ts > 180;
 
   const container = {
-    position: 'fixed', bottom: '25px', left: '795px', width: '290px',
+    position: 'fixed', bottom: savedPos().bottom || '25px', left: savedPos().left || '795px', width: '290px',
     minHeight: '285px', display: 'flex', flexDirection: 'column', justifyContent: 'space-between',
     padding: '18px 16px 14px', borderRadius: macos.radius,
     color: macos.label, fontFamily: macos.font,
@@ -139,6 +167,7 @@ export const render = ({ output }) => {
   };
 
   const handleClick = (e) => {
+    if (e.altKey) return;
     e.preventDefault();
     run("open -a 'Google Chrome' 'https://www.vol2vol.com'");
   };
@@ -155,7 +184,7 @@ export const render = ({ output }) => {
     : num(data.diff) >= 0 ? macos.label : macos.blue;
 
   return (
-    <div style={container} onClick={handleClick}>
+    <div style={container} onClick={handleClick} onMouseDown={altDrag}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div style={{ display: 'flex', gap: '5px' }}>
           {sessionState().map((s) => <SessionLight s={s} key={s.label} />)}

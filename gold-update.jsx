@@ -86,7 +86,7 @@ export const render = ({ output }) => {
   };
 
   // asset = null คือรอบนั้นดึงราคาไม่ได้ — แสดง N/A ไม่ใช้ค่าเก่า
-  const renderAsset = (asset, fallbackName, { accent, showOpen } = {}) => {
+  const renderAsset = (asset, fallbackName, { accent, showOpen, showOpenChange } = {}) => {
     if (!asset) {
       return (
         <div style={{ marginTop: '10px' }}>
@@ -99,6 +99,10 @@ export const render = ({ output }) => {
     }
     const change = num(asset.change);
     const up = change >= 0;
+    // +/- เทียบ open (เฉพาะ future — ส่ง showOpenChange มาและ fetcher มี change_open)
+    const hasOpenChange = showOpenChange && asset.change_open != null;
+    const changeOpen = num(asset.change_open);
+    const upOpen = changeOpen >= 0;
     return (
       <div style={{ marginTop: '10px' }}>
         <div style={{ fontSize: '10px', color: macos.secondary, fontWeight: '600', letterSpacing: '0.4px', textTransform: 'uppercase', marginBottom: '2px' }}>
@@ -111,12 +115,23 @@ export const render = ({ output }) => {
           <span style={{ fontSize: '23px', fontWeight: '600', letterSpacing: '-0.4px', color: accent || macos.label }}>
             {fmt(asset.price)}
           </span>
-          <span style={{ fontSize: '13px', fontWeight: '600', color: up ? macos.green : macos.red }}>
-            {up ? '+' : ''}{fmt(change)}
-            <span style={{ opacity: 0.75, marginLeft: '5px', fontSize: '11px' }}>
-              {up ? '+' : ''}{fmt(asset.percent)}%
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end' }}>
+            <span style={{ fontSize: '13px', fontWeight: '600', color: up ? macos.green : macos.red }}>
+              {up ? '+' : ''}{fmt(change)}
+              <span style={{ opacity: 0.75, marginLeft: '5px', fontSize: '11px' }}>
+                {up ? '+' : ''}{fmt(asset.percent)}%
+              </span>
             </span>
-          </span>
+            {hasOpenChange && (
+              <span style={{ fontSize: '11px', fontWeight: '600', color: upOpen ? macos.green : macos.red, marginTop: '1px' }}>
+                <span style={{ color: macos.tertiary, marginRight: '4px', fontWeight: '700' }}>O</span>
+                {upOpen ? '+' : ''}{fmt(changeOpen)}
+                <span style={{ opacity: 0.75, marginLeft: '5px', fontSize: '10px' }}>
+                  {upOpen ? '+' : ''}{fmt(asset.percent_open)}%
+                </span>
+              </span>
+            )}
+          </div>
         </div>
       </div>
     );
@@ -151,7 +166,7 @@ export const render = ({ output }) => {
         )}
       </div>
 
-      {renderAsset(data.future, 'Gold Futures', { showOpen: true })}
+      {renderAsset(data.future, 'Gold Futures', { showOpen: true, showOpenChange: true })}
       {renderAsset(data.spot || data.cfd, 'XAU/USD Spot', { accent: macos.blue })}
 
       <div style={{

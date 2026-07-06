@@ -137,7 +137,9 @@ sd_buy2_color = input.color(color.rgb(67, 160, 71), title="2SD Buy", inline="sd2
 sd_sell2_color = input.color(color.rgb(229, 57, 53), title=" Sell", inline="sd2", group=group_sd)
 sd_buy3_color = input.color(color.rgb(27, 94, 32), title="3SD Buy", inline="sd3", group=group_sd)
 sd_sell3_color = input.color(color.rgb(139, 0, 0), title=" Sell", inline="sd3", group=group_sd)
-sd_line_width = input.int(1, title="SD Line Width", minval=1, group=group_sd)
+sd_line_width = input.int(1, title="SD Line Width", minval=1, inline="sdst", group=group_sd)
+sd_line_style_in = input.string("Dashed", title=" Style", options=["Solid", "Dashed", "Dotted"], inline="sdst", group=group_sd)
+sd_line_style = sd_line_style_in == "Solid" ? line.style_solid : sd_line_style_in == "Dotted" ? line.style_dotted : line.style_dashed
 show_sd_on_scale = input.bool(true, title="Show SD on Price Scale", group=group_sd, tooltip="แสดงระดับ SD เป็นป้ายบนแถบราคาขวามือ (ตัวเลขเป็นราคา Spot ตามแกน)")
 
 // ตั้งค่า Grid
@@ -416,12 +418,12 @@ if barstate.islast
 
     // เส้น Mean Reversion SD (ไล่เฉดอ่อน -> เข้ม, ไม่มี label ลอย ใช้ป้ายบนแกนราคาขวาแทน)
     if not na(sd_buy1_f)
-        draw_open_level(sd_buy1_f, sd_buy1_color, sd_line_width, line.style_dashed, "", false)
-        draw_open_level(sd_sell1_f, sd_sell1_color, sd_line_width, line.style_dashed, "", false)
-        draw_open_level(sd_buy2_f, sd_buy2_color, sd_line_width, line.style_dashed, "", false)
-        draw_open_level(sd_sell2_f, sd_sell2_color, sd_line_width, line.style_dashed, "", false)
-        draw_open_level(sd_buy3_f, sd_buy3_color, sd_line_width, line.style_dashed, "", false)
-        draw_open_level(sd_sell3_f, sd_sell3_color, sd_line_width, line.style_dashed, "", false)
+        draw_open_level(sd_buy1_f, sd_buy1_color, sd_line_width, sd_line_style, "", false)
+        draw_open_level(sd_sell1_f, sd_sell1_color, sd_line_width, sd_line_style, "", false)
+        draw_open_level(sd_buy2_f, sd_buy2_color, sd_line_width, sd_line_style, "", false)
+        draw_open_level(sd_sell2_f, sd_sell2_color, sd_line_width, sd_line_style, "", false)
+        draw_open_level(sd_buy3_f, sd_buy3_color, sd_line_width, sd_line_style, "", false)
+        draw_open_level(sd_sell3_f, sd_sell3_color, sd_line_width, sd_line_style, "", false)
 
         // Tag ชื่อเส้น SD ติดขวาแท่งล่าสุด วิ่งตามราคาไปเรื่อยๆ
         sd_tag_x = time + 4 * timeframe.in_seconds() * 1000
@@ -499,9 +501,12 @@ if barstate.islast
                     array.push(lines_arr, pc_sln)
 
     // TradingView WormHole: หาช่วง strike ติดกันที่สัญญารวม <= wh_count จากบันได strike เต็ม
-    // (ใช้บันไดจากเส้น VS เพราะครบทุก strike รวมตัวที่ volume ศูนย์) แล้วแรเงาจากตอนนี้ถึงจบวัน
+    // (ใช้บันไดจากเส้น VS เพราะครบทุก strike รวมตัวที่ volume ศูนย์)
+    // แรเงาตั้งแต่จุดเริ่มกราф P/C (bar_index - offset) ยาวไปถึงจบวัน (แปลงเวลาที่เหลือเป็นจำนวนแท่ง)
     if wh_show and array.size(pc_v_strikes) > 1 and array.size(pc_m_strikes) > 0
-        wh_x2 = time("D") + 86400000
+        wh_x1 = bar_index - pc_back_off
+        // clamp 480 แท่ง: TV ห้าม object ล้ำอนาคตเกิน 500 แท่ง (timeframe เล็กๆ เวลาเหลือทั้งวันอาจเกิน)
+        wh_x2 = bar_index + math.min(math.max(math.round((time("D") + 86400000 - time) / (timeframe.in_seconds() * 1000)), 1), 480)
         wh_n = array.size(pc_v_strikes)
         wh_i = 0
         while wh_i < wh_n
@@ -517,7 +522,7 @@ if barstate.islast
                 // ขอบแถบ = กึ่งกลางระหว่าง strike เพื่อนบ้านที่มีของ (ขอบบันไดใช้ครึ่งช่องมาตรฐาน)
                 wh_bot = wh_i > 0 ? (array.get(pc_v_strikes, wh_i) + array.get(pc_v_strikes, wh_i - 1)) / 2 : array.get(pc_v_strikes, wh_i) - 2.5
                 wh_top = wh_k < wh_n - 1 ? (array.get(pc_v_strikes, wh_k) + array.get(pc_v_strikes, wh_k + 1)) / 2 : array.get(pc_v_strikes, wh_k) + 2.5
-                wh_bx = box.new(left=time, top=wh_top + delta_diff, right=wh_x2, bottom=wh_bot + delta_diff, xloc=xloc.bar_time, bgcolor=wh_color, border_color=na)
+                wh_bx = box.new(left=wh_x1, top=wh_top + delta_diff, right=wh_x2, bottom=wh_bot + delta_diff, bgcolor=wh_color, border_color=na)
                 array.push(pc_boxes, wh_bx)
                 wh_i := wh_k + 1
             else

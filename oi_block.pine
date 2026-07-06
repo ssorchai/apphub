@@ -369,11 +369,12 @@ pc_draw_side(int x0, float y_top, float y_bot, int v_oi, int v_id, float vmax, c
     len_total = len1
     if id_on and v_id > 0
         len_total := math.max(math.round((v_oi * (oi_on ? 1 : 0) + v_id) / vmax * pc_bar_len), len1 + 1)
+    // ตัวเลขในแถบ text_size=auto: ซูมออกเล็กมาก ซูมเข้าอ่านได้ — ทางดูค่าบนมือถือ (pinch zoom)
     if len1 > 0
-        bx = box.new(left=x0, top=y_top, right=x0 + len1, bottom=y_bot, bgcolor=color.new(side_color, id_on ? 68 : 40), border_color=na)
+        bx = box.new(left=x0, top=y_top, right=x0 + len1, bottom=y_bot, bgcolor=color.new(side_color, id_on ? 68 : 40), border_color=na, text=str.tostring(v_oi), text_size=size.auto, text_color=color.new(side_color, 0))
         array.push(pc_boxes, bx)
     if len_total > len1
-        bx2 = box.new(left=x0 + len1, top=y_top, right=x0 + len_total, bottom=y_bot, bgcolor=color.new(side_color, 18), border_color=na)
+        bx2 = box.new(left=x0 + len1, top=y_top, right=x0 + len_total, bottom=y_bot, bgcolor=color.new(side_color, 18), border_color=na, text=id_on and v_id > 0 ? str.tostring(v_id) : "", text_size=size.auto, text_color=color.new(side_color, 0))
         array.push(pc_boxes, bx2)
     len_total
 
@@ -382,7 +383,7 @@ pc_draw_side(int x0, float y_top, float y_bot, int v_oi, int v_id, float vmax, c
 pc_draw_bar_dir(int x0, float y_top, float y_bot, int v, float vmax, color side_color, int transp, int dir) =>
     len = v > 0 ? math.max(math.round(v / vmax * pc_bar_len), 1) : 0
     if len > 0
-        bx = box.new(left=dir > 0 ? x0 : x0 - len, top=y_top, right=dir > 0 ? x0 + len : x0, bottom=y_bot, bgcolor=color.new(side_color, transp), border_color=na)
+        bx = box.new(left=dir > 0 ? x0 : x0 - len, top=y_top, right=dir > 0 ? x0 + len : x0, bottom=y_bot, bgcolor=color.new(side_color, transp), border_color=na, text=str.tostring(v), text_size=size.auto, text_color=color.new(side_color, 0))
         array.push(pc_boxes, bx)
     x0 + dir * len
 

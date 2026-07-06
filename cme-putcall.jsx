@@ -62,26 +62,40 @@ const PcRow = ({ title, pc }) => {
   );
 };
 
-// TOP ACTIVE สไตล์โพสต์ Telegram: อันดับ | strike | รวม แล้วบรรทัดย่อย P/C
+// TOP ACTIVE แบบเรียบ: บรรทัดเดียวต่ออันดับ — strike · รวม · (P/C)
 const TopActive = ({ title, top }) => {
   if (!top || !top.length) return null;
   return (
     <div style={{ marginTop: '8px' }}>
-      <div style={secTitle}>📍 Top Active · {title}</div>
-      {top.map((t, i) => (
-        <div key={t.strike} style={{ marginTop: '3px' }}>
-          <div style={{ display: 'flex', alignItems: 'baseline', gap: '6px' }}>
-            <span style={{
-              fontSize: '9px', fontWeight: '700', color: macos.label,
-              background: 'rgba(255,255,255,0.22)', borderRadius: '4px',
-              padding: '1px 5px',
-            }}>{i + 1}</span>
-            <span style={{ fontSize: '13px', fontWeight: '600', color: macos.label }}>{t.strike}</span>
-            <span style={{ fontSize: '12px', color: macos.secondary, marginLeft: 'auto' }}>{fmt(t.total)}</span>
-          </div>
-          <div style={{ fontSize: '11px', color: macos.tertiary, paddingLeft: '24px' }}>
-            └ <span style={{ color: macos.orange }}>P:{fmt(t.put)}</span> / <span style={{ color: macos.blue }}>C:{fmt(t.call)}</span>
-          </div>
+      <div style={secTitle}>Top Active · {title}</div>
+      {top.map((t) => (
+        <div key={t.strike} style={{ display: 'flex', alignItems: 'baseline', gap: '8px', fontSize: '12px', marginTop: '3px' }}>
+          <span style={{ fontWeight: '600', color: macos.label, minWidth: '38px' }}>{t.strike}</span>
+          <span style={{ color: macos.secondary }}>{fmt(t.total)}</span>
+          <span style={{ color: macos.tertiary, marginLeft: 'auto' }}>
+            <span style={{ color: macos.orange }}>P {fmt(t.put)}</span> · <span style={{ color: macos.blue }}>C {fmt(t.call)}</span>
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+};
+
+// ของที่เติมเข้ามาตั้งแต่ refresh รอบก่อน (แบบวงเล็บ +28 ของบอท telegram)
+const ChangeRow = ({ title, rows, since }) => {
+  if (!rows || !rows.length) return null;
+  const dfmt = (v) => (v > 0 ? `+${fmt(v)}` : fmt(v));
+  return (
+    <div style={{ marginTop: '8px' }}>
+      <div style={secTitle}>Δ {title}{since ? ` · ตั้งแต่ ${since}` : ''}</div>
+      {rows.map((r) => (
+        <div key={r.strike} style={{ display: 'flex', alignItems: 'baseline', gap: '8px', fontSize: '12px', marginTop: '3px' }}>
+          <span style={{ fontWeight: '600', color: macos.label, minWidth: '38px' }}>{r.strike}</span>
+          <span style={{ marginLeft: 'auto' }}>
+            {r.dp !== 0 && <span style={{ color: macos.orange, fontWeight: '600' }}>P {dfmt(r.dp)}</span>}
+            {r.dp !== 0 && r.dc !== 0 && <span style={{ color: macos.tertiary }}> · </span>}
+            {r.dc !== 0 && <span style={{ color: macos.blue, fontWeight: '600' }}>C {dfmt(r.dc)}</span>}
+          </span>
         </div>
       ))}
     </div>
@@ -205,10 +219,12 @@ export const render = (state, dispatch) => {
           <SdBlock sd={data.sd} />
         </div>
 
-        {/* คอลัมน์ขวา: Top Active สองชุด สไตล์ Telegram */}
+        {/* คอลัมน์ขวา: Top Active + ของที่เติมเข้ามาตั้งแต่ refresh ก่อน */}
         <div style={{ flex: 1, minWidth: 0, borderLeft: `0.5px solid ${macos.divider}`, paddingLeft: '16px' }}>
           <TopActive title="Intraday" top={data.intraday && data.intraday.top} />
           <TopActive title="OI" top={data.oi && data.oi.top} />
+          <ChangeRow title="Intraday" rows={data.changes && data.changes.intraday} since={data.changes && data.changes.since} />
+          <ChangeRow title="OI" rows={data.changes && data.changes.oi} since={data.changes && data.changes.since} />
         </div>
       </div>
 

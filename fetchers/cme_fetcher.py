@@ -42,9 +42,12 @@ JSON_OUT = "/tmp/cme_putcall.json"
 CLIP_OUT = "/tmp/cme_putcall_clip.txt"
 
 # SD จากราคาเปิดวัน (Yahoo แม่นกว่า investing — pattern เดียวกับ gold_fetcher.py)
-# DTE fix 0.6 = ตัดช่วงเอเชียเช้าทิ้ง / vol ใช้ Vol + Vol Chg (extrapolate แนวโน้ม vol)
+# DTE fix 0.6 = ตัดช่วงเอเชียเช้าทิ้ง / vol ใช้ Vol - Vol Chg = settle ATM vol ทางการ
 YAHOO_URL = "https://query1.finance.yahoo.com/v8/finance/chart/GC=F?interval=1d&range=1d"
 SD_DTE = 0.6
+
+# state รอบก่อน สำหรับหา "ของที่เติมเข้ามา" ระหว่าง refresh (แบบวงเล็บ +28 ของบอท telegram)
+PREV_STATE = "/tmp/cme_putcall_prev.json"
 
 
 def _grab_object(s, start):
@@ -154,16 +157,32 @@ def fetch_yahoo_open():
 
 
 def sd_levels(open_price, iv, iv_chg):
-    """กรอบ SD: mean = ราคาเปิด Yahoo, DTE 0.6, vol = Vol + Vol Chg — คืน None ถ้าขาดส่วนผสม"""
+    """กรอบ SD: mean = ราคาเปิด Yahoo, DTE 0.6, vol = Vol - Vol Chg (settle ATM ทางการ)
+    — คืน None ถ้าขาดส่วนผสม"""
     if open_price is None or iv is None or iv_chg is None:
         return None
     import math
-    vol_used = iv + iv_chg
+    vol_used = iv - iv_chg
     sd1 = open_price * (vol_used / 100.0) * math.sqrt(SD_DTE / 365.0)
     lv = {f"{side}{n}": round(open_price + (n * sd1 if side == "s" else -n * sd1), 1)
           for n in (1, 2, 3) for side in ("b", "s")}
     return dict(open=open_price, vol_used=round(vol_used, 2), dte=SD_DTE,
                 sd1=round(sd1, 1), **lv)
+
+
+def top_changes(rows_now, prev_map, n=2):
+    """เทียบ per-strike กับรอบก่อน คืน n อันดับที่เปลี่ยนมากสุด [{strike, dp, dc}]"""
+    now_map = {str(s): (p, c) for s, p, c in rows_now}
+    changes = []
+    for k in set(now_map) | set(prev_map):
+        p_now, c_now = now_map.get(k, (0, 0))
+        p_old, c_old = prev_map.get(k, (0, 0))
+        dp, dc = p_now - p_old, c_now - c_old
+        if dp or dc:
+            s = float(k)
+            changes.append({"strike": int(s) if s == int(s) else s, "dp": dp, "dc": dc})
+    changes.sort(key=lambda x: -(abs(x["dp"]) + abs(x["dc"])))
+    return changes[:n]
 
 
 def main():
@@ -182,6 +201,20 @@ def main():
     except Exception:
         yahoo_open = None
     sd = sd_levels(yahoo_open, meta["iv"], iv_chg)
+
+    # ของที่เติมเข้ามาตั้งแต่ refresh รอบก่อน (นับเฉพาะ series เดียวกัน — วันใหม่เริ่มนับใหม่)
+    prev = {}
+    try:
+        prev = json.load(open(PREV_STATE))
+        if prev.get("series") != meta["series"]:
+            prev = {}
+    except Exception:
+        prev = {}
+    changes = {
+        "since": prev.get("time"),
+        "intraday": top_changes(id_rows, prev.get("id", {})) if prev else [],
+        "oi": top_changes(oi_rows, prev.get("oi", {})) if prev else [],
+    }
 
     header = (f"F:{meta['F']}|D:{now:%Y-%m-%d %H:%M}|S:{meta['series']}"
               f"|IV:{meta['iv']}|IVCHG:{iv_chg if iv_chg is not None else ''}"
@@ -216,10 +249,16 @@ def main():
             "top": top_actives(oi_rows),
         },
         "sd": sd,
+        "changes": changes,
     }
 
+    new_state = json.dumps({
+        "series": meta["series"], "time": f"{now:%H:%M}",
+        "id": {str(s): [p, c] for s, p, c in id_rows},
+        "oi": {str(s): [p, c] for s, p, c in oi_rows},
+    })
     for path, content in [(JSON_OUT, json.dumps(data, ensure_ascii=False)),
-                          (CLIP_OUT, clip)]:
+                          (CLIP_OUT, clip), (PREV_STATE, new_state)]:
         tmp = path + ".tmp"
         with open(tmp, "w") as f:
             f.write(content)

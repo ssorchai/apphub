@@ -115,7 +115,7 @@ export const render = ({ output }) => {
   };
 
   // asset = null คือรอบนั้นดึงราคาไม่ได้ — แสดง N/A ไม่ใช้ค่าเก่า
-  const renderAsset = (asset, fallbackName, { accent, showOpen, showOpenChange } = {}) => {
+  const renderAsset = (asset, fallbackName, { accent, showOpen } = {}) => {
     if (!asset) {
       return (
         <div style={{ marginTop: '8px' }}>
@@ -128,23 +128,12 @@ export const render = ({ output }) => {
     }
     const change = num(asset.change);
     const up = change >= 0;
-    // +/- เทียบ open (เฉพาะ future — ส่ง showOpenChange มาและ fetcher มี change_open)
-    const hasOpenChange = showOpenChange && asset.change_open != null;
-    const changeOpen = num(asset.change_open);
-    const upOpen = changeOpen >= 0;
     return (
       <div style={{ marginTop: '8px' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', fontSize: '11px', color: macos.secondary, fontWeight: '600', letterSpacing: '0.4px', textTransform: 'uppercase', marginBottom: '2px' }}>
           <span>{asset.name}</span>
           {showOpen && asset.open != null && (
-            <span style={{ color: macos.tertiary, textTransform: 'none' }}>
-              O {fmt(asset.open)}
-              {hasOpenChange && (
-                <span style={{ color: upOpen ? macos.green : macos.red, marginLeft: '5px' }}>
-                  {upOpen ? '+' : ''}{fmt(changeOpen)}
-                </span>
-              )}
-            </span>
+            <span style={{ color: macos.tertiary, textTransform: 'none' }}>O {fmt(asset.open)}</span>
           )}
         </div>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
@@ -192,7 +181,7 @@ export const render = ({ output }) => {
         )}
       </div>
 
-      {renderAsset(data.future, 'Gold Futures', { showOpen: true, showOpenChange: true })}
+      {renderAsset(data.future, 'Gold Futures', { showOpen: true })}
       {renderAsset(data.spot || data.cfd, 'XAU/USD Spot', { accent: macos.blue })}
 
       <div style={{
@@ -220,6 +209,20 @@ export const render = ({ output }) => {
               </span>
             )}
             +{fmt(data.theory.diff, 1)}
+          </span>
+        </div>
+      )}
+
+      {data.future && data.future.change_open != null && (
+        <div style={{ marginTop: '4px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span style={{ fontSize: '11px', color: macos.secondary, fontWeight: '600', letterSpacing: '0.4px' }}>
+            FUT FROM OPEN
+          </span>
+          <span style={{ fontSize: '13px', fontWeight: '600', color: num(data.future.change_open) >= 0 ? macos.green : macos.red }}>
+            {num(data.future.change_open) >= 0 ? '+' : ''}{fmt(data.future.change_open)}
+            <span style={{ opacity: 0.75, marginLeft: '5px', fontSize: '10px' }}>
+              {num(data.future.change_open) >= 0 ? '+' : ''}{fmt(data.future.percent_open)}%
+            </span>
           </span>
         </div>
       )}

@@ -41,6 +41,11 @@ MARKER = "UserControlsV2.QuikOptionsV2V.Chart, "
 JSON_OUT = "/tmp/cme_putcall.json"
 CLIP_OUT = "/tmp/cme_putcall_clip.txt"
 
+# SD จากราคาเปิดวัน (Yahoo แม่นกว่า investing — pattern เดียวกับ gold_fetcher.py)
+# DTE fix 0.6 = ตัดช่วงเอเชียเช้าทิ้ง / vol ใช้ Vol + Vol Chg (extrapolate แนวโน้ม vol)
+YAHOO_URL = "https://query1.finance.yahoo.com/v8/finance/chart/GC=F?interval=1d&range=1d"
+SD_DTE = 0.6
+
 
 def _grab_object(s, start):
     depth, in_str, esc, j = 0, False, False, start
@@ -130,6 +135,37 @@ def top_actives(rows, n=2):
             for s, p, c in sorted(rows, key=lambda r: -(r[1] + r[2]))[:n]]
 
 
+def fetch_yahoo_open():
+    """ราคาเปิดวันของ GC=F — อ่านจาก /tmp/gold_data.json ที่ gold_fetcher.py (cron 5 นาที)
+    เขียนไว้อยู่แล้ว (ไม่ยิง Yahoo ซ้ำ + urllib โดน 429 ง่ายกว่า requests) — ต้องสดไม่เกิน
+    15 นาที ไม่งั้นลอง Yahoo ตรงเป็น fallback / พังก็คืน None (ห้ามใช้ค่าเก่า)"""
+    try:
+        p = "/tmp/gold_data.json"
+        if os.path.getmtime(p) > datetime.now().timestamp() - 900:
+            open_v = (json.load(open(p)).get("future") or {}).get("open")
+            if open_v is not None:
+                return round(float(open_v), 2)
+    except Exception:
+        pass
+    req = urllib.request.Request(YAHOO_URL, headers={"User-Agent": UA})
+    result = json.loads(urllib.request.urlopen(req, timeout=15).read())["chart"]["result"][0]
+    opens = [v for v in result["indicators"]["quote"][0].get("open", []) if v is not None]
+    return round(opens[-1], 2) if opens else None
+
+
+def sd_levels(open_price, iv, iv_chg):
+    """กรอบ SD: mean = ราคาเปิด Yahoo, DTE 0.6, vol = Vol + Vol Chg — คืน None ถ้าขาดส่วนผสม"""
+    if open_price is None or iv is None or iv_chg is None:
+        return None
+    import math
+    vol_used = iv + iv_chg
+    sd1 = open_price * (vol_used / 100.0) * math.sqrt(SD_DTE / 365.0)
+    lv = {f"{side}{n}": round(open_price + (n * sd1 if side == "s" else -n * sd1), 1)
+          for n in (1, 2, 3) for side in ("b", "s")}
+    return dict(open=open_price, vol_used=round(vol_used, 2), dte=SD_DTE,
+                sd1=round(sd1, 1), **lv)
+
+
 def main():
     now = datetime.now()
     intraday, oi = fetch_both_tabs()
@@ -140,6 +176,12 @@ def main():
     sub = re.sub("<[^>]+>", "", oi.get("Subtitle", "")).replace("\xa0", " ")
     mv = re.search(r"Vol Chg:\s*(-?[\d.]+)", sub)
     iv_chg = float(mv.group(1)) if mv else None
+
+    try:
+        yahoo_open = fetch_yahoo_open()
+    except Exception:
+        yahoo_open = None
+    sd = sd_levels(yahoo_open, meta["iv"], iv_chg)
 
     header = (f"F:{meta['F']}|D:{now:%Y-%m-%d %H:%M}|S:{meta['series']}"
               f"|IV:{meta['iv']}|IVCHG:{iv_chg if iv_chg is not None else ''}"
@@ -173,6 +215,7 @@ def main():
             "call": sum(r[2] for r in oi_rows),
             "top": top_actives(oi_rows),
         },
+        "sd": sd,
     }
 
     for path, content in [(JSON_OUT, json.dumps(data, ensure_ascii=False)),

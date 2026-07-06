@@ -75,7 +75,7 @@ export const render = ({ output }) => {
   const stale = data.ts && Date.now() / 1000 - data.ts > 180;
 
   const container = {
-    position: 'fixed', bottom: '25px', left: '35px', width: '290px',
+    position: 'fixed', bottom: '25px', left: '795px', width: '290px',
     padding: '18px 16px 14px', borderRadius: macos.radius,
     color: macos.label, fontFamily: macos.font,
     background: macos.material,

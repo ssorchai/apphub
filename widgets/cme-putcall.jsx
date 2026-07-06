@@ -63,14 +63,15 @@ const PcRow = ({ title, pc }) => {
 };
 
 // TOP ACTIVE แบบเรียบ: บรรทัดเดียวต่ออันดับ — strike · รวม · (P/C)
-const TopActive = ({ title, top }) => {
+// sc = ฟังก์ชันสี strike (เขียวถ้าสูงกว่า F ปัจจุบัน / แดงถ้าต่ำกว่า)
+const TopActive = ({ top, sc }) => {
   if (!top || !top.length) return null;
   return (
-    <div style={{ marginTop: '8px' }}>
-      <div style={secTitle}>Top Active · {title}</div>
+    <div style={{ marginTop: '6px' }}>
+      <div style={secTitle}>Top Active</div>
       {top.map((t) => (
         <div key={t.strike} style={{ display: 'flex', alignItems: 'baseline', gap: '8px', fontSize: '12px', marginTop: '3px' }}>
-          <span style={{ fontWeight: '600', color: macos.label, minWidth: '38px' }}>{t.strike}</span>
+          <span style={{ fontWeight: '600', color: sc(t.strike), minWidth: '38px' }}>{t.strike}</span>
           <span style={{ color: macos.secondary }}>{fmt(t.total)}</span>
           <span style={{ color: macos.tertiary, marginLeft: 'auto' }}>
             <span style={{ color: macos.orange }}>P {fmt(t.put)}</span> · <span style={{ color: macos.blue }}>C {fmt(t.call)}</span>
@@ -82,15 +83,17 @@ const TopActive = ({ title, top }) => {
 };
 
 // ของที่เติมเข้ามาตั้งแต่ refresh รอบก่อน (แบบวงเล็บ +28 ของบอท telegram)
-const ChangeRow = ({ title, rows, since }) => {
-  if (!rows || !rows.length) return null;
+const ChangeRow = ({ rows, since, sc }) => {
   const dfmt = (v) => (v > 0 ? `+${fmt(v)}` : fmt(v));
   return (
-    <div style={{ marginTop: '8px' }}>
-      <div style={secTitle}>Δ {title}{since ? ` · since ${since}` : ''}</div>
-      {rows.map((r) => (
+    <div style={{ marginTop: '10px' }}>
+      <div style={secTitle}>Δ Changes{since ? ` · since ${since}` : ''}</div>
+      {(!rows || !rows.length) && (
+        <div style={{ fontSize: '12px', color: macos.tertiary, marginTop: '2px' }}>no fills</div>
+      )}
+      {(rows || []).map((r) => (
         <div key={r.strike} style={{ display: 'flex', alignItems: 'baseline', gap: '8px', fontSize: '12px', marginTop: '3px' }}>
-          <span style={{ fontWeight: '600', color: macos.label, minWidth: '38px' }}>{r.strike}</span>
+          <span style={{ fontWeight: '600', color: sc(r.strike), minWidth: '38px' }}>{r.strike}</span>
           <span style={{ marginLeft: 'auto' }}>
             {r.dp !== 0 && <span style={{ color: macos.orange, fontWeight: '600' }}>P {dfmt(r.dp)}</span>}
             {r.dp !== 0 && r.dc !== 0 && <span style={{ color: macos.tertiary }}> · </span>}
@@ -115,8 +118,9 @@ const SdBlock = ({ sd }) => {
   const rows = [[1, sd.b1, sd.s1], [2, sd.b2, sd.s2], [3, sd.b3, sd.s3]];
   return (
     <div style={{ marginTop: '10px' }}>
-      <div style={secTitle}>
-        SD · open {fmt(sd.open)} · vol {sd.vol_used} · dte {sd.dte}
+      <div style={secTitle}>SD Range</div>
+      <div style={{ fontSize: '11px', color: macos.tertiary, marginTop: '1px', whiteSpace: 'nowrap' }}>
+        open {fmt(sd.open)} · vol {sd.vol_used} · dte {sd.dte}
       </div>
       {rows.map(([n, b, s]) => (
         <div key={n} style={{ display: 'flex', alignItems: 'baseline', gap: '8px', fontSize: '12px', marginTop: '3px', fontWeight: '600' }}>
@@ -143,7 +147,7 @@ export const render = (state, dispatch) => {
   const stale = data.ts && Date.now() / 1000 - data.ts > 7200;
 
   const container = {
-    position: 'fixed', bottom: '25px', left: '345px', width: '740px',
+    position: 'fixed', bottom: '25px', left: '35px', width: '740px',
     padding: '14px 16px', borderRadius: macos.radius,
     color: macos.label, fontFamily: macos.font,
     background: macos.material,
@@ -175,6 +179,9 @@ export const render = (state, dispatch) => {
   const ivChg = data.iv_chg;
   // Vol Chg พอง >2-3 จุด = ตลาด reprice vol — กรอบ SD จาก settle แคบเกินจริง
   const ivAlert = ivChg != null && Math.abs(ivChg) > 2;
+
+  // strike สูงกว่า F ที่ดึงได้ = เขียว / ต่ำกว่า = แดง
+  const strikeColor = (s) => (data.F == null ? macos.label : s >= data.F ? macos.green : macos.red);
 
   return (
     <div style={container} onClick={handleCopy} title="Click = copy P/C data for TradingView">
@@ -209,22 +216,18 @@ export const render = (state, dispatch) => {
           <SdBlock sd={data.sd} />
         </div>
 
-        {/* คอลัมน์กลาง: Top Active สองชุด */}
+        {/* คอลัมน์กลาง: Intraday (Top Active + Δ) */}
         <div style={{ flex: 1, minWidth: 0, borderLeft: `0.5px solid ${macos.divider}`, paddingLeft: '16px' }}>
-          <TopActive title="Intraday" top={data.intraday && data.intraday.top} />
-          <TopActive title="OI" top={data.oi && data.oi.top} />
+          <div style={{ ...secTitle, marginTop: '6px', color: macos.label }}>Intraday</div>
+          <TopActive top={data.intraday && data.intraday.top} sc={strikeColor} />
+          <ChangeRow rows={data.changes && data.changes.intraday} since={data.changes && data.changes.since} sc={strikeColor} />
         </div>
 
-        {/* คอลัมน์ขวา: ของที่เติมเข้ามาตั้งแต่ refresh ก่อน (3 อันดับ) */}
+        {/* คอลัมน์ขวา: Open Interest (Top Active + Δ) */}
         <div style={{ flex: 1, minWidth: 0, borderLeft: `0.5px solid ${macos.divider}`, paddingLeft: '16px' }}>
-          <ChangeRow title="Intraday" rows={data.changes && data.changes.intraday} since={data.changes && data.changes.since} />
-          <ChangeRow title="OI" rows={data.changes && data.changes.oi} since={data.changes && data.changes.since} />
-          {(!data.changes || (!data.changes.intraday.length && !data.changes.oi.length)) && (
-            <div style={{ marginTop: '8px' }}>
-              <div style={secTitle}>Δ Changes</div>
-              <div style={{ fontSize: '12px', color: macos.tertiary, marginTop: '2px' }}>no fills since last refresh</div>
-            </div>
-          )}
+          <div style={{ ...secTitle, marginTop: '6px', color: macos.label }}>Open Interest</div>
+          <TopActive top={data.oi && data.oi.top} sc={strikeColor} />
+          <ChangeRow rows={data.changes && data.changes.oi} since={data.changes && data.changes.since} sc={strikeColor} />
         </div>
       </div>
 

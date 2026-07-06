@@ -111,17 +111,31 @@ if barstate.isfirst and str.length(pc_paste) > 0
 pc_oi_on = pc_source != "Intraday"
 pc_id_on = pc_source != "OI"
 
-// สัญญารวม (Total Put+Call) ของ strike หนึ่ง ตามชุดข้อมูลที่เลือกในโหมด Source
-// — ใช้ตัดสิน WormHole: เลือกดู OI ก็วัดจาก OI, เลือก OI+Intraday ก็วัดจากผลรวมทั้งคู่
-pc_total_at(float s) =>
+// Total Put+Call ของ strike หนึ่ง แยกรายชุดข้อมูล (0 ถ้าไม่อยู่ในตาราง)
+pc_tot_id(float s) =>
     j = array.indexof(pc_m_strikes, s)
-    j == -1 ? 0 : (pc_oi_on ? array.get(pc_m_oip, j) + array.get(pc_m_oic, j) : 0) + (pc_id_on ? array.get(pc_m_idp, j) + array.get(pc_m_idc, j) : 0)
+    j == -1 ? 0 : array.get(pc_m_idp, j) + array.get(pc_m_idc, j)
 
-// ตั้งค่า TradingView WormHole: แรเงาช่วงราคาที่แทบไม่มีสัญญา P/C (สุญญากาศ ราคาไหลผ่านเร็ว)
-group_wh = "TradingView WormHole"
+pc_tot_oi(float s) =>
+    j = array.indexof(pc_m_strikes, s)
+    j == -1 ? 0 : array.get(pc_m_oip, j) + array.get(pc_m_oic, j)
+
+// ตั้งค่า WormHole: แรเงาช่วงราคาที่แทบไม่มีสัญญา P/C (สุญญากาศ ราคาไหลผ่านเร็ว)
+group_wh = "WormHole"
 wh_show = input.bool(true, title="Show WormHole", inline="wh0", group=group_wh)
-wh_count = input.int(5, title=" WormHole Count", minval=0, inline="wh0", group=group_wh, tooltip="strike ที่ Total Put+Call (ของชุดข้อมูลตามโหมด Source) ไม่เกินค่านี้ = โซนสุญญากาศ — แรเงาจากจุดเริ่มกราฟ P/C ยาวไปจนจบวัน")
 wh_color = input.color(color.new(color.rgb(126, 116, 160), 82), title=" ", inline="wh0", group=group_wh)
+wh_count = input.int(5, title="Contract Less Than", minval=1, inline="wh1", group=group_wh, tooltip="strike ที่สัญญารวม Put+Call น้อยกว่าค่านี้ = โซนสุญญากาศ — แรเงาจากจุดเริ่มกราฟ P/C ยาวไปจนจบวัน")
+wh_source = input.string("From P/C Source", title=" From Source", options=["Intraday", "OI", "Intraday OR OI", "Intraday AND OI", "From P/C Source"], inline="wh1", group=group_wh, tooltip="ใช้ชุดข้อมูลไหนตัดสิน: OR = ฝั่งใดฝั่งหนึ่งต่ำกว่าเกณฑ์ก็นับ / AND = ต้องต่ำทั้งคู่ / From P/C Source = รวมตามโหมด Source ของกราฟ P/C")
+
+// strike นี้เป็น WormHole ไหม ตามเกณฑ์ From Source
+wh_is_hole(float s) =>
+    id_t = pc_tot_id(s)
+    oi_t = pc_tot_oi(s)
+    wh_source == "Intraday" ? id_t < wh_count :
+      wh_source == "OI" ? oi_t < wh_count :
+      wh_source == "Intraday OR OI" ? id_t < wh_count or oi_t < wh_count :
+      wh_source == "Intraday AND OI" ? id_t < wh_count and oi_t < wh_count :
+      (pc_oi_on ? oi_t : 0) + (pc_id_on ? id_t : 0) < wh_count
 
 // ตั้งค่า Mean Reversion SD (mean = ราคาเปิด Futures, ค่าทั้งหมดเป็นสเกล Futures)
 group_sd = "Mean Reversion SD"
@@ -501,7 +515,7 @@ if barstate.islast
                     pc_sln = line.new(x1=pc_x0 + math.round(pc_fx1 * pc_bar_len), y1=array.get(pc_v_strikes, pc_i - 1) + delta_diff, x2=pc_x0 + math.round(pc_fx2 * pc_bar_len), y2=array.get(pc_v_strikes, pc_i) + delta_diff, color=color.new(pc_smile_color, 20), width=1, style=line.style_dotted)
                     array.push(lines_arr, pc_sln)
 
-    // TradingView WormHole: หาช่วง strike ติดกันที่สัญญารวม <= wh_count จากบันได strike เต็ม
+    // WormHole: หาช่วง strike ติดกันที่เข้าเกณฑ์ wh_is_hole จากบันได strike เต็ม
     // (ใช้บันไดจากเส้น VS เพราะครบทุก strike รวมตัวที่ volume ศูนย์)
     // แรเงาตั้งแต่จุดเริ่มกราф P/C (bar_index - offset) ยาวไปถึงจบวัน (แปลงเวลาที่เหลือเป็นจำนวนแท่ง)
     if wh_show and array.size(pc_v_strikes) > 1 and array.size(pc_m_strikes) > 0
@@ -511,12 +525,12 @@ if barstate.islast
         wh_n = array.size(pc_v_strikes)
         wh_i = 0
         while wh_i < wh_n
-            if pc_total_at(array.get(pc_v_strikes, wh_i)) <= wh_count
+            if wh_is_hole(array.get(pc_v_strikes, wh_i))
                 // ขยาย run ไปจนเจอ strike ที่มีสัญญาเกินเกณฑ์
                 wh_k = wh_i
                 wh_go = true
                 while wh_go and wh_k + 1 < wh_n
-                    if pc_total_at(array.get(pc_v_strikes, wh_k + 1)) <= wh_count
+                    if wh_is_hole(array.get(pc_v_strikes, wh_k + 1))
                         wh_k += 1
                     else
                         wh_go := false

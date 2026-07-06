@@ -76,7 +76,7 @@ export const render = ({ output }) => {
 
   const container = {
     position: 'fixed', bottom: '25px', left: '35px', width: '290px',
-    padding: '14px 16px', borderRadius: macos.radius,
+    padding: '18px 16px 14px', borderRadius: macos.radius,
     color: macos.label, fontFamily: macos.font,
     background: macos.material,
     border: macos.border, boxShadow: macos.shadow,
@@ -123,10 +123,10 @@ export const render = ({ output }) => {
               </span>
             </span>
             {hasOpenChange && (
-              <span style={{ fontSize: '10px', fontWeight: '600', color: upOpen ? macos.green : macos.red }}>
+              <span style={{ fontSize: '12px', fontWeight: '600', color: upOpen ? macos.green : macos.red }}>
                 <span style={{ color: macos.tertiary, marginRight: '4px', fontWeight: '700' }}>O</span>
                 {upOpen ? '+' : ''}{fmt(changeOpen)}
-                <span style={{ opacity: 0.75, marginLeft: '5px', fontSize: '9px' }}>
+                <span style={{ opacity: 0.75, marginLeft: '5px', fontSize: '10px' }}>
                   {upOpen ? '+' : ''}{fmt(asset.percent_open)}%
                 </span>
               </span>

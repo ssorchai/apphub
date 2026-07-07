@@ -1,6 +1,8 @@
 //@version=5
 //By Sorachai
 indicator("Gold OI Block SD OI+Intraday", overlay=true, max_lines_count=500, max_labels_count=500, max_boxes_count=500)
+// Keep enough time history for gap-aware x positions (smile curve can sit up to 480 bars back)
+max_bars_back(time, 500)
 
 // --- 1. Configuration ---
 group_calc = "Diff Calculation"
@@ -61,6 +63,10 @@ var int[] pc_m_idc = array.new_int()
 var float[] pc_v_strikes = array.new_float()   // vol smile (already strike-sorted by the fetcher)
 var float[] pc_v_vols = array.new_float()
 var string pc_meta = ""
+// Numeric meta fields, parsed once (used by "From CME" SD mode and the Data Info watermark)
+var float pc_meta_iv = na
+var float pc_meta_ivchg = na
+var float pc_meta_dte = na
 if barstate.isfirst and str.length(pc_paste) > 0
     pc_oi_ss = array.new_float()
     pc_oi_pp = array.new_int()
@@ -108,6 +114,21 @@ if barstate.isfirst and str.length(pc_paste) > 0
             else
                 array.set(pc_m_idp, pc_j, array.get(pc_id_pp, pc_i))
                 array.set(pc_m_idc, pc_j, array.get(pc_id_cc, pc_i))
+    // Parse numeric meta fields from the header line (F:...|D:...|S:...|IV:...|IVCHG:...|DTE:...)
+    if str.length(pc_meta) > 0
+        pc_h_toks = str.split(pc_meta, "|")
+        for pc_hi = 0 to array.size(pc_h_toks) - 1
+            pc_h_tok = array.get(pc_h_toks, pc_hi)
+            pc_h_pos = str.pos(pc_h_tok, ":")
+            if not na(pc_h_pos)
+                pc_h_k = str.substring(pc_h_tok, 0, pc_h_pos)
+                pc_h_v = str.tonumber(str.substring(pc_h_tok, pc_h_pos + 1))
+                if pc_h_k == "IV"
+                    pc_meta_iv := pc_h_v
+                if pc_h_k == "IVCHG"
+                    pc_meta_ivchg := pc_h_v
+                if pc_h_k == "DTE"
+                    pc_meta_dte := pc_h_v
 
 // Selected display mode (global — used by both the P/C bars and WormHole)
 pc_oi_on = pc_source != "Intraday"
@@ -145,7 +166,8 @@ wh_is_hole(float s) =>
 // Mean reversion SD settings (mean = futures daily open, all values in futures scale)
 group_sd = "Mean Reversion SD"
 show_sd = input.bool(true, title="Show SD Lines", group=group_sd)
-sd_mode = input.string("Range", title="SD Input Mode", options=["Range", "Paste Levels"], group=group_sd, tooltip="Range = enter 1SD/2SD/3SD distances from the futures open | Paste Levels = paste the six futures prices directly")
+sd_mode = input.string("Range", title="SD Input Mode", options=["Range", "Paste Levels", "From CME", "From 0.6DTE Day IV"], group=group_sd, tooltip="Range = enter 1SD/2SD/3SD distances from the futures open | Paste Levels = paste the six futures prices directly | From CME = compute from the pasted P/C data using its real IV and real remaining DTE (moves with evening re-marks — meant for evening sessions) | From 0.6DTE Day IV = compute from the Day IV field below with DTE fixed at 0.6")
+sd_day_iv = input.float(0.0, title="Day IV (Vol - Vol Chg)", minval=0.0, step=0.1, group=group_sd, tooltip="Used by the 'From 0.6DTE Day IV' mode: SD = futures open x IV x sqrt(0.6/365), DTE fixed at 0.6 (session minus the quiet Asian morning). This IV = Vol - Vol Chg (the official settle ATM vol, stable all day) — copy it from the Day IV shown in the Data Info watermark")
 sd1_range = input.float(0.0, title="1SD Range", minval=0.0, group=group_sd, tooltip="Distance from the futures open (0 = do not draw)")
 sd2_range = input.float(0.0, title="2SD Range (0 = 1SD x2)", minval=0.0, group=group_sd, tooltip="Leave 0 to auto-multiply 1SD by 2, or enter a value to override")
 sd3_range = input.float(0.0, title="3SD Range (0 = 1SD x3)", minval=0.0, group=group_sd, tooltip="Leave 0 to auto-multiply 1SD by 3, or enter a value to override")
@@ -246,12 +268,19 @@ sd3_eff = sd3_range > 0 ? sd3_range : sd1_range * 3
 sd_paste_ok = show_sd and sd_mode == "Paste Levels" and not na(paste_b1)
 sd_range_ok = show_sd and sd_mode == "Range" and sd1_range > 0
 
-sd_buy1_f  = sd_paste_ok ? paste_b1 : sd_range_ok ? futures_daily_open - sd1_range : float(na)
-sd_sell1_f = sd_paste_ok ? paste_s1 : sd_range_ok ? futures_daily_open + sd1_range : float(na)
-sd_buy2_f  = sd_paste_ok ? paste_b2 : sd_range_ok ? futures_daily_open - sd2_eff : float(na)
-sd_sell2_f = sd_paste_ok ? paste_s2 : sd_range_ok ? futures_daily_open + sd2_eff : float(na)
-sd_buy3_f  = sd_paste_ok ? paste_b3 : sd_range_ok ? futures_daily_open - sd3_eff : float(na)
-sd_sell3_f = sd_paste_ok ? paste_s3 : sd_range_ok ? futures_daily_open + sd3_eff : float(na)
+// Computed modes: 1SD = open x vol x sqrt(DTE/365), mean = futures daily open
+// From CME = real IV + real remaining DTE from the paste / Day IV mode = fixed 0.6 DTE
+sd_cme_ok = show_sd and sd_mode == "From CME" and not na(pc_meta_iv) and pc_meta_iv > 0 and not na(pc_meta_dte) and pc_meta_dte > 0
+sd_dayiv_ok = show_sd and sd_mode == "From 0.6DTE Day IV" and sd_day_iv > 0
+sd1_calc = sd_cme_ok ? futures_daily_open * pc_meta_iv / 100 * math.sqrt(pc_meta_dte / 365) :
+  sd_dayiv_ok ? futures_daily_open * sd_day_iv / 100 * math.sqrt(0.6 / 365) : float(na)
+
+sd_buy1_f  = sd_paste_ok ? paste_b1 : sd_range_ok ? futures_daily_open - sd1_range : not na(sd1_calc) ? futures_daily_open - sd1_calc : float(na)
+sd_sell1_f = sd_paste_ok ? paste_s1 : sd_range_ok ? futures_daily_open + sd1_range : not na(sd1_calc) ? futures_daily_open + sd1_calc : float(na)
+sd_buy2_f  = sd_paste_ok ? paste_b2 : sd_range_ok ? futures_daily_open - sd2_eff : not na(sd1_calc) ? futures_daily_open - 2 * sd1_calc : float(na)
+sd_sell2_f = sd_paste_ok ? paste_s2 : sd_range_ok ? futures_daily_open + sd2_eff : not na(sd1_calc) ? futures_daily_open + 2 * sd1_calc : float(na)
+sd_buy3_f  = sd_paste_ok ? paste_b3 : sd_range_ok ? futures_daily_open - sd3_eff : not na(sd1_calc) ? futures_daily_open - 3 * sd1_calc : float(na)
+sd_sell3_f = sd_paste_ok ? paste_s3 : sd_range_ok ? futures_daily_open + sd3_eff : not na(sd1_calc) ? futures_daily_open + 3 * sd1_calc : float(na)
 
 // SD marks on the right price scale (no chart lines; position/number are spot prices)
 plot(show_sd_on_scale ? sd_buy1_f + delta_diff : na, title="Buy 1SD (Spot)", color=sd_buy1_color, display=display.price_scale)
@@ -376,6 +405,22 @@ pc_draw_side(int x0, float y_top, float y_bot, int v_oi, int v_id, float vmax, c
         bx2 = box.new(left=x0 + len1, top=y_top, right=x0 + len_total, bottom=y_bot, bgcolor=color.new(side_color, 18), border_color=na, text=id_on and v_id > 0 ? str.tostring(v_id) : "", text_size=size.auto, text_color=color.new(side_color, 0))
         array.push(pc_boxes, bx2)
     len_total
+
+// Gap-aware x position: convert "bars back from the latest bar" (float) into real bar time,
+// interpolating between actual bar timestamps. Plain time arithmetic breaks across session
+// gaps/weekends — TradingView compresses non-trading time, which squashed the smile flat (bug fix)
+pc_x_at(float bars_back) =>
+    ms = timeframe.in_seconds() * 1000
+    if bars_back <= 0
+        // Future side of the latest bar: extrapolate with the normal bar width
+        int(math.round(time - bars_back * ms))
+    else
+        cap = math.min(bar_index, 479)
+        k = math.min(math.floor(bars_back), cap)
+        frac = bars_back - k
+        t0 = time[k]
+        t_older = k + 1 <= cap ? time[k + 1] : t0 - ms
+        int(math.round(t0 - frac * (t0 - t_older)))
 
 // Draw a single-dataset bar fanning out in direction dir (+1 right / -1 left) from axis x0 — split layouts
 // Returns the bar tip position (for the hover dot)
@@ -541,17 +586,15 @@ if barstate.islast
 
         // Volatility smile: settle vol per strike (like the CME page, rotated onto the price axis)
         // Horizontal scale: min-max stretched across the bar zone (0.1-0.95 of pc_bar_len)
-        // Drawn in time coordinates (ms resolution) instead of whole-bar bar_index — smooth, no staircase
+        // x positions come from pc_x_at (real bar times, gap-aware) — smooth and never squashed
         if pc_smile_show and array.size(pc_v_strikes) > 1
             pc_vv_min = array.min(pc_v_vols)
             pc_vv_max = array.max(pc_v_vols)
             if pc_vv_max > pc_vv_min
-                pc_sm_ms = timeframe.in_seconds() * 1000
-                pc_sm_t0 = time - pc_back_off * pc_sm_ms
                 for pc_i = 1 to array.size(pc_v_strikes) - 1
                     pc_fx1 = 0.1 + 0.85 * (array.get(pc_v_vols, pc_i - 1) - pc_vv_min) / (pc_vv_max - pc_vv_min)
                     pc_fx2 = 0.1 + 0.85 * (array.get(pc_v_vols, pc_i) - pc_vv_min) / (pc_vv_max - pc_vv_min)
-                    pc_sln = line.new(x1=pc_sm_t0 + math.round(pc_fx1 * pc_bar_len * pc_sm_ms), y1=array.get(pc_v_strikes, pc_i - 1) + delta_diff, x2=pc_sm_t0 + math.round(pc_fx2 * pc_bar_len * pc_sm_ms), y2=array.get(pc_v_strikes, pc_i) + delta_diff, xloc=xloc.bar_time, color=color.new(pc_smile_color, 0), width=2, style=line.style_solid)
+                    pc_sln = line.new(x1=pc_x_at(pc_back_off - pc_fx1 * pc_bar_len), y1=array.get(pc_v_strikes, pc_i - 1) + delta_diff, x2=pc_x_at(pc_back_off - pc_fx2 * pc_bar_len), y2=array.get(pc_v_strikes, pc_i) + delta_diff, xloc=xloc.bar_time, color=color.new(pc_smile_color, 0), width=2, style=line.style_solid)
                     array.push(lines_arr, pc_sln)
 
     // WormHole: find runs of adjacent strikes matching wh_is_hole on the full strike ladder
@@ -609,6 +652,9 @@ if barstate.islast
                     pc_ivc_s := pc_v
                 if pc_k == "DTE"
                     pc_dte_s := pc_v
-        pc_wm_txt := pc_s_s + "  @ " + pc_d_s + "\nDTE " + pc_dte_s + "  ·  IV " + pc_iv_s + (str.length(pc_ivc_s) > 0 ? " (" + pc_ivc_s + ")" : "")
+        // Day IV = Vol - Vol Chg (official settle ATM, stable all day) — copy into the
+        // "Day IV" field of the From 0.6DTE SD mode
+        pc_day_iv_txt = not na(pc_meta_iv) and not na(pc_meta_ivchg) ? "  ·  Day IV " + str.tostring(pc_meta_iv - pc_meta_ivchg, "#.##") : ""
+        pc_wm_txt := pc_s_s + "  @ " + pc_d_s + "\nDTE " + pc_dte_s + "  ·  IV " + pc_iv_s + (str.length(pc_ivc_s) > 0 ? " (" + pc_ivc_s + ")" : "") + pc_day_iv_txt
     table.set_position(pc_wm_table, pc_wm_pos)
     table.cell(pc_wm_table, column=0, row=0, text=pc_wm_txt, text_color=pc_wm_color, text_size=size.normal, text_halign=text.align_right)

@@ -87,6 +87,33 @@ def series_points(settings, key):
     return {round(p["x"], 4): p["y"] for p in settings.get(key, {}).get("data", [])}
 
 
+def _postback(op, url, html, target):
+    """จำลอง __doPostBack ของ WebForms: ส่ง hidden fields ทั้งหมดกลับ + __EVENTTARGET"""
+    fields = dict(re.findall(
+        r'<input type="hidden" name="([^"]+)"[^>]*value="([^"]*)"', html))
+    fields["__EVENTTARGET"] = target
+    fields["__EVENTARGUMENT"] = ""
+    req = urllib.request.Request(
+        url, data=urllib.parse.urlencode(fields).encode(),
+        headers={"User-Agent": UA, "Referer": url,
+                 "Content-Type": "application/x-www-form-urlencoded"})
+    return op.open(req, timeout=60).read().decode()
+
+
+def nearest_expiration(html):
+    """(postback_target, code, date) ของ series ที่หมดอายุใกล้สุดจาก selector บนหน้า
+    — default ของ QuikStrike บางวันไม่เลือก daily 0DTE ให้ (เช่นไปหยิบ weekly แทน)"""
+    pat = (r"__doPostBack\(&#39;(ctl00\$ucSelector\$lvGroupsExpirations\$[^&]+?\$lbExpiration)"
+           r"&#39;[^>]*>\s*<div class=\"bold\">\s*(\S+)\s*</div>\s*"
+           r"<div[^>]*>\s*(\d{1,2} \w{3} \d{4})")
+    best = None
+    for target, code, date_s in re.findall(pat, html):
+        d = datetime.strptime(date_s, "%d %b %Y").date()
+        if d >= datetime.now().date() and (best is None or d < best[2]):
+            best = (target, code, d)
+    return best
+
+
 def fetch_both_tabs():
     jar = http.cookiejar.CookieJar()
     op = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
@@ -94,17 +121,17 @@ def fetch_both_tabs():
     r = op.open(URL, timeout=60)
     html = r.read().decode()
     final_url = r.geturl()
-    intraday = extract_payload(html)
 
-    fields = dict(re.findall(
-        r'<input type="hidden" name="([^"]+)"[^>]*value="([^"]*)"', html))
-    fields["__EVENTTARGET"] = OI_TARGET
-    fields["__EVENTARGUMENT"] = ""
-    req = urllib.request.Request(
-        final_url, data=urllib.parse.urlencode(fields).encode(),
-        headers={"User-Agent": UA, "Referer": final_url,
-                 "Content-Type": "application/x-www-form-urlencoded"})
-    oi = extract_payload(op.open(req, timeout=60).read().decode())
+    # บังคับเลือก series ที่หมดอายุใกล้สุดเสมอ (พลาดก็ใช้ default ของหน้าไป)
+    try:
+        best = nearest_expiration(html)
+        if best:
+            html = _postback(op, final_url, html, best[0])
+    except Exception:
+        pass
+
+    intraday = extract_payload(html)
+    oi = extract_payload(_postback(op, final_url, html, OI_TARGET))
     return intraday, oi
 
 

@@ -1,16 +1,16 @@
+import gzip
 import json
 import os
 import sys
 import time
-import warnings
-warnings.filterwarnings("ignore")  # กัน NotOpenSSLWarning ของ urllib3 เปื้อน log
-import requests
+import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
 # ราคา realtime (last/change) จาก investing.com mobile app API — แหล่งเดียวกับเว็บที่เคย scrape
 # ราคาเปิดของ Futures ใช้ Yahoo Finance (GC=F) เพราะแม่นกว่า
-# ไม่ใช้ Playwright/Chromium — HTTP ล้วนๆ
+# ใช้ urllib แทน requests เพราะ Cloudflare ของ investing เริ่มจับ fingerprint
+# ของ library requests แล้วตอบ 403 (2026-07-13) ส่วน urllib ผ่านปกติ
 JSON_PATH = "/tmp/gold_data.json"
 
 INVESTING_URL = "https://aappapi.investing.com/get_screen.php?screen_ID=22&pair_ID={}&lang_ID=1"
@@ -50,12 +50,19 @@ def to_float(s):
     return float(str(s).replace(",", ""))
 
 
-def fetch_yahoo_futures(session):
+def http_get_json(url, headers, timeout=15):
+    req = urllib.request.Request(url, headers=dict(headers, **{"Accept-Encoding": "gzip"}))
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        data = resp.read()
+        if resp.headers.get("Content-Encoding") == "gzip":
+            data = gzip.decompress(data)
+    return json.loads(data.decode("utf-8"))
+
+
+def fetch_yahoo_futures():
     """ดึงราคาเปิดวัน + Last Price (LP) ของ GC=F จาก Yahoo — เรียกครั้งเดียวต่อรอบ
     open ของ Yahoo แม่นกว่า investing / LP ดีเลย์ ~10 นาที เก็บไว้ cross-check + fallback"""
-    r = session.get(YAHOO_URL, headers=UA_HEADERS, timeout=15)
-    r.raise_for_status()
-    result = r.json()["chart"]["result"][0]
+    result = http_get_json(YAHOO_URL, UA_HEADERS)["chart"]["result"][0]
     meta = result["meta"]
     quote = result["indicators"]["quote"][0]
     # range=1d อาจได้หลายแท่งช่วงรอยต่อวันเทรด — เอาแท่งล่าสุด (วันปัจจุบัน) เสมอ
@@ -67,10 +74,9 @@ def fetch_yahoo_futures(session):
     }
 
 
-def fetch_investing(session, pair_id):
-    r = session.get(INVESTING_URL.format(pair_id), headers=INVESTING_HEADERS, timeout=15)
-    r.raise_for_status()
-    d = r.json()["data"][0]["screen_data"]["pairs_data"][0]
+def fetch_investing(pair_id):
+    payload = http_get_json(INVESTING_URL.format(pair_id), INVESTING_HEADERS)
+    d = payload["data"][0]["screen_data"]["pairs_data"][0]
     overview = {row["key"]: row["val"] for row in d.get("overview_table", [])}
     return {
         "last": to_float(d["last"]),
@@ -102,10 +108,10 @@ def theory_diff(fut, spot):
         return None
 
 
-def tick(executor, sessions, yahoo_ref):
+def tick(executor, yahoo_ref):
     # ยิง request ทั้ง 2 ตัวพร้อมกัน (คนละ thread) เพราะ diff ต้องมาจากราคา ณ เวลาเดียวกัน
-    job_fut = executor.submit(fetch_investing, sessions[0], PAIR_FUTURES)
-    job_spot = executor.submit(fetch_investing, sessions[1], PAIR_SPOT)
+    job_fut = executor.submit(fetch_investing, PAIR_FUTURES)
+    job_spot = executor.submit(fetch_investing, PAIR_SPOT)
 
     fut = spot = None
     errors = []
@@ -160,13 +166,11 @@ def tick(executor, sessions, yahoo_ref):
 
 def main():
     once = "--once" in sys.argv
-    # แยก session คนละ thread (requests.Session ไม่การันตี thread-safe)
-    sessions = (requests.Session(), requests.Session())
     executor = ThreadPoolExecutor(max_workers=2)
     print("🚀 gold_fetcher (HTTP mode) started {}".format(datetime.now().strftime("%H:%M:%S")))
 
     try:
-        yahoo_ref = fetch_yahoo_futures(sessions[0])
+        yahoo_ref = fetch_yahoo_futures()
     except Exception as e:
         print("⚠️ yahoo fetch failed, fallback to investing open: {}".format(e))
         yahoo_ref = {"open": None, "last": None}
@@ -175,7 +179,7 @@ def main():
     last_error = None
     while True:
         try:
-            tick(executor, sessions, yahoo_ref)
+            tick(executor, yahoo_ref)
             last_error = None
         except Exception as e:
             msg = "{}: {}".format(type(e).__name__, e)

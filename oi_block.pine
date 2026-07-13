@@ -682,5 +682,8 @@ if barstate.islast
         // "Day IV" field of the From 0.6DTE SD mode
         pc_day_iv_txt = not na(pc_meta_iv) and not na(pc_meta_ivchg) ? "  ·  Day IV " + str.tostring(pc_meta_iv - pc_meta_ivchg, "#.##") : ""
         pc_wm_txt := pc_s_s + "  @ " + pc_d_s + "\nDTE " + pc_dte_s + "  ·  IV " + pc_iv_s + (str.length(pc_ivc_s) > 0 ? " (" + pc_ivc_s + ")" : "") + pc_day_iv_txt
+        // Stale Day IV (From 0.6DTE Day IV mode, 05:00-17:00 only): extra warning line + red text
+        if sd_dayiv_stale
+            pc_wm_txt += "\n⚠ Day IV field " + str.tostring(sd_day_iv, "#.##") + " ≠ " + str.tostring(sd_meta_day_iv, "#.##") + " — update it"
     table.set_position(pc_wm_table, pc_wm_pos)
-    table.cell(pc_wm_table, column=0, row=0, text=pc_wm_txt, text_color=pc_wm_color, text_size=size.normal, text_halign=text.align_right)
+    table.cell(pc_wm_table, column=0, row=0, text=pc_wm_txt, text_color=sd_dayiv_stale and str.length(pc_wm_txt) > 0 ? color.new(color.red, 0) : pc_wm_color, text_size=size.normal, text_halign=text.align_right)

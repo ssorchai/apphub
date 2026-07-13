@@ -281,6 +281,15 @@ sd_calc_mean = sd_mode == "From CME and Strike" and not na(pc_meta_f) ? pc_meta_
 sd1_calc = sd_cme_ok ? sd_calc_mean * pc_meta_iv / 100 * math.sqrt(pc_meta_dte / 365) :
   sd_dayiv_ok ? sd_calc_mean * sd_day_iv / 100 * math.sqrt(0.6 / 365) : float(na)
 
+// Stale Day IV detection (From 0.6DTE Day IV mode only): every fresh paste carries the
+// true Day IV (Vol - Vol Chg); if the manual field disagrees, the user forgot to update it.
+// Warning muted outside 05:00-17:00 Bangkok — after 17:00 the evening re-marks make the
+// paste's Day IV unreliable, so a mismatch there is expected, not a mistake
+sd_meta_day_iv = not na(pc_meta_iv) and not na(pc_meta_ivchg) ? pc_meta_iv - pc_meta_ivchg : float(na)
+sd_now_hour = hour(timenow, "Asia/Bangkok")
+sd_dayiv_stale = sd_dayiv_ok and not na(sd_meta_day_iv) and math.abs(sd_day_iv - sd_meta_day_iv) > 0.05 and sd_now_hour >= 5 and sd_now_hour < 17
+sd_warn_color = color.new(color.gray, 30)
+
 sd_buy1_f  = sd_paste_ok ? paste_b1 : sd_range_ok ? futures_daily_open - sd1_range : not na(sd1_calc) ? sd_calc_mean - sd1_calc : float(na)
 sd_sell1_f = sd_paste_ok ? paste_s1 : sd_range_ok ? futures_daily_open + sd1_range : not na(sd1_calc) ? sd_calc_mean + sd1_calc : float(na)
 sd_buy2_f  = sd_paste_ok ? paste_b2 : sd_range_ok ? futures_daily_open - sd2_eff : not na(sd1_calc) ? sd_calc_mean - 2 * sd1_calc : float(na)
@@ -289,12 +298,13 @@ sd_buy3_f  = sd_paste_ok ? paste_b3 : sd_range_ok ? futures_daily_open - sd3_eff
 sd_sell3_f = sd_paste_ok ? paste_s3 : sd_range_ok ? futures_daily_open + sd3_eff : not na(sd1_calc) ? sd_calc_mean + 3 * sd1_calc : float(na)
 
 // SD marks on the right price scale (no chart lines; position/number are spot prices)
-plot(show_sd_on_scale ? sd_buy1_f + delta_diff : na, title="Buy 1SD (Spot)", color=sd_buy1_color, display=display.price_scale)
-plot(show_sd_on_scale ? sd_sell1_f + delta_diff : na, title="Sell 1SD (Spot)", color=sd_sell1_color, display=display.price_scale)
-plot(show_sd_on_scale ? sd_buy2_f + delta_diff : na, title="Buy 2SD (Spot)", color=sd_buy2_color, display=display.price_scale)
-plot(show_sd_on_scale ? sd_sell2_f + delta_diff : na, title="Sell 2SD (Spot)", color=sd_sell2_color, display=display.price_scale)
-plot(show_sd_on_scale ? sd_buy3_f + delta_diff : na, title="Buy 3SD (Spot)", color=sd_buy3_color, display=display.price_scale)
-plot(show_sd_on_scale ? sd_sell3_f + delta_diff : na, title="Sell 3SD (Spot)", color=sd_sell3_color, display=display.price_scale)
+// Stale Day IV turns the marks gray, same as the lines
+plot(show_sd_on_scale ? sd_buy1_f + delta_diff : na, title="Buy 1SD (Spot)", color=sd_dayiv_stale ? sd_warn_color : sd_buy1_color, display=display.price_scale)
+plot(show_sd_on_scale ? sd_sell1_f + delta_diff : na, title="Sell 1SD (Spot)", color=sd_dayiv_stale ? sd_warn_color : sd_sell1_color, display=display.price_scale)
+plot(show_sd_on_scale ? sd_buy2_f + delta_diff : na, title="Buy 2SD (Spot)", color=sd_dayiv_stale ? sd_warn_color : sd_buy2_color, display=display.price_scale)
+plot(show_sd_on_scale ? sd_sell2_f + delta_diff : na, title="Sell 2SD (Spot)", color=sd_dayiv_stale ? sd_warn_color : sd_sell2_color, display=display.price_scale)
+plot(show_sd_on_scale ? sd_buy3_f + delta_diff : na, title="Buy 3SD (Spot)", color=sd_dayiv_stale ? sd_warn_color : sd_buy3_color, display=display.price_scale)
+plot(show_sd_on_scale ? sd_sell3_f + delta_diff : na, title="Sell 3SD (Spot)", color=sd_dayiv_stale ? sd_warn_color : sd_sell3_color, display=display.price_scale)
 
 // --- 3. Drawing Logic ---
 
@@ -495,22 +505,32 @@ if barstate.islast
             draw_open_level(futures_daily_open * (1 - breakout_pct / 100), breakout_line_color, breakout_line_width, line.style_dashed, "-" + str.tostring(breakout_pct) + "% ", true)
 
     // Mean reversion SD lines (light -> dark shades, no floating labels; price-scale marks instead)
+    // Stale Day IV (paste updated but the Day IV field was not): lines turn gray dotted and
+    // tags flag STALE so the warning sits exactly where the eyes are — auto-clears at 17:00
     if not na(sd_buy1_f)
-        draw_open_level(sd_buy1_f, sd_buy1_color, sd_line_width, sd_line_style, "", false)
-        draw_open_level(sd_sell1_f, sd_sell1_color, sd_line_width, sd_line_style, "", false)
-        draw_open_level(sd_buy2_f, sd_buy2_color, sd_line_width, sd_line_style, "", false)
-        draw_open_level(sd_sell2_f, sd_sell2_color, sd_line_width, sd_line_style, "", false)
-        draw_open_level(sd_buy3_f, sd_buy3_color, sd_line_width, sd_line_style, "", false)
-        draw_open_level(sd_sell3_f, sd_sell3_color, sd_line_width, sd_line_style, "", false)
+        sd_eff_style = sd_dayiv_stale ? line.style_dotted : sd_line_style
+        sd_c_b1 = sd_dayiv_stale ? sd_warn_color : sd_buy1_color
+        sd_c_s1 = sd_dayiv_stale ? sd_warn_color : sd_sell1_color
+        sd_c_b2 = sd_dayiv_stale ? sd_warn_color : sd_buy2_color
+        sd_c_s2 = sd_dayiv_stale ? sd_warn_color : sd_sell2_color
+        sd_c_b3 = sd_dayiv_stale ? sd_warn_color : sd_buy3_color
+        sd_c_s3 = sd_dayiv_stale ? sd_warn_color : sd_sell3_color
+        sd_tag_sfx = sd_dayiv_stale ? " ⚠STALE " + str.tostring(sd_meta_day_iv, "#.##") : ""
+        draw_open_level(sd_buy1_f, sd_c_b1, sd_line_width, sd_eff_style, "", false)
+        draw_open_level(sd_sell1_f, sd_c_s1, sd_line_width, sd_eff_style, "", false)
+        draw_open_level(sd_buy2_f, sd_c_b2, sd_line_width, sd_eff_style, "", false)
+        draw_open_level(sd_sell2_f, sd_c_s2, sd_line_width, sd_eff_style, "", false)
+        draw_open_level(sd_buy3_f, sd_c_b3, sd_line_width, sd_eff_style, "", false)
+        draw_open_level(sd_sell3_f, sd_c_s3, sd_line_width, sd_eff_style, "", false)
 
         // SD name tags pinned right of the latest bar, following price
         sd_tag_x = time + 4 * timeframe.in_seconds() * 1000
-        draw_sd_tag(sd_tag_x, sd_buy1_f, sd_buy1_color, "Buy 1SD", false)
-        draw_sd_tag(sd_tag_x, sd_sell1_f, sd_sell1_color, "Sell 1SD", true)
-        draw_sd_tag(sd_tag_x, sd_buy2_f, sd_buy2_color, "Buy 2SD", false)
-        draw_sd_tag(sd_tag_x, sd_sell2_f, sd_sell2_color, "Sell 2SD", true)
-        draw_sd_tag(sd_tag_x, sd_buy3_f, sd_buy3_color, "Buy 3SD", false)
-        draw_sd_tag(sd_tag_x, sd_sell3_f, sd_sell3_color, "Sell 3SD", true)
+        draw_sd_tag(sd_tag_x, sd_buy1_f, sd_c_b1, "Buy 1SD" + sd_tag_sfx, false)
+        draw_sd_tag(sd_tag_x, sd_sell1_f, sd_c_s1, "Sell 1SD" + sd_tag_sfx, true)
+        draw_sd_tag(sd_tag_x, sd_buy2_f, sd_c_b2, "Buy 2SD" + sd_tag_sfx, false)
+        draw_sd_tag(sd_tag_x, sd_sell2_f, sd_c_s2, "Sell 2SD" + sd_tag_sfx, true)
+        draw_sd_tag(sd_tag_x, sd_buy3_f, sd_c_b3, "Buy 3SD" + sd_tag_sfx, false)
+        draw_sd_tag(sd_tag_x, sd_sell3_f, sd_c_s3, "Sell 3SD" + sd_tag_sfx, true)
 
     // Put/Call profile: horizontal barchart like the CME page (strike axis = price axis, length = size)
     // Starts pc_back_off bars behind the latest candle and follows automatically as new bars print

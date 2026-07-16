@@ -1,17 +1,21 @@
-import gzip
 import json
 import os
+import subprocess
 import sys
 import time
-import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
 # ราคา realtime (last/change) จาก investing.com mobile app API — แหล่งเดียวกับเว็บที่เคย scrape
 # ราคาเปิดของ Futures ใช้ Yahoo Finance (GC=F) เพราะแม่นกว่า
-# ใช้ urllib แทน requests เพราะ Cloudflare ของ investing เริ่มจับ fingerprint
-# ของ library requests แล้วตอบ 403 (2026-07-13) ส่วน urllib ผ่านปกติ
+# ประวัติหนี Cloudflare ของ investing (มันไล่จับ TLS fingerprint ขึ้นเรื่อยๆ):
+# requests โดน 403 (2026-07-13) → urllib ผ่าน → urllib โดน 403 (2026-07-16)
+# → ใช้ curl ของ homebrew (OpenSSL) เพราะ python นี้ผูก LibreSSL 2.8.3 ตายตัว แก้ฝั่ง python ไม่ได้
 JSON_PATH = "/tmp/gold_data.json"
+
+# ต้องเป็น path เต็ม: curl เป็น keg-only และ cron เห็นแค่ /usr/bin/curl ซึ่งโดน 403
+# (เครื่องนี้ Homebrew prefix = /usr/local แม้เป็น arm64)
+CURL_BIN = "/usr/local/opt/curl/bin/curl"
 
 INVESTING_URL = "https://aappapi.investing.com/get_screen.php?screen_ID=22&pair_ID={}&lang_ID=1"
 PAIR_FUTURES = 8830  # Gold Futures (GC)
@@ -51,12 +55,20 @@ def to_float(s):
 
 
 def http_get_json(url, headers, timeout=15):
-    req = urllib.request.Request(url, headers=dict(headers, **{"Accept-Encoding": "gzip"}))
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        data = resp.read()
-        if resp.headers.get("Content-Encoding") == "gzip":
-            data = gzip.decompress(data)
-    return json.loads(data.decode("utf-8"))
+    """ยิงผ่าน curl ของ homebrew ไม่ใช่ urllib — ดู CURL_BIN ข้างบนว่าทำไม
+    --compressed ให้ curl จัดการ gzip เอง / -w ต่อ status code ท้าย body เพราะ
+    curl ปกติ exit 0 ถึงจะได้ 403 (ต้องอ่าน code เอง ไม่ใช่ดู returncode)"""
+    cmd = [CURL_BIN, "-sS", "--compressed", "--max-time", str(timeout), "-w", "\n%{http_code}"]
+    for key, val in headers.items():
+        cmd += ["-H", "{}: {}".format(key, val)]
+    cmd.append(url)
+    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout + 5)
+    if proc.returncode != 0:
+        raise RuntimeError("curl failed: {}".format(proc.stderr.strip() or proc.returncode))
+    body, _, code = proc.stdout.rpartition("\n")
+    if code != "200":
+        raise RuntimeError("HTTP {}".format(code))
+    return json.loads(body)
 
 
 def fetch_yahoo_futures():

@@ -24,6 +24,7 @@ cron รายชั่วโมง:
 import json
 import os
 import re
+import subprocess
 import sys
 import urllib.parse
 import urllib.request
@@ -45,6 +46,15 @@ CLIP_OUT = "/tmp/cme_putcall_clip.txt"
 # DTE fix 0.6 = ตัดช่วงเอเชียเช้าทิ้ง / vol ใช้ Vol - Vol Chg = settle ATM vol ทางการ
 YAHOO_URL = "https://query1.finance.yahoo.com/v8/finance/chart/GC=F?interval=1d&range=1d"
 SD_DTE = 0.6
+
+# ⚠️ Yahoo ต้องใช้ UA "สั้น" ตัวนี้เท่านั้น ห้ามใช้ UA ตัวบน (ที่มี Chrome/126...)
+# — Yahoo ตอบ 429 ให้ UA ตัวนั้นแบบ deterministic (ยิงสลับ back-to-back วินาทีเดียวกัน:
+#   short=200 / chrome126=429 ทั้ง 3 รอบ) ตัวแปรคือ UA string ล้วนๆ ไม่ใช่ TLS
+YAHOO_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
+
+# ต้องเป็น path เต็ม: curl เป็น keg-only และ cron เห็นแค่ /usr/bin/curl ซึ่งโดน 403
+# (เครื่องนี้ Homebrew prefix = /usr/local แม้เป็น arm64)
+CURL_BIN = "/usr/local/opt/curl/bin/curl"
 
 # state รอบก่อน สำหรับหา "ของที่เติมเข้ามา" ระหว่าง refresh (แบบวงเล็บ +28 ของบอท telegram)
 PREV_STATE = "/tmp/cme_putcall_prev.json"
@@ -165,10 +175,27 @@ def top_actives(rows, n=2):
             for s, p, c in sorted(rows, key=lambda r: -(r[1] + r[2]))[:n]]
 
 
+def curl_get_json(url, headers, timeout=15):
+    """ยิงผ่าน curl ของ homebrew — โค้ดเดียวกับ http_get_json ใน gold_fetcher.py ทุกบรรทัด
+    (fetcher แต่ละตัวเป็น script เดี่ยว ไม่มี module กลาง เลยยอม copy — แก้ต้องแก้ทั้งคู่)
+    -w ต่อ status code ท้าย body เพราะ curl ปกติ exit 0 ถึงจะได้ 403/429"""
+    cmd = [CURL_BIN, "-sS", "--compressed", "--max-time", str(timeout), "-w", "\n%{http_code}"]
+    for key, val in headers.items():
+        cmd += ["-H", "{}: {}".format(key, val)]
+    cmd.append(url)
+    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout + 5)
+    if proc.returncode != 0:
+        raise RuntimeError("curl failed: {}".format(proc.stderr.strip() or proc.returncode))
+    body, _, code = proc.stdout.rpartition("\n")
+    if code != "200":
+        raise RuntimeError("HTTP {}".format(code))
+    return json.loads(body)
+
+
 def fetch_yahoo_open():
     """ราคาเปิดวันของ GC=F — อ่านจาก /tmp/gold_data.json ที่ gold_fetcher.py (cron 5 นาที)
-    เขียนไว้อยู่แล้ว (ไม่ยิง Yahoo ซ้ำ + urllib โดน 429 ง่ายกว่า requests) — ต้องสดไม่เกิน
-    15 นาที ไม่งั้นลอง Yahoo ตรงเป็น fallback / พังก็คืน None (ห้ามใช้ค่าเก่า)"""
+    เขียนไว้อยู่แล้ว (ไม่ยิง Yahoo ซ้ำ) — ต้องสดไม่เกิน 15 นาที ไม่งั้นยิง Yahoo ตรง
+    เป็น fallback ผ่าน brew curl + YAHOO_UA (UA ยาวโดน 429) / พังก็คืน None (ห้ามใช้ค่าเก่า)"""
     try:
         p = "/tmp/gold_data.json"
         if os.path.getmtime(p) > datetime.now().timestamp() - 900:
@@ -177,8 +204,7 @@ def fetch_yahoo_open():
                 return round(float(open_v), 2)
     except Exception:
         pass
-    req = urllib.request.Request(YAHOO_URL, headers={"User-Agent": UA})
-    result = json.loads(urllib.request.urlopen(req, timeout=15).read())["chart"]["result"][0]
+    result = curl_get_json(YAHOO_URL, {"User-Agent": YAHOO_UA})["chart"]["result"][0]
     opens = [v for v in result["indicators"]["quote"][0].get("open", []) if v is not None]
     return round(opens[-1], 2) if opens else None
 

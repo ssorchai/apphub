@@ -44,6 +44,14 @@ crontab ปัจจุบัน:
   รายละเอียดกลไก/ข้อจำกัดของข้อมูล (Vol คือ settle เมื่อคืน ฯลฯ) ดูโปรเจกต์ `~/src/claude_code/cme_scraping`
 - **cme_fetcher.py**: รายชั่วโมงพอ (Intraday สะสมทั้งวัน / OI นิ่งจนถึง refresh เช้า) เขียน
   `/tmp/cme_putcall.json` (ให้ widget) + `/tmp/cme_putcall_clip.txt` (string สำหรับ Pine)
+  + `/tmp/cme_curve.json` (futures curve ให้ gold_fetcher ใช้ทำ Theory Diff — ดึงทุก 12 ชม.
+  เพราะ carry ขยับช้า และการดึงกิน 3 page load ซึ่งเป็นตัวถ่วงเวลาหลักตอนเซิร์ฟช้า)
+- **เวลา QuikStrike ล่ม** (เจอจริง 17 ก.ค. 2026 — DB ฝั่งเขา timeout): เซิร์ฟตอบ
+  **HTTP 200 พร้อมหน้า `/Error/ErrorPage.aspx?MSG=Timeout+expired...`** ดู status code
+  อย่างเดียวไม่พอ → `_check_page()` จับหน้า error/login ก่อน parse, `MAX_RUNTIME=100s`
+  กันค้าง (ไม่งั้น per-socket timeout × redirect hop × retry = ค้าง 4 นาที),
+  exit code **2 = ฝั่ง CME ล่ม** / 1 = error อื่น / 0 = ปกติ
+  — ล้มเหลวแล้ว**ไม่เขียนทับไฟล์เดิม** widget ขึ้น STALE เองหลัง 2 ชม. และกด ↻ เองได้
 - **cme-putcall.jsx**: สรุป P/C + ratio bar + Top Active + ธงแดงเมื่อ |IV Chg| > 2 (ตลาด
   reprice vol — กรอบ SD จาก settle เชื่อไม่ได้) **คลิก widget = copy clip ลง clipboard**
   แล้วไปวางในช่อง "Paste P/C Data" ของ indicator `oi_block.pine` (โปรเจกต์ `tdw_indi`)

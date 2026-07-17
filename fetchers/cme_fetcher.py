@@ -25,8 +25,10 @@ import calendar
 import json
 import os
 import re
+import socket
 import subprocess
 import sys
+import time
 import urllib.parse
 import urllib.request
 import http.cookiejar
@@ -63,9 +65,66 @@ PREV_STATE = "/tmp/cme_putcall_prev.json"
 # futures curve จริงจาก QuikStrike -> ให้ gold_fetcher.py ใช้แทน CARRY_RATE คงที่
 # (เก็บ "carry" ไม่ใช่ราคา: ราคาเก่า 1 ชม. เอาไปทำ basis กับ spot สดไม่ได้ แต่ carry ขยับช้า)
 CURVE_OUT = "/tmp/cme_curve.json"
-CURVE_N = 3          # จำนวน contract ใกล้สุดที่ดึง
+CURVE_N = 3            # จำนวน contract ใกล้สุดที่ดึง
+CURVE_MAX_AGE = 12 * 3600   # carry เป็นค่าเชิงโครงสร้าง ขยับช้า -- ดึงวันละ 2 ครั้งพอ
+                            # (ดึงทีนึง = 3 page load ตอนเซิร์ฟช้าคือตัวถ่วงหลัก)
 MONTH_CODE = {"F": 1, "G": 2, "H": 3, "J": 4, "K": 5, "M": 6,
               "N": 7, "Q": 8, "U": 9, "V": 10, "X": 11, "Z": 12}
+
+
+# เพดานเวลารวมทั้งรอบ: urllib นับ timeout ต่อ socket ไม่ใช่ต่อ request -- ตอนเซิร์ฟช้า
+# redirect หลาย hop x retry ทบกันได้ถึง 4 นาที (วัดจริง 17 ก.ค. 2026) cron รายชั่วโมง
+# ไม่ควรค้างขนาดนั้น หมดเวลาก็ยอมแพ้ไปรอบหน้า ข้อมูลเดิมยังอยู่
+# หมายเหตุ: กันได้แค่ "ก่อนยิง request ถัดไป" -- ตัวที่ยิงค้างอยู่ยังกินได้อีก
+# (per-socket timeout x จำนวน redirect hop) จริงจึงจบราว MAX_RUNTIME + ~40s
+MAX_RUNTIME = 100
+_deadline = None
+
+
+class QuikStrikeDown(Exception):
+    """backend ของ QuikStrike เองมีปัญหา ไม่ใช่โค้ดเรา -- retry ในรอบนี้ไม่ช่วย"""
+
+
+def _budget(cap=45):
+    """เวลาที่เหลือในงบ (วินาที) -- ใช้เป็น timeout ของ request ถัดไป"""
+    if _deadline is None:
+        return cap
+    left = _deadline - time.monotonic()
+    if left <= 1:
+        raise QuikStrikeDown(f"เกินงบเวลา {MAX_RUNTIME}s (เซิร์ฟช้าผิดปกติ)")
+    return min(cap, left)
+
+
+def _check_page(html, url=""):
+    """จับหน้า error/login ของ QuikStrike ก่อนเอาไป parse
+
+    ทั้งสองหน้าตอบ HTTP 200 ปกติ ดู status code อย่างเดียวไม่พอ (เจอจริง 17 ก.ค. 2026:
+    DB ฝั่งเขา timeout -> เด้งไป ErrorPage.aspx?MSG=Timeout+expired... พร้อม 200 + TTFB 32s)
+    """
+    if "/Error/ErrorPage.aspx" in url or "<title>QuikStrike Error" in html[:3000]:
+        m = re.search(r"MSG=([^&]*)", url)
+        msg = urllib.parse.unquote_plus(m.group(1)).strip()[:100] if m else "ไม่ทราบสาเหตุ"
+        raise QuikStrikeDown(f"backend ตอบ error page: {msg}")
+    if "/Account/Login.aspx" in url:
+        raise QuikStrikeDown("โดนเด้งไปหน้า login (referrer auto-login ไม่ทำงาน)")
+
+
+def _get(op, url, tries=2):
+    """GET พร้อม retry: ตอนเซิร์ฟช้า (TTFB 30s+) รอบแรกมักหลุด รอบสองผ่าน"""
+    last = None
+    for i in range(tries):
+        try:
+            r = op.open(url, timeout=_budget())
+            html = r.read().decode()
+            _check_page(html, r.geturl())
+            return html, r.geturl()
+        except QuikStrikeDown:
+            raise
+        except Exception as e:
+            last = e
+            if i + 1 < tries:
+                time.sleep(min(3, _budget(3)))
+    raise last
 
 
 def _grab_object(s, start):
@@ -115,7 +174,10 @@ def _postback(op, url, html, target):
         url, data=urllib.parse.urlencode(fields).encode(),
         headers={"User-Agent": UA, "Referer": url,
                  "Content-Type": "application/x-www-form-urlencoded"})
-    return op.open(req, timeout=60).read().decode()
+    r = op.open(req, timeout=_budget())
+    html = r.read().decode()
+    _check_page(html, r.geturl())
+    return html
 
 
 def nearest_expiration(html):
@@ -151,6 +213,14 @@ def futures_expiry(sym):
             if n == 3:
                 return d
         d -= timedelta(days=1)
+
+
+def curve_is_fresh():
+    """curve ที่มีอยู่ยังใหม่พอไหม -- ไม่ต้องไปกวนเซิร์ฟซ้ำถ้ายังใช้ได้"""
+    try:
+        return os.path.getmtime(CURVE_OUT) > datetime.now().timestamp() - CURVE_MAX_AGE
+    except Exception:
+        return False
 
 
 def fetch_curve(op, url, html):
@@ -204,15 +274,17 @@ def fetch_both_tabs():
     jar = http.cookiejar.CookieJar()
     op = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
     op.addheaders = [("User-Agent", UA), ("Referer", REFERER)]
-    r = op.open(URL, timeout=60)
-    html = r.read().decode()
-    final_url = r.geturl()
+    html, final_url = _get(op, URL)
     base_html = html   # หน้าตั้งต้น: viewstate ของมันใช้ postback ได้ทุกปลายทาง
 
-    try:
-        curve = fetch_curve(op, final_url, base_html)
-    except Exception:
-        curve = None
+    curve = None
+    if not curve_is_fresh():
+        try:
+            curve = fetch_curve(op, final_url, base_html)
+        except QuikStrikeDown:
+            raise
+        except Exception:
+            curve = None
 
     # บังคับเลือก series ที่หมดอายุใกล้สุดเสมอ (พลาดก็ใช้ default ของหน้าไป)
     try:
@@ -320,6 +392,8 @@ def top_changes(rows_now, prev_map, n=2):
 
 
 def main():
+    global _deadline
+    _deadline = time.monotonic() + MAX_RUNTIME
     now = datetime.now()
     intraday, oi, curve = fetch_both_tabs()
     meta = meta_of(oi)
@@ -414,6 +488,12 @@ def main():
 if __name__ == "__main__":
     try:
         main()
+    except (QuikStrikeDown, socket.timeout, urllib.error.URLError) as e:
+        # ฝั่ง CME ล่ม/ช้า ไม่ใช่เรา (ping ปกติแต่ TTFB 30s+ = backend เขาเอง)
+        # ไม่เขียนทับไฟล์เดิม -> widget ขึ้น STALE เองหลัง 2 ชม. / กด refresh เองได้
+        print(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] CME DOWN: {type(e).__name__}: {e}",
+              file=sys.stderr)
+        sys.exit(2)
     except Exception as e:
         print(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] ERROR {type(e).__name__}: {e}",
               file=sys.stderr)

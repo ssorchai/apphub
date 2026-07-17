@@ -160,12 +160,18 @@ export const render = ({ output }) => {
   const hasDiff = data.diff != null;
   const marketTime = (data.future && data.future.time) || (data.spot && data.spot.time) || '--';
 
-  // Δ = spread จริงเบี่ยงจากทฤษฎี — เกิน ±2 เตือนแดง (basis เบี้ยว รอ converge กลับ)
-  const DELTA_WARN = 2;
-  const delta = hasDiff && data.theory ? num(data.diff) - num(data.theory.diff) : null;
-  const deltaAlert = delta != null && Math.abs(delta) > DELTA_WARN;
+  // kink = basis สด - basis ที่ curve ของ CME บอกว่าควรเป็น (carry ระหว่างสัญญาจริง)
+  // curve ทองหักศอกที่ front: ช่วงใกล้แบน (~0.8%) แต่ระหว่างสัญญาชัน (~3.9%) = near-term
+  // squeeze -> เป็นข้อมูล ไม่ใช่สัญญาณเตือน สีเหลืองพอ / แดงไว้เมื่อเบี้ยวจนน่าจะพัง
+  const KINK_INFO = 5;
+  const KINK_ALARM = 30;
+  const kink = data.theory && data.theory.kink != null ? num(data.theory.kink) : null;
+  const kinkAlarm = kink != null && Math.abs(kink) > KINK_ALARM;
+  const kinkColor = kink == null ? macos.tertiary
+    : kinkAlarm ? macos.red
+    : Math.abs(kink) > KINK_INFO ? macos.yellow : macos.tertiary;
   const spreadColor = !hasDiff ? macos.tertiary
-    : deltaAlert ? macos.red
+    : kinkAlarm ? macos.red
     : num(data.diff) >= 0 ? macos.label : macos.blue;
 
   return (
@@ -197,19 +203,27 @@ export const render = ({ output }) => {
         </span>
       </div>
 
-      {data.theory && (
+      {data.theory && data.theory.curve_fair != null && (
         <div style={{ marginTop: '4px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <span style={{ fontSize: '11px', color: macos.secondary, fontWeight: '600', letterSpacing: '0.4px' }}>
-            THEORY DIFF · {data.theory.days}D
+            CURVE FAIR · {data.theory.days}D
           </span>
           <span style={{ fontSize: '22px', fontWeight: '700', letterSpacing: '-0.3px', color: macos.label }}>
-            {delta != null && (
-              <span style={{ fontSize: '11px', fontWeight: '600', color: deltaAlert ? macos.red : macos.tertiary, marginRight: '8px' }}>
-                Δ {delta > 0 ? '+' : ''}{fmt(delta)}
+            {kink != null && (
+              <span style={{ fontSize: '11px', fontWeight: '600', color: kinkColor, marginRight: '8px' }}>
+                Δ {kink > 0 ? '+' : ''}{fmt(kink)}
               </span>
             )}
-            +{fmt(data.theory.diff, 1)}
+            +{fmt(data.theory.curve_fair, 1)}
           </span>
+        </div>
+      )}
+
+      {data.theory && data.theory.carry != null && (
+        <div style={{ fontSize: '10px', color: macos.tertiary, marginTop: '2px', textAlign: 'right' }}>
+          carry {fmt(data.theory.carry, 2)}%
+          {data.theory.curve_carry != null && ` · curve ${fmt(data.theory.curve_carry, 2)}%`}
+          {data.theory.next && ` · next ${data.theory.next.sym} +${fmt(data.theory.next.diff, 1)}`}
         </div>
       )}
 

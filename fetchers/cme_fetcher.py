@@ -21,6 +21,7 @@ cron รายชั่วโมง:
 ทดสอบ: python3 cme_fetcher.py --once  (โหมดเดียวที่มี -- รันครั้งเดียวเสมอ)
 """
 
+import calendar
 import json
 import os
 import re
@@ -29,7 +30,7 @@ import sys
 import urllib.parse
 import urllib.request
 import http.cookiejar
-from datetime import datetime
+from datetime import date, datetime, timedelta
 
 URL = ("https://cmegroup-tools.quikstrike.net/User/QuikStrikeView.aspx"
        "?pid=40&pf=6&viewitemid=IntegratedV2VExpectedRange")
@@ -58,6 +59,13 @@ CURL_BIN = "/usr/local/opt/curl/bin/curl"
 
 # state รอบก่อน สำหรับหา "ของที่เติมเข้ามา" ระหว่าง refresh (แบบวงเล็บ +28 ของบอท telegram)
 PREV_STATE = "/tmp/cme_putcall_prev.json"
+
+# futures curve จริงจาก QuikStrike -> ให้ gold_fetcher.py ใช้แทน CARRY_RATE คงที่
+# (เก็บ "carry" ไม่ใช่ราคา: ราคาเก่า 1 ชม. เอาไปทำ basis กับ spot สดไม่ได้ แต่ carry ขยับช้า)
+CURVE_OUT = "/tmp/cme_curve.json"
+CURVE_N = 3          # จำนวน contract ใกล้สุดที่ดึง
+MONTH_CODE = {"F": 1, "G": 2, "H": 3, "J": 4, "K": 5, "M": 6,
+              "N": 7, "Q": 8, "U": 9, "V": 10, "X": 11, "Z": 12}
 
 
 def _grab_object(s, start):
@@ -124,6 +132,74 @@ def nearest_expiration(html):
     return best
 
 
+def futures_expiry(sym):
+    """GCQ6 -> วันหมดอายุของ futures = business day ที่ 3 นับถอยหลังจากสิ้นเดือนส่งมอบ
+    (ตรงกับ Settlement Day ที่ investing รายงาน — ตรวจแล้วกับ GCQ6 = 2026-08-27)"""
+    m = re.match(r"GC([FGHJKMNQUVXZ])(\d)$", sym)
+    if not m:
+        return None
+    month = MONTH_CODE[m.group(1)]
+    now = datetime.now()
+    year = (now.year // 10) * 10 + int(m.group(2))
+    if year < now.year:
+        year += 10
+    d = date(year, month, calendar.monthrange(year, month)[1])
+    n = 0
+    while True:
+        if d.weekday() < 5:
+            n += 1
+            if n == 3:
+                return d
+        d -= timedelta(days=1)
+
+
+def fetch_curve(op, url, html):
+    """ราคา futures ของ contract ใกล้หมดอายุสุด CURVE_N ตัว + spread เทียบ contract หน้า
+
+    เก็บเฉพาะ "spread ระหว่างสัญญา" ไม่เก็บ basis เทียบ spot -- เพราะ F ของ QuikStrike
+    ช้ากว่า feed realtime ~4-5 จุด (วัดแล้ว: QS ค้างที่ 3989.6 ขณะ investing ไหลถึง 3984.8)
+    เอาไปลบ spot ของอีกเจ้าจะได้ค่าความช้าปนมาเต็มๆ ใหญ่กว่า basis จริงเสียอีก
+    แต่ spread = ผลต่างภายใน feed เดียวกัน -> ความช้าหักล้างกันหมด ใช้ได้สะอาด
+    """
+    pat = (r'Underlying Symbol:\s*(GC\w+)"[^>]*href="javascript:__doPostBack\(&#39;'
+           r'(ctl00\$ucSelector\$[^&]+?\$lbExpiration)&#39;')
+    seen = {}
+    for und, target in re.findall(pat, html):
+        seen.setdefault(und, target)
+    cands = []
+    for und, target in seen.items():
+        exp = futures_expiry(und)
+        if exp and exp >= date.today():
+            cands.append((exp, und, target))
+    cands.sort()
+
+    out = []
+    for exp, und, target in cands[:CURVE_N]:
+        try:
+            s = extract_payload(_postback(op, url, html, target))
+            price = s.get("FuturePrice")
+            if price:
+                out.append({"sym": und, "price": price, "expiry": exp.isoformat(),
+                            "days": (exp - date.today()).days})
+        except Exception:
+            pass
+    if not out:
+        return None
+
+    front = out[0]["price"]
+    for c in out:
+        # spread เทียบ front: บวกเข้ากับ basis สดของ front = basis ของสัญญานั้น (ตอน roll)
+        c["spread_vs_front"] = round(c["price"] - front, 2)
+    # carry ระหว่างสัญญา = โครงสร้าง curve ล้วนๆ ไม่พึ่ง spot และไม่โดนความช้าของ feed
+    spread_carry = None
+    if len(out) >= 2:
+        import math
+        gap = (date.fromisoformat(out[1]["expiry"]) - date.fromisoformat(out[0]["expiry"])).days
+        if gap > 0:
+            spread_carry = round(math.log(out[1]["price"] / out[0]["price"]) / (gap / 365) * 100, 3)
+    return {"ts": datetime.now().timestamp(), "contracts": out, "spread_carry": spread_carry}
+
+
 def fetch_both_tabs():
     jar = http.cookiejar.CookieJar()
     op = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
@@ -131,6 +207,12 @@ def fetch_both_tabs():
     r = op.open(URL, timeout=60)
     html = r.read().decode()
     final_url = r.geturl()
+    base_html = html   # หน้าตั้งต้น: viewstate ของมันใช้ postback ได้ทุกปลายทาง
+
+    try:
+        curve = fetch_curve(op, final_url, base_html)
+    except Exception:
+        curve = None
 
     # บังคับเลือก series ที่หมดอายุใกล้สุดเสมอ (พลาดก็ใช้ default ของหน้าไป)
     try:
@@ -142,7 +224,7 @@ def fetch_both_tabs():
 
     intraday = extract_payload(html)
     oi = extract_payload(_postback(op, final_url, html, OI_TARGET))
-    return intraday, oi
+    return intraday, oi, curve
 
 
 def strike_rows(settings):
@@ -239,7 +321,7 @@ def top_changes(rows_now, prev_map, n=2):
 
 def main():
     now = datetime.now()
-    intraday, oi = fetch_both_tabs()
+    intraday, oi, curve = fetch_both_tabs()
     meta = meta_of(oi)
     id_rows, oi_rows = strike_rows(intraday), strike_rows(oi)
 
@@ -309,14 +391,21 @@ def main():
         "id": {str(s): [p, c] for s, p, c in id_rows},
         "oi": {str(s): [p, c] for s, p, c in oi_rows},
     })
-    for path, content in [(JSON_OUT, json.dumps(data, ensure_ascii=False)),
-                          (CLIP_OUT, clip), (PREV_STATE, new_state)]:
+    writes = [(JSON_OUT, json.dumps(data, ensure_ascii=False)),
+              (CLIP_OUT, clip), (PREV_STATE, new_state)]
+    if curve:
+        writes.append((CURVE_OUT, json.dumps(curve)))
+    for path, content in writes:
         tmp = path + ".tmp"
         with open(tmp, "w") as f:
             f.write(content)
         os.replace(tmp, path)
 
-    print(f"[{now:%Y-%m-%d %H:%M:%S}] ok {meta['series']} F={meta['F']} "
+    curve_txt = ""
+    if curve:
+        c0 = curve["contracts"][0]
+        curve_txt = f" curve {c0['sym']} spread_carry {curve['spread_carry']}%"
+    print(f"[{now:%Y-%m-%d %H:%M:%S}] ok {meta['series']} F={meta['F']}{curve_txt} "
           f"ID {data['intraday']['put']}/{data['intraday']['call']} "
           f"OI {data['oi']['put']}/{data['oi']['call']} "
           f"strikes {len(id_rows)}/{len(oi_rows)} clip {len(clip)}B")

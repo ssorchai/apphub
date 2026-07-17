@@ -4,7 +4,7 @@ import subprocess
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
+from datetime import date, datetime
 
 # ราคา realtime (last/change) จาก investing.com mobile app API — แหล่งเดียวกับเว็บที่เคย scrape
 # ราคาเปิดของ Futures ใช้ Yahoo Finance (GC=F) เพราะแม่นกว่า
@@ -26,8 +26,10 @@ RUN_SECONDS = 290   # ทำงานเกือบเต็มรอบ cron 5
 POLL_SECONDS = 5
 
 # Theory Diff (cost of carry): F = S * (1 + net_rate * t)
-# net carry = ดอกเบี้ย USD - gold lease rate — ปรับค่านี้ให้ตรงกับ basis curve จริงได้
+# carry อ่านจาก curve จริงของ CME (/tmp/cme_curve.json ที่ cme_fetcher.py เขียนรายชั่วโมง)
+# CARRY_RATE เหลือเป็น fallback เมื่ออ่าน curve ไม่ได้เท่านั้น
 CARRY_RATE = 0.02
+CURVE_FILE = "/tmp/cme_curve.json"
 THEORY_STEP = 2.5   # ปัดเป็นขั้นละ 2.5 ตาม convention (2.5, 5, 7.5, 10, 12.5, ...)
 
 UA_HEADERS = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}
@@ -101,8 +103,33 @@ def fetch_investing(pair_id):
     }
 
 
+def read_curve():
+    """futures curve จริงจาก CME ที่ cme_fetcher.py เขียนไว้รายชั่วโมง (ต้องสดไม่เกิน 3 ชม.)
+    — carry เป็นค่าเชิงโครงสร้าง ขยับช้า ใช้ข้ามชั่วโมงได้ (ต่างจากราคาที่ใช้ไม่ได้)"""
+    try:
+        if os.path.getmtime(CURVE_FILE) < datetime.now().timestamp() - 3 * 3600:
+            return None
+        c = json.load(open(CURVE_FILE))
+        return c if c.get("contracts") else None
+    except Exception:
+        return None
+
+
 def theory_diff(fut, spot):
-    """basis ตามทฤษฎี = spot * carry * เวลาที่เหลือถึงวัน settlement ปัดเป็นขั้นละ 2.5"""
+    """ค่าอ้างอิงของ basis + ข้อมูล curve จริงจาก CME
+
+    diff/raw = basis "สด" ที่วัดได้ (F - S จาก investing ทั้งคู่ ยิงพร้อมกัน) ปัดขั้นละ 2.5
+    ตาม convention -- ไม่ใช่โมเดล carry อีกแล้ว เพราะวัดแล้ว basis ของ front นิ่งมาก
+    (แกว่ง 0.56 จุดใน 1 นาที) โมเดลค่าคงที่จึงไม่มีอะไรจะเพิ่ม มีแต่จะผิด
+
+    carry       = carry ที่ basis สดตัวนี้ imply (spot -> front contract)
+    curve_carry = carry ระหว่างสัญญาจาก CME curve (โครงสร้างจริง ไม่พึ่ง spot)
+    curve_fair  = basis ที่ front "ควรเป็น" ถ้า curve ตรง = ใช้ curve_carry
+    kink        = basis สด - curve_fair : curve ทองหักศอกที่ front (near-term squeeze)
+    next        = diff ที่จะเจอตอน roll = basis สด + spread ของสัญญาถัดไป (จาก CME)
+                  ** ต้องบวกแบบ spread เท่านั้น: F ของ QuikStrike ช้ากว่า feed สด ~4-5 จุด
+                     เอา F ของมันมาลบ spot ของ investing ตรงๆ จะได้ความช้าปนมาเต็มๆ **
+    """
     if not (fut and spot and fut.get("settlement")):
         return None
     try:
@@ -110,12 +137,37 @@ def theory_diff(fut, spot):
         days = (expiry - datetime.now().date()).days
         if days < 0:
             return None
-        raw = spot["last"] * CARRY_RATE * days / 365.0
-        return {
-            "diff": round(round(raw / THEORY_STEP) * THEORY_STEP, 2),
-            "raw": round(raw, 2),
+
+        basis = fut["last"] - spot["last"]
+        out = {
+            "diff": round(round(basis / THEORY_STEP) * THEORY_STEP, 2),
+            "raw": round(basis, 2),
             "days": days,
+            "carry": round(basis / (spot["last"] * days / 365.0) * 100, 2) if days > 0 else None,
+            "source": "live",
         }
+
+        curve = read_curve()
+        if curve:
+            cons = curve["contracts"]
+            me = next((c for c in cons
+                       if abs((date.fromisoformat(c["expiry"]) - expiry).days) <= 3), None)
+            if me:
+                out["source"] = "curve"
+                later = [c for c in cons if date.fromisoformat(c["expiry"]) > expiry]
+                if later:
+                    n = later[0]
+                    out["next"] = {
+                        "sym": n["sym"], "days": n["days"],
+                        # spread ภายใน feed เดียวกัน -> ความช้าหักล้าง บวกกับ basis สดได้เลย
+                        "diff": round(basis + (n["spread_vs_front"] - me["spread_vs_front"]), 2),
+                    }
+            if curve.get("spread_carry"):
+                out["curve_carry"] = curve["spread_carry"]
+                fair = spot["last"] * curve["spread_carry"] / 100.0 * days / 365.0
+                out["curve_fair"] = round(fair, 2)
+                out["kink"] = round(basis - fair, 2)
+        return out
     except Exception:
         return None
 

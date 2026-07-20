@@ -107,7 +107,8 @@ def read_curve():
     """futures curve จริงจาก CME ที่ cme_fetcher.py เขียนไว้รายชั่วโมง (ต้องสดไม่เกิน 3 ชม.)
     — carry เป็นค่าเชิงโครงสร้าง ขยับช้า ใช้ข้ามชั่วโมงได้ (ต่างจากราคาที่ใช้ไม่ได้)"""
     try:
-        if os.path.getmtime(CURVE_FILE) < datetime.now().timestamp() - 3 * 3600:
+        # cme_fetcher เขียน curve ทุก 12 ชม. -> เกณฑ์สดต้องหลวมกว่ารอบเขียน (12+3)
+        if os.path.getmtime(CURVE_FILE) < datetime.now().timestamp() - 15 * 3600:
             return None
         c = json.load(open(CURVE_FILE))
         return c if c.get("contracts") else None

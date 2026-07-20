@@ -46,6 +46,17 @@ crontab ปัจจุบัน:
   `/tmp/cme_putcall.json` (ให้ widget) + `/tmp/cme_putcall_clip.txt` (string สำหรับ Pine)
   + `/tmp/cme_curve.json` (futures curve ให้ gold_fetcher ใช้ทำ Theory Diff — ดึงทุก 12 ชม.
   เพราะ carry ขยับช้า และการดึงกิน 3 page load ซึ่งเป็นตัวถ่วงเวลาหลักตอนเซิร์ฟช้า)
+- **Fallback chain: QuikStrike → pageth → Barchart** (ทดสอบครบสายกับเหตุล่มจริง 17 ก.ค.):
+  - **pageth** (github mirror): เช็คความสดจาก commit ล่าสุดก่อน (>20 นาที = ตัดทิ้ง เพราะ
+    บอทเขาตายพร้อม QuikStrike เสมอ — ช่วยเฉพาะเคสฝั่งเราพัง เช่น IP โดนแบน)
+  - **Barchart** (feed CME อิสระ, delayed 10-15 นาที): โหลดหน้า → cookie/XSRF → core-api
+    `quotes/get?list=futures.options` ได้ volume+OI รายสไตรค์เต็ม chain / discovery เลือก
+    ประเภทตามวันในสัปดาห์ ("Friday Weekly Options" ฯลฯ) แล้วอ่าน dropdown สัปดาห์ทั้งลิสต์
+    เลือกวันหมดอายุใกล้สุดเอง (**default ของ barchart เชื่อไม่ได้** — มัน roll ข้าม series
+    ที่ยังเทรดอยู่) วันศุกร์มีรหัสสร้างตรง `IG{week}{month}{yy}` เป็น candidate เสริม
+    / ไม่มี IV+smile → inherit จาก clip เดิมของวันเดียวกัน (settle นิ่งทั้งวันโดยนิยาม)
+  - งบเวลาเป็น**ต่อแหล่ง** (100/30/75s) — ถ้าเป็นงบรวม แหล่งแรกที่ช้าจะกินหมดแล้วตัดสิทธิ์
+    แหล่งสำรอง / JSON มี field `source` และ widget ขึ้นป้าย "via barchart" เมื่อไม่ใช่ QS
 - **เวลา QuikStrike ล่ม** (เจอจริง 17 ก.ค. 2026 — DB ฝั่งเขา timeout): เซิร์ฟตอบ
   **HTTP 200 พร้อมหน้า `/Error/ErrorPage.aspx?MSG=Timeout+expired...`** ดู status code
   อย่างเดียวไม่พอ → `_check_page()` จับหน้า error/login ก่อน parse, `MAX_RUNTIME=100s`

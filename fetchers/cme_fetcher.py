@@ -71,13 +71,30 @@ CURVE_MAX_AGE = 12 * 3600   # carry เป็นค่าเชิงโคร�
 MONTH_CODE = {"F": 1, "G": 2, "H": 3, "J": 4, "K": 5, "M": 6,
               "N": 7, "Q": 8, "U": 9, "V": 10, "X": 11, "Z": 12}
 
+# ---- fallback chain: QuikStrike -> pageth (mirror ท่อเดียวกัน) -> Barchart (feed อิสระ) ----
+# pageth ตาย พร้อม QuikStrike เสมอ (พิสูจน์ 17 ก.ค.: commit สุดท้าย = นาทีที่ QS ล่ม)
+# แต่ช่วยเคส "ฝั่งเราพัง" (IP โดนแบน / referrer trick เสีย / HTML เปลี่ยน)
+PAGETH_API = "https://api.github.com/repos/pageth/Vol2VolData/commits?per_page=1"
+PAGETH_RAW = "https://raw.githubusercontent.com/pageth/Vol2VolData/main/"
+PAGETH_MAX_AGE = 20 * 60   # commit เก่ากว่านี้ = บอทเขาหยุด (ปกติ sync ทุก ~6 นาที)
+
+# Barchart: feed CME ที่ license เอง (delayed 10-15 นาที) — รอดตอน QuikStrike ล่มจริง
+# ใช้ API ภายในของหน้าเว็บ: โหลดหน้าเอา cookie แล้วยิง core-api ด้วย XSRF token จาก cookie
+BC_BASE = "https://www.barchart.com"
+BC_CHAIN_FIELDS = "optionType,lastPrice,volume,openInterest,strikePrice,symbolName"
+# เดือนของ gold futures มาตรฐาน (G J M Q V Z) ใช้หา front contract
+GC_MONTHS = [2, 4, 6, 8, 10, 12]
+
 
 # เพดานเวลารวมทั้งรอบ: urllib นับ timeout ต่อ socket ไม่ใช่ต่อ request -- ตอนเซิร์ฟช้า
 # redirect หลาย hop x retry ทบกันได้ถึง 4 นาที (วัดจริง 17 ก.ค. 2026) cron รายชั่วโมง
 # ไม่ควรค้างขนาดนั้น หมดเวลาก็ยอมแพ้ไปรอบหน้า ข้อมูลเดิมยังอยู่
 # หมายเหตุ: กันได้แค่ "ก่อนยิง request ถัดไป" -- ตัวที่ยิงค้างอยู่ยังกินได้อีก
 # (per-socket timeout x จำนวน redirect hop) จริงจึงจบราว MAX_RUNTIME + ~40s
-MAX_RUNTIME = 100
+MAX_RUNTIME = 100          # งบของ QuikStrike (แหล่งหลัก)
+# งบ "ต่อแหล่ง" -- ถ้าเป็นงบรวม แหล่งแรกที่ช้าจะกินหมดคนเดียวแล้วตัดสิทธิ์แหล่งสำรอง
+# (เจอจริง: QS ใช้ 95s -> pageth/barchart โดน "เกินงบ" ทั้งที่ยังไม่ได้ลอง)
+SOURCE_BUDGET = {"quikstrike": 100, "pageth": 30, "barchart": 75}
 _deadline = None
 
 
@@ -391,18 +408,267 @@ def top_changes(rows_now, prev_map, n=2):
     return changes[:n]
 
 
-def main():
-    global _deadline
-    _deadline = time.monotonic() + MAX_RUNTIME
-    now = datetime.now()
+def snapshot_quikstrike():
+    """แหล่งหลัก: QuikStrike Vol2Vol — ครบสุด (P/C สองชุด + smile + curve)"""
     intraday, oi, curve = fetch_both_tabs()
     meta = meta_of(oi)
-    id_rows, oi_rows = strike_rows(intraday), strike_rows(oi)
-
-    # หา Vol Chg จาก subtitle ฝั่งไหนก็ได้ (ค่าเดียวกัน)
     sub = re.sub("<[^>]+>", "", oi.get("Subtitle", "")).replace("\xa0", " ")
     mv = re.search(r"Vol Chg:\s*(-?[\d.]+)", sub)
-    iv_chg = float(mv.group(1)) if mv else None
+    vs = series_points(oi, "VolSettle")
+    return {
+        "source": "quikstrike", "series": meta["series"], "F": meta["F"],
+        "dte": meta["dte"], "iv": meta["iv"],
+        "iv_chg": float(mv.group(1)) if mv else None,
+        "future_chg": meta["future_chg"],
+        "id_rows": strike_rows(intraday), "oi_rows": strike_rows(oi),
+        "vs_rows": [(int(k) if k == int(k) else k, v * 100)
+                    for k, v in sorted(vs.items()) if v and v > 0],
+        "curve": curve,
+    }
+
+
+def _parse_pageth(txt):
+    """ไฟล์ IntradayData/OIData ของ pageth — format เดียวกับที่เราสร้างตอน backtest
+    คอลัมน์อ่านตามชื่อ header (ลำดับ Call/Put เคยสลับกันมาแล้วในอดีต)"""
+    lines = txt.strip().split("\n")
+    m1 = re.search(r"(\S+) \(([\d.]+) DTE\) vs ([\d.]+) \((-?\+?[\d.-]+)\)", lines[0])
+    m2 = re.search(r"Vol:\s*([\d.]+)\s+Vol Chg:\s*(-?[\d.]+)", lines[1].replace("\xa0", " "))
+    if not m1:
+        raise ValueError("pageth header ไม่ตรง format")
+    cols = [c.strip().lower() for c in lines[2].split(",")]
+    i_s, i_c, i_p = cols.index("strike"), cols.index("call"), cols.index("put")
+    i_v = next((i for i, c in enumerate(cols) if c.startswith("vol")), None)
+    rows, vs = [], []
+    for ln in lines[3:]:
+        p = ln.split(",")
+        if len(p) < 3:
+            continue
+        try:
+            s = float(p[i_s])
+            s = int(s) if s == int(s) else s
+            put, call = int(float(p[i_p])), int(float(p[i_c]))
+            if put + call > 0:
+                rows.append((s, put, call))
+            if i_v is not None and float(p[i_v]) > 0:
+                vs.append((s, float(p[i_v]) * 100))
+        except (ValueError, IndexError):
+            pass
+    return {
+        "series": m1.group(1), "dte": float(m1.group(2)), "F": float(m1.group(3)),
+        "future_chg": float(m1.group(4).replace("+", "")),
+        "iv": float(m2.group(1)) if m2 else None,
+        "iv_chg": float(m2.group(2)) if m2 else None,
+        "rows": rows, "vs": vs,
+    }
+
+
+def snapshot_pageth():
+    """สำรองชั้น 1: repo mirror ของ pageth — ต้องเช็คความสดก่อน (ตายพร้อม QuikStrike)"""
+    req = urllib.request.Request(PAGETH_API, headers={"User-Agent": UA})
+    commits = json.loads(urllib.request.urlopen(req, timeout=_budget(20)).read())
+    last = datetime.strptime(commits[0]["commit"]["committer"]["date"],
+                             "%Y-%m-%dT%H:%M:%S%z")
+    age = datetime.now(last.tzinfo) - last
+    if age.total_seconds() > PAGETH_MAX_AGE:
+        raise RuntimeError(f"pageth ค้าง {age.total_seconds()/60:.0f} นาที")
+
+    def raw(name):
+        r = urllib.request.Request(PAGETH_RAW + name, headers={"User-Agent": UA})
+        return urllib.request.urlopen(r, timeout=_budget(20)).read().decode()
+
+    idd = _parse_pageth(raw("IntradayData.txt"))
+    oid = _parse_pageth(raw("OIData.txt"))
+    return {
+        "source": "pageth", "series": idd["series"], "F": idd["F"],
+        "dte": idd["dte"], "iv": idd["iv"], "iv_chg": idd["iv_chg"],
+        "future_chg": idd["future_chg"],
+        "id_rows": idd["rows"], "oi_rows": oid["rows"],
+        "vs_rows": oid["vs"] or idd["vs"], "curve": None,
+    }
+
+
+def _nth_weekday(year, month, weekday, n):
+    d = date(year, month, 1)
+    off = (weekday - d.weekday()) % 7
+    return d + timedelta(days=off + (n - 1) * 7)
+
+
+def snapshot_barchart():
+    """สำรองชั้น 2: Barchart (feed อิสระจาก QuikStrike จริง — delayed 10-15 นาที)
+
+    discovery: เลือก "ประเภท" ตามวันในสัปดาห์ (label จริงมีชื่อวันเสมอ เช่น
+    "Friday Weekly Options") แล้วอ่าน dropdown สัปดาห์ทั้งลิสต์มาคำนวณวันหมดอายุเอง
+    -- default ที่ barchart เลือกให้เชื่อไม่ได้ (มัน roll ข้าม series ที่ยังเทรดอยู่วันนี้)
+    วันศุกร์แถมรหัสของวันนี้ที่สร้างตรงๆ ได้ (IG{week}{month}{yy}) เข้าไปด้วย
+    ไม่มี IV/smile ใน feed นี้ -- ปล่อยว่างแล้ว inherit จาก clip เดิมของวันเดียวกัน
+    """
+    import html as html_mod
+    jar = http.cookiejar.CookieJar()
+    op = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
+    op.addheaders = [("User-Agent", UA), ("Accept", "text/html")]
+
+    # front month ของ gold จากรอบเดือนมาตรฐาน
+    today = date.today()
+    front = None
+    for k in range(0, 15):
+        m = (today.month + k - 1) % 12 + 1
+        y = today.year + (today.month + k - 1) // 12
+        if m in GC_MONTHS:
+            code = [c for c, mm in MONTH_CODE.items() if mm == m][0]
+            if futures_expiry(f"GC{code}{y % 10}") >= today:
+                front = f"GC{code}{str(y)[-2:]}"
+                break
+    page = op.open(f"{BC_BASE}/futures/quotes/{front}/options",
+                   timeout=_budget(30)).read().decode()
+    page = html_mod.unescape(page)
+
+    # ประเภทตามวันในสัปดาห์ (เสาร์-อาทิตย์ series ถัดไปคือ daily วันจันทร์)
+    want = {0: "Monday Weekly", 1: "Tuesday Weekly", 2: "Wednesday Weekly",
+            3: "Thursday Weekly", 4: "Friday Weekly",
+            5: "Monday Weekly", 6: "Monday Weekly"}[today.weekday()]
+    wd = {"Monday Weekly": 0, "Tuesday Weekly": 1, "Wednesday Weekly": 2,
+          "Thursday Weekly": 3, "Friday Weekly": 4}[want]
+    kinds = re.findall(r'<option[^>]*value="(/futures/quotes/[^"]+/options/[^"]+)"[^>]*>\s*([^<]*Options[^<]*)</option>', page)
+    kind_url = next((u for u, lbl in kinds if lbl.strip().startswith(want)), None)
+    if kind_url:
+        page = html_mod.unescape(op.open(BC_BASE + kind_url, timeout=_budget(30)).read().decode())
+
+    # candidates จาก dropdown สัปดาห์ทั้งลิสต์ + (ศุกร์) รหัสของวันนี้แบบสร้างตรง
+    cands = {}
+    for code, week_n, mon_s, year_s in re.findall(
+            r'<option[^>]*value="/futures/quotes/[^"]+/options/([A-Z0-9]+)"[^>]*>\s*Week (\d+): (\w{3}) (\d{4})', page):
+        try:
+            e = _nth_weekday(int(year_s), datetime.strptime(mon_s, "%b").month, wd, int(week_n))
+            if e >= today:
+                cands.setdefault(e, code)
+        except ValueError:
+            pass
+    if today.weekday() == 4:
+        mc = [c for c, mm in MONTH_CODE.items() if mm == today.month][0]
+        cands.setdefault(today, f"IG{(today.day - 1) // 7 + 1}{mc}{str(today.year)[-2:]}")
+    if not cands:
+        raise RuntimeError("barchart: ไม่เจอ series ที่ยังไม่หมดอายุ")
+
+    xsrf = next((c.value for c in jar if c.name == "XSRF-TOKEN"), None)
+    if not xsrf:
+        raise RuntimeError("barchart: ไม่ได้ XSRF cookie")
+
+    def chain_of(sym):
+        api = (f"{BC_BASE}/proxies/core-api/v1/quotes/get?symbol={sym}"
+               f"&list=futures.options&fields={BC_CHAIN_FIELDS}"
+               f"&groupBy=strikePrice&orderBy=strikePrice&orderDir=asc&raw=1")
+        req = urllib.request.Request(api, headers={
+            "User-Agent": UA, "Accept": "application/json",
+            "x-xsrf-token": urllib.parse.unquote(xsrf),
+            "Referer": f"{BC_BASE}/futures/quotes/{front}/options/{sym}"})
+        return json.loads(op.open(req, timeout=_budget(30)).read())
+
+    # ไล่จากใกล้หมดอายุสุด: ตัวไหน chain มีของจริงใช้ตัวนั้น (กันรหัสเดา/series ร้าง)
+    series = exp = None
+    id_rows, oi_rows = [], []
+    for e in sorted(cands)[:3]:
+        sym = cands[e]
+        try:
+            chain = chain_of(sym)
+        except Exception:
+            continue
+        idr, oir = [], []
+        for strike, legs in (chain.get("data") or {}).items():
+            s = float(strike.replace(",", ""))
+            s = int(s) if s == int(s) else s
+            v = {"Call": {}, "Put": {}}
+            for leg in legs:
+                r = leg.get("raw", leg)
+                v[r["optionType"]] = r
+            pv = int(v["Put"].get("volume") or 0)
+            cv = int(v["Call"].get("volume") or 0)
+            po = int(v["Put"].get("openInterest") or 0)
+            co = int(v["Call"].get("openInterest") or 0)
+            if pv + cv > 0:
+                idr.append((s, pv, cv))
+            if po + co > 0:
+                oir.append((s, po, co))
+        if oir or idr:
+            series, exp, id_rows, oi_rows = sym, e, sorted(idr), sorted(oir)
+            break
+    if series is None:
+        raise RuntimeError("barchart: ทุก candidate chain ว่าง")
+
+    # DTE: หมดอายุ 13:30 NY = 00:30 ไทยของวันถัดไป (หน้าร้อน)
+    end = datetime(exp.year, exp.month, exp.day) + timedelta(days=1, minutes=30)
+    dte = round(max((end - datetime.now()).total_seconds(), 0) / 86400, 3)
+
+    # ราคา futures จาก API เดียวกัน
+    fq = json.loads(op.open(urllib.request.Request(
+        f"{BC_BASE}/proxies/core-api/v1/quotes/get?symbols={front}&fields=lastPrice&raw=1",
+        headers={"User-Agent": UA, "Accept": "application/json",
+                 "x-xsrf-token": urllib.parse.unquote(xsrf),
+                 "Referer": f"{BC_BASE}/futures/quotes/{front}/options"}),
+        timeout=_budget(20)).read())
+    F = None
+    try:
+        F = fq["data"][0]["raw"]["lastPrice"]
+    except Exception:
+        pass
+
+    return {
+        "source": "barchart", "series": series, "F": F, "dte": dte,
+        "iv": None, "iv_chg": None, "future_chg": None,
+        "id_rows": id_rows, "oi_rows": oi_rows, "vs_rows": [], "curve": None,
+    }
+
+
+def inherit_same_day(snap):
+    """แหล่งสำรองไม่มี IV/smile -- ยืมจาก clip เดิมได้ถ้าเป็น "วันเดียวกัน"
+    (ทั้ง settle IV และ settle smile นิ่งทั้งวันโดยนิยาม จึงยืมข้ามชั่วโมงได้)"""
+    if snap["iv"] is not None and snap["vs_rows"]:
+        return snap
+    try:
+        old = open(CLIP_OUT).read().strip().split("\n")
+        hdr = dict(t.split(":", 1) for t in old[0].split("|") if ":" in t)
+        if hdr.get("D", "")[:10] != f"{datetime.now():%Y-%m-%d}":
+            return snap
+        if snap["iv"] is None and hdr.get("IV"):
+            snap["iv"] = float(hdr["IV"])
+            snap["iv_chg"] = float(hdr["IVCHG"]) if hdr.get("IVCHG") else None
+        if not snap["vs_rows"]:
+            vs_line = next((l for l in old if l.startswith("VS;")), None)
+            if vs_line:
+                for tok in vs_line.split(";")[1:]:
+                    k, v = tok.split(":")
+                    s = float(k)
+                    snap["vs_rows"].append((int(s) if s == int(s) else s, float(v)))
+    except Exception:
+        pass
+    return snap
+
+
+def main():
+    global _deadline
+    now = datetime.now()
+
+    # fallback chain: ไล่ตามลำดับ แหล่งไหนได้ก็ใช้ (บันทึกเหตุผลของตัวที่พลาดไว้ใน log)
+    snap, fails = None, []
+    for name, fn in [("quikstrike", snapshot_quikstrike),
+                     ("pageth", snapshot_pageth),
+                     ("barchart", snapshot_barchart)]:
+        _deadline = time.monotonic() + SOURCE_BUDGET[name]
+        try:
+            snap = fn()
+            break
+        except Exception as e:
+            fails.append(f"{name}: {type(e).__name__}: {str(e)[:80]}")
+    if snap is None:
+        raise QuikStrikeDown("ทุกแหล่งพัง -> " + " | ".join(fails))
+    for f in fails:
+        print(f"[{now:%Y-%m-%d %H:%M:%S}] fallback: {f}", file=sys.stderr)
+    snap = inherit_same_day(snap)
+
+    meta = {"series": snap["series"], "F": snap["F"], "dte": snap["dte"],
+            "iv": snap["iv"], "future_chg": snap["future_chg"]}
+    id_rows, oi_rows = snap["id_rows"], snap["oi_rows"]
+    iv_chg = snap["iv_chg"]
+    curve = snap["curve"]
 
     try:
         yahoo_open = fetch_yahoo_open()
@@ -424,12 +690,12 @@ def main():
         "oi": top_changes(oi_rows, prev.get("oi", {}), n=4) if prev else [],
     }
 
-    header = (f"F:{meta['F']}|D:{now:%Y-%m-%d %H:%M}|S:{meta['series']}"
-              f"|IV:{meta['iv']}|IVCHG:{iv_chg if iv_chg is not None else ''}"
+    header = (f"F:{meta['F'] if meta['F'] is not None else ''}"
+              f"|D:{now:%Y-%m-%d %H:%M}|S:{meta['series']}"
+              f"|IV:{meta['iv'] if meta['iv'] is not None else ''}"
+              f"|IVCHG:{iv_chg if iv_chg is not None else ''}"
               f"|DTE:{round(meta['dte'], 3) if meta['dte'] is not None else ''}")
-    # smile: settle vol ทุก strike ในชาร์ต (รวม strike ที่ไม่มี volume — เส้นจะได้เนียนเต็มช่วง)
-    vs = series_points(oi, "VolSettle")
-    vs_rows = [(int(k) if k == int(k) else k, v * 100) for k, v in sorted(vs.items()) if v and v > 0]
+    vs_rows = snap["vs_rows"]
     clip = "\n".join([
         header,
         "ID;" + ";".join(f"{s}:{p}:{c}" for s, p, c in id_rows),
@@ -440,6 +706,7 @@ def main():
     data = {
         "ts": now.timestamp(),
         "system_time": f"{now:%H:%M}",
+        "source": snap["source"],
         "series": meta["series"],
         "F": meta["F"],
         "dte": round(meta["dte"], 3) if meta["dte"] is not None else None,
@@ -479,7 +746,7 @@ def main():
     if curve:
         c0 = curve["contracts"][0]
         curve_txt = f" curve {c0['sym']} spread_carry {curve['spread_carry']}%"
-    print(f"[{now:%Y-%m-%d %H:%M:%S}] ok {meta['series']} F={meta['F']}{curve_txt} "
+    print(f"[{now:%Y-%m-%d %H:%M:%S}] ok [{snap['source']}] {meta['series']} F={meta['F']}{curve_txt} "
           f"ID {data['intraday']['put']}/{data['intraday']['call']} "
           f"OI {data['oi']['put']}/{data['oi']['call']} "
           f"strikes {len(id_rows)}/{len(oi_rows)} clip {len(clip)}B")

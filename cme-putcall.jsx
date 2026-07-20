@@ -262,6 +262,9 @@ export const render = (state, dispatch) => {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <span style={{ fontSize: '11px', fontWeight: '700', letterSpacing: '0.6px', color: macos.label }}>
           CME GOLD {data.series || ''}
+          {data.source && data.source !== 'quikstrike' && (
+            <span style={{ color: macos.orange, marginLeft: '8px', fontWeight: '600' }}>via {data.source}</span>
+          )}
           {stale && <span style={{ color: macos.orange, marginLeft: '8px' }}>● STALE</span>}
         </span>
         <span style={{ fontSize: '10px', color: macos.tertiary, fontWeight: '600' }}>

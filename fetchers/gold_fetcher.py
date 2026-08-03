@@ -255,7 +255,7 @@ def ensure_roll(state, anchor, quoted_month):
     return {"sym": anchor["sym"], "month": anchor["month"], "adj": state[key]}
 
 
-def apply_roll(fut, roll, yahoo_ref, quoted_month):
+def apply_roll(fut, roll, yahoo_ref, quoted_month, anchor):
     """ย้าย quote futures ของ investing ไปเป็นสัญญาที่ 0DTE อ้างอิง
 
     ปัญหา: investing (และ Yahoo) roll ตัว continuous ตาม volume ซึ่งข้ามไป Dec ตั้งแต่
@@ -266,7 +266,13 @@ def apply_roll(fut, roll, yahoo_ref, quoted_month):
     if not fut:
         return fut, yahoo_ref
     if not roll:
-        fut["anchored"] = False
+        # roll = None ได้สองแบบ: (ก) investing quote สัญญาเดียวกับที่ 0DTE อ้างอยู่แล้ว
+        # = ถือว่า anchored ติดรหัสได้ / (ข) หา spread ไม่ได้ = ยังเป็นสัญญาอื่นอยู่
+        # ห้ามติดรหัส ไม่งั้น label จะบอกคนละสัญญากับราคา
+        already = bool(anchor) and anchor["month"] == quoted_month
+        fut["anchored"] = already
+        if already:
+            fut["sym"] = anchor["sym"]
         return fut, yahoo_ref
 
     adj = roll["adj"]
@@ -317,7 +323,7 @@ def tick(executor, yahoo_ref, state, anchor, roll_state):
         if roll_state.get("month") != fut["month"]:
             roll_state["month"] = fut["month"]
             roll_state["roll"] = ensure_roll(state, anchor, fut["month"])
-        fut, tick_yahoo = apply_roll(fut, roll_state.get("roll"), yahoo_ref, fut["month"])
+        fut, tick_yahoo = apply_roll(fut, roll_state.get("roll"), yahoo_ref, fut["month"], anchor)
 
     # future: open ใช้ Yahoo (แม่นกว่า) / change,percent = เทียบ prev close (จาก investing)
     # เพิ่ม change_open,percent_open = last price เทียบ open ของวัน (เฉพาะ future)

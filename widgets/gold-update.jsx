@@ -131,7 +131,10 @@ export const render = ({ output }) => {
     return (
       <div style={{ marginTop: '8px' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', fontSize: '11px', color: macos.secondary, fontWeight: '600', letterSpacing: '0.4px', textTransform: 'uppercase', marginBottom: '2px' }}>
-          <span>{asset.name}</span>
+          <span>
+            {asset.name}
+            {asset.sym && <span style={{ color: macos.tertiary }}> · {asset.sym}</span>}
+          </span>
           {showOpen && asset.open != null && (
             <span style={{ color: macos.tertiary, textTransform: 'none' }}>O {fmt(asset.open)}</span>
           )}

@@ -92,10 +92,16 @@ def http_get_json(url, headers, timeout=15):
     return json.loads(http_get(url, headers, timeout))
 
 
-def fetch_yahoo_futures():
-    """ดึงราคาเปิดวัน + Last Price (LP) ของ GC=F จาก Yahoo — เรียกครั้งเดียวต่อรอบ
-    open ของ Yahoo แม่นกว่า investing / LP ดีเลย์ ~10 นาที เก็บไว้ cross-check + fallback"""
-    result = http_get_json(YAHOO_URL, UA_HEADERS)["chart"]["result"][0]
+def fetch_yahoo_futures(month=None):
+    """ราคาเปิดวัน + Last Price (LP) จาก Yahoo — เรียกครั้งเดียวต่อรอบ
+
+    ระบุ month = ดึงของสัญญานั้นตรงๆ (เช่น 'Oct 26' -> GCV26.CMX) ใช้กับสัญญาที่ 0DTE
+    อ้างอิง เพราะ open ของแต่ละสัญญาเป็นเทรดแรกของ session ซึ่งเกิดคนละวินาทีกัน
+    (วัดแล้ว: Dec เปิด 05:00 ที่ 4135.2 / Oct เทรดแรก 05:10 ที่ ~4100 ตอนราคาไหลลงแล้ว)
+    -> คำนวณ open ของ Oct จาก open ของ Dec ไม่ได้ ต้องเอาของสัญญานั้นเอง
+    ไม่ระบุ = GC=F (front continuous) ใช้ตอนไม่รู้สัญญาอ้างอิง"""
+    url = YAHOO_CONTRACT_URL.format(yahoo_symbol(month)) if yahoo_symbol(month) else YAHOO_URL
+    result = http_get_json(url, UA_HEADERS)["chart"]["result"][0]
     meta = result["meta"]
     quote = result["indicators"]["quote"][0]
     # range=1d อาจได้หลายแท่งช่วงรอยต่อวันเทรด — เอาแท่งล่าสุด (วันปัจจุบัน) เสมอ
@@ -361,14 +367,20 @@ def main():
     executor = ThreadPoolExecutor(max_workers=2)
     print("🚀 gold_fetcher (HTTP mode) started {}".format(datetime.now().strftime("%H:%M:%S")))
 
+    state = load_state()        # cache ของที่เปลี่ยนวันละครั้ง: สัญญาอ้างอิง + spread
+    anchor = ensure_anchor(state)
+
+    # open ดึงจากสัญญาที่ 0DTE อ้างอิงโดยตรง (ค่านี้ถูกใช้เป็น mean ของกรอบ SD ใน cme_fetcher
+    # ด้วย จึงต้องเป็น open ของ series นั้นจริงๆ ไม่ใช่ค่าที่ derive มาจากสัญญาอื่น)
     try:
-        yahoo_ref = fetch_yahoo_futures()
+        yahoo_ref = fetch_yahoo_futures(anchor["month"] if anchor else None)
+        if yahoo_ref.get("open") is None and anchor:
+            print("⚠️ Yahoo ยังไม่มี open ของ {} (ยังไม่มีเทรดแรก?) -> ใช้ front แทน".format(
+                anchor["month"]))
+            yahoo_ref = fetch_yahoo_futures()
     except Exception as e:
         print("⚠️ yahoo fetch failed, fallback to investing open: {}".format(e))
         yahoo_ref = {"open": None, "last": None, "month": None}
-
-    state = load_state()        # cache ของที่เปลี่ยนวันละครั้ง: สัญญาอ้างอิง + spread
-    anchor = ensure_anchor(state)
     roll_state = {}
 
     start = time.time()

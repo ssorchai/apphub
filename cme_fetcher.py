@@ -211,6 +211,16 @@ def nearest_expiration(html):
     return best
 
 
+def underlying_of(html, target):
+    """Underlying Symbol ของ expiration ที่เลือก — อ่านจาก tooltip บนหน้า selector
+    (วิธีเดียวกับที่คนดูด้วยตา: ชี้เมาส์ที่วันที่ แล้วดู Underlying Symbol เช่น GCV6)
+    สำคัญเพราะ 0DTE ไม่ได้อ้าง front futures เสมอ เช่นช่วง ต.ค. daily จะย้ายไป GCZ6
+    ทั้งที่ GCV6 ยังไม่หมดอายุ"""
+    m = re.search(r'Underlying Symbol:\s*(GC\w+)"[^>]*href="javascript:__doPostBack\(&#39;'
+                  + re.escape(target), html)
+    return m.group(1) if m else None
+
+
 def futures_expiry(sym):
     """GCQ6 -> วันหมดอายุของ futures = business day ที่ 3 นับถอยหลังจากสิ้นเดือนส่งมอบ
     (ตรงกับ Settlement Day ที่ investing รายงาน — ตรวจแล้วกับ GCQ6 = 2026-08-27)"""
@@ -304,16 +314,18 @@ def fetch_both_tabs():
             curve = None
 
     # บังคับเลือก series ที่หมดอายุใกล้สุดเสมอ (พลาดก็ใช้ default ของหน้าไป)
+    und_ref = None
     try:
         best = nearest_expiration(html)
         if best:
+            und_ref = underlying_of(base_html, best[0])
             html = _postback(op, final_url, html, best[0])
     except Exception:
         pass
 
     intraday = extract_payload(html)
     oi = extract_payload(_postback(op, final_url, html, OI_TARGET))
-    return intraday, oi, curve
+    return intraday, oi, curve, und_ref
 
 
 def strike_rows(settings):
@@ -410,13 +422,14 @@ def top_changes(rows_now, prev_map, n=2):
 
 def snapshot_quikstrike():
     """แหล่งหลัก: QuikStrike Vol2Vol — ครบสุด (P/C สองชุด + smile + curve)"""
-    intraday, oi, curve = fetch_both_tabs()
+    intraday, oi, curve, und_sym = fetch_both_tabs()
     meta = meta_of(oi)
     sub = re.sub("<[^>]+>", "", oi.get("Subtitle", "")).replace("\xa0", " ")
     mv = re.search(r"Vol Chg:\s*(-?[\d.]+)", sub)
     vs = series_points(oi, "VolSettle")
     return {
-        "source": "quikstrike", "series": meta["series"], "F": meta["F"],
+        "source": "quikstrike", "und_sym": und_sym,
+        "series": meta["series"], "F": meta["F"],
         "dte": meta["dte"], "iv": meta["iv"],
         "iv_chg": float(mv.group(1)) if mv else None,
         "future_chg": meta["future_chg"],
@@ -708,6 +721,7 @@ def main():
         "system_time": f"{now:%H:%M}",
         "source": snap["source"],
         "series": meta["series"],
+        "und_sym": snap.get("und_sym"),  # underlying ของ 0DTE เช่น GCV6 (มีเฉพาะ quikstrike)
         "F": meta["F"],
         "dte": round(meta["dte"], 3) if meta["dte"] is not None else None,
         "iv": meta["iv"],

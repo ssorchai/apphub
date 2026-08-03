@@ -6,14 +6,16 @@ export const refreshFrequency = 60000;
 // ---- macOS system palette (shared theme กับ gold-update.jsx) ----
 // ไม่ใช้ backdrop-filter เพราะใน Übersicht มันกระพริบตอน re-render ทุกรอบ refresh
 const macos = {
-  material: 'rgba(255, 255, 255, 0.25)',
-  border: '0.5px solid rgba(255, 255, 255, 0.25)',
+  // ฉากหลังโทนเข้มโปร่ง: ตัวหนังสือขาวต้องอ่านออกทั้งบน wallpaper สว่างและมืด
+  // (พื้นขาวโปร่งเดิมจมหายเมื่อ wallpaper เป็นโทนส้ม/สว่าง) — ปรับความทึบที่ค่านี้ค่าเดียว
+  material: 'rgba(24, 26, 33, 0.55)',
+  border: '0.5px solid rgba(255, 255, 255, 0.16)',
   radius: '22px',
-  shadow: '0 10px 24px rgba(0, 0, 0, 0.22)',
+  shadow: '0 10px 28px rgba(0, 0, 0, 0.32)',
   font: '-apple-system, "SF Pro Display", "SF Pro Text", "Helvetica Neue", sans-serif',
   label: '#ffffff',
-  secondary: 'rgba(255, 255, 255, 0.65)',
-  tertiary: 'rgba(255, 255, 255, 0.42)',
+  secondary: 'rgba(255, 255, 255, 0.78)',
+  tertiary: 'rgba(255, 255, 255, 0.58)',
   orange: '#ffb340',
   blue: '#64d2ff',
   green: '#30d158',

@@ -249,7 +249,7 @@ def ensure_roll(state, anchor, quoted_month):
     return {"sym": anchor["sym"], "month": anchor["month"], "adj": state[key]}
 
 
-def apply_roll(fut, roll, yahoo_ref):
+def apply_roll(fut, roll, yahoo_ref, quoted_month):
     """ย้าย quote futures ของ investing ไปเป็นสัญญาที่ 0DTE อ้างอิง
 
     ปัญหา: investing (และ Yahoo) roll ตัว continuous ตาม volume ซึ่งข้ามไป Dec ตั้งแต่
@@ -274,9 +274,17 @@ def apply_roll(fut, roll, yahoo_ref):
     # change/percent (เทียบ prev close) คงของ investing ไว้: การ shift ด้วย spread ที่ขยับช้า
     # คือ parallel shift การเปลี่ยนแปลงระหว่างวันแทบเท่ากันทุกสัญญา
 
-    # open ของ Yahoo เป็นของสัญญาที่ Yahoo เกาะอยู่ — ปรับเฉพาะเมื่อไม่ใช่สัญญาอ้างอิง
-    if yahoo_ref.get("open") is not None and yahoo_ref.get("month") != roll["month"]:
-        yahoo_ref = dict(yahoo_ref, open=round(yahoo_ref["open"] - adj, 2))
+    # open ของ Yahoo (GC=F) เป็นของสัญญาที่ Yahoo เกาะอยู่ ซึ่งปกติคือตัวเดียวกับที่ investing
+    # quote -> หักด้วย adj ตัวเดียวกันได้ แต่ถ้าวันไหนสองเจ้า roll ไม่พร้อมกัน adj จะเป็นของ
+    # คนละคู่สัญญา ใช้ไม่ได้ -> ทิ้ง open ของ Yahoo ไปใช้ open ของ investing แทน
+    # (ตัวนั้นเป็นสัญญาที่ investing quote แน่นอน จึงถูก shift ถูกคู่เสมอ)
+    if yahoo_ref.get("open") is not None:
+        if yahoo_ref.get("month") == quoted_month:
+            yahoo_ref = dict(yahoo_ref, open=round(yahoo_ref["open"] - adj, 2))
+        elif yahoo_ref.get("month") != roll["month"]:
+            print("⚠️ Yahoo เกาะ {} แต่ investing quote {} -> ใช้ open ของ investing".format(
+                yahoo_ref.get("month"), quoted_month))
+            yahoo_ref = dict(yahoo_ref, open=None)
     return fut, yahoo_ref
 
 
@@ -303,7 +311,7 @@ def tick(executor, yahoo_ref, state, anchor, roll_state):
         if roll_state.get("month") != fut["month"]:
             roll_state["month"] = fut["month"]
             roll_state["roll"] = ensure_roll(state, anchor, fut["month"])
-        fut, tick_yahoo = apply_roll(fut, roll_state.get("roll"), yahoo_ref)
+        fut, tick_yahoo = apply_roll(fut, roll_state.get("roll"), yahoo_ref, fut["month"])
 
     # future: open ใช้ Yahoo (แม่นกว่า) / change,percent = เทียบ prev close (จาก investing)
     # เพิ่ม change_open,percent_open = last price เทียบ open ของวัน (เฉพาะ future)

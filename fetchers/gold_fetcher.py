@@ -85,6 +85,8 @@ def fetch_yahoo_futures():
     return {
         "open": round(opens[-1], 2) if opens else None,
         "last": round(last, 2) if last is not None else None,
+        # "Gold Dec 26" -> "Dec 26" เอาไว้เช็คว่า open เป็นของสัญญาไหน (Yahoo roll ตาม volume)
+        "month": meta.get("shortName", "").replace("Gold ", "").strip() or None,
     }
 
 
@@ -101,6 +103,73 @@ def fetch_investing(pair_id):
         "month": overview.get("Month"),  # เช่น "Aug 26" (มีเฉพาะ futures)
         "settlement": overview.get("Settlement Day"),  # เช่น "2026-08-27" (มีเฉพาะ futures)
     }
+
+
+PUTCALL_FILE = "/tmp/cme_putcall.json"
+MONTH_OF_CODE = {"F": "Jan", "G": "Feb", "H": "Mar", "J": "Apr", "K": "May", "M": "Jun",
+                 "N": "Jul", "Q": "Aug", "U": "Sep", "V": "Oct", "X": "Nov", "Z": "Dec"}
+
+
+def sym_label(sym):
+    """GCV6 -> 'Oct 26' (รูปแบบเดียวกับ Month ของ investing/Yahoo)"""
+    if sym and len(sym) == 4 and sym[2] in MONTH_OF_CODE and sym[3].isdigit():
+        return "{} 2{}".format(MONTH_OF_CODE[sym[2]], sym[3])
+    return None
+
+
+def read_ref_sym():
+    """underlying จริงของ 0DTE (เช่น GCV6) ที่ cme_fetcher แกะจาก tooltip QuikStrike รายชั่วโมง
+    — สำคัญเพราะ 0DTE ไม่ได้อ้าง front เสมอ (ช่วง ต.ค. daily ย้ายไป GCZ6 ก่อน GCV6 หมดอายุ)"""
+    try:
+        if os.path.getmtime(PUTCALL_FILE) > datetime.now().timestamp() - 6 * 3600:
+            return json.load(open(PUTCALL_FILE)).get("und_sym")
+    except Exception:
+        pass
+    return None
+
+
+def reanchor(fut, yahoo_ref):
+    """ย้าย quote futures ของ investing ไปยังสัญญาอ้างอิง 0DTE ของ CME
+
+    ปัญหา: investing (และ Yahoo) roll ตัว continuous ตาม volume ซึ่งข้ามไป Dec
+    ตั้งแต่ 0DTE ยังอ้าง Oct (GCV6) -> spread diff ที่โชว์บวมเกินจริง ~30 จุด
+    วิธี: ราคา GCV6 realtime = ราคา Dec realtime - spread(Dec-Oct จาก CME curve)
+    spread ภายใน feed QuikStrike เดียวกัน ความช้า 4-5 จุดหักล้างกันหมด ใช้ shift ได้สะอาด
+    (ห้ามใช้ราคา QuikStrike ตรงๆ เพราะช้ากว่า feed สด)
+
+    คืน (fut ที่ปรับแล้ว, yahoo_ref สำหรับ tick นี้) — ห้าม mutate yahoo_ref ตัวจริง
+    เพราะมันถูก fetch ครั้งเดียวใช้ทั้งรอบ (ปรับซ้ำ = ลบ spread ทบทุก tick)
+    พลาด/ไม่มี curve ก็คืนของเดิมโดยไม่แตะ"""
+    curve = read_curve()
+    if not (fut and curve and fut.get("settlement")):
+        return fut, yahoo_ref
+    try:
+        cons = curve["contracts"]
+        ref_sym = read_ref_sym()
+        anchor = next((c for c in cons if c["sym"] == ref_sym), cons[0])
+        settle = date.fromisoformat(fut["settlement"])
+        quoted = next((c for c in cons
+                       if abs((date.fromisoformat(c["expiry"]) - settle).days) <= 3), None)
+        fut["sym"] = anchor["sym"]
+        if quoted is None or quoted["sym"] == anchor["sym"]:
+            return fut, yahoo_ref  # quote ตรงสัญญาอ้างอิงอยู่แล้ว / หาไม่เจอ = ไม่แตะ
+
+        adj = round(quoted["price"] - anchor["price"], 2)
+        fut["quoted_month"] = fut["month"]
+        fut["roll_adj"] = adj
+        fut["last"] = round(fut["last"] - adj, 2)
+        fut["open"] = round(fut["open"] - adj, 2) if fut.get("open") is not None else None
+        fut["month"] = sym_label(anchor["sym"]) or fut["month"]
+        fut["settlement"] = anchor["expiry"]
+        # change/percent (เทียบ prev close) คงของ investing ไว้: การ shift ด้วย spread
+        # ที่ขยับช้าคือ parallel shift การเปลี่ยนแปลงระหว่างวันแทบเท่ากันทุกสัญญา
+
+        # open ของ Yahoo เป็นของสัญญาที่ Yahoo เกาะอยู่ — ปรับเฉพาะเมื่อไม่ใช่สัญญา anchor
+        if yahoo_ref.get("open") is not None and yahoo_ref.get("month") != fut["month"]:
+            yahoo_ref = dict(yahoo_ref, open=round(yahoo_ref["open"] - adj, 2))
+        return fut, yahoo_ref
+    except Exception:
+        return fut, yahoo_ref
 
 
 def read_curve():
@@ -189,11 +258,16 @@ def tick(executor, yahoo_ref):
     except Exception as e:
         errors.append("spot {}: {}".format(type(e).__name__, e))
 
+    # ย้าย quote ไปสัญญาอ้างอิง 0DTE ของ CME ก่อนคำนวณทุกอย่าง (diff/theory ตามไปเอง)
+    tick_yahoo = yahoo_ref
+    if fut:
+        fut, tick_yahoo = reanchor(fut, yahoo_ref)
+
     # future: open ใช้ Yahoo (แม่นกว่า) / change,percent = เทียบ prev close (จาก investing)
     # เพิ่ม change_open,percent_open = last price เทียบ open ของวัน (เฉพาะ future)
     fut_future = None
     if fut:
-        fut_open = yahoo_ref["open"] if yahoo_ref.get("open") is not None else fut["open"]
+        fut_open = tick_yahoo["open"] if tick_yahoo.get("open") is not None else fut["open"]
         change_open = round(fut["last"] - fut_open, 2) if fut_open else None
         percent_open = round(change_open / fut_open * 100, 2) if change_open is not None else None
         fut_future = {
@@ -204,7 +278,10 @@ def tick(executor, yahoo_ref):
             "percent": fut["percent"],
             "change_open": change_open,
             "percent_open": percent_open,
-            "yahoo_last": yahoo_ref.get("last"),
+            "yahoo_last": tick_yahoo.get("last"),
+            "sym": fut.get("sym"),
+            "quoted_month": fut.get("quoted_month"),
+            "roll_adj": fut.get("roll_adj"),
             "time": fut["time"],
         }
 

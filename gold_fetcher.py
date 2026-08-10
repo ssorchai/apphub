@@ -10,8 +10,10 @@ from datetime import datetime
 # ราคา realtime (last/change) จาก investing.com mobile app API — แหล่งเดียวกับเว็บที่เคย scrape
 # ราคาเปิดของ Futures ใช้ Yahoo Finance (GC=F) เพราะแม่นกว่า
 # ประวัติหนี Cloudflare ของ investing (มันไล่จับ TLS fingerprint ขึ้นเรื่อยๆ):
-# requests โดน 403 (2026-07-13) → urllib ผ่าน → urllib โดน 403 (2026-07-16)
-# → ใช้ curl ของ homebrew (OpenSSL) เพราะ python นี้ผูก LibreSSL 2.8.3 ตายตัว แก้ฝั่ง python ไม่ได้
+# requests โดน 403 (2026-07-13) → urllib โดน (07-16) → brew curl โดน (08-04)
+# → curl_cffi ที่ปลอม JA3 ของ browser จริง ตอนนี้ผ่านเฉพาะ fingerprint รุ่นเก่า
+# (chrome110/edge101 ได้ 200 ส่วน chrome124/safari17 โดน 403) — Yahoo กับ CME ยังใช้
+# brew curl ตามเดิมเพราะไม่มีปัญหาและ Yahoo แพ้ UA ยาวของ browser จริง
 JSON_PATH = "/tmp/gold_data.json"
 
 # ต้องเป็น path เต็ม: curl เป็น keg-only และ cron เห็นแค่ /usr/bin/curl ซึ่งโดน 403
@@ -92,6 +94,31 @@ def http_get_json(url, headers, timeout=15):
     return json.loads(http_get(url, headers, timeout))
 
 
+# fingerprint ที่ Cloudflare ของ investing ยังยอม — ไล่ลองตามลำดับ ตัวไหนผ่านจำไว้ใช้ต่อ
+IMPERSONATE = ["chrome110", "edge101", "chrome107", "chrome104"]
+_ok_profile = None
+
+
+def investing_get_json(url, timeout=15):
+    """ยิง investing ผ่าน curl_cffi (ปลอม TLS fingerprint) — curl/urllib ธรรมดาโดน 403 หมด"""
+    global _ok_profile
+    from curl_cffi import requests as cr
+    last = None
+    order = ([_ok_profile] if _ok_profile else []) + [p for p in IMPERSONATE if p != _ok_profile]
+    for prof in order:
+        try:
+            r = cr.get(url, headers=INVESTING_HEADERS, impersonate=prof, timeout=timeout)
+            if r.status_code == 200:
+                if prof != _ok_profile:
+                    print("🔓 investing ผ่านด้วย fingerprint {}".format(prof))
+                    _ok_profile = prof
+                return r.json()
+            last = "HTTP {} ({})".format(r.status_code, prof)
+        except Exception as e:
+            last = "{} ({})".format(e, prof)
+    raise RuntimeError(last or "investing ไม่ตอบ")
+
+
 def fetch_yahoo_futures(month=None):
     """ราคาเปิดวัน + Last Price (LP) จาก Yahoo — เรียกครั้งเดียวต่อรอบ
 
@@ -116,7 +143,7 @@ def fetch_yahoo_futures(month=None):
 
 
 def fetch_investing(pair_id):
-    payload = http_get_json(INVESTING_URL.format(pair_id), INVESTING_HEADERS)
+    payload = investing_get_json(INVESTING_URL.format(pair_id))
     d = payload["data"][0]["screen_data"]["pairs_data"][0]
     overview = {row["key"]: row["val"] for row in d.get("overview_table", [])}
     return {

@@ -35,40 +35,51 @@ crontab ปัจจุบัน:
 # Project 3: CME Put/Call Widget (Gold 0DTE)
 
 ดึง Put/Call รายสไตรค์ (Intraday volume + Open Interest) ของ Gold option series
-ใกล้หมดอายุสุด จาก CME QuikStrike Vol2Vol แล้วส่งต่อขึ้น TradingView ผ่าน clipboard
+ใกล้หมดอายุสุด จาก **Barchart** แล้วส่งต่อขึ้น TradingView ผ่าน clipboard
 
-- **แหล่งข้อมูล**: `cmegroup-tools.quikstrike.net/User/QuikStrikeView.aspx?pid=40&pf=6&viewitemid=IntegratedV2VExpectedRange`
-  — backend auto-login ให้เมื่อ Referer เป็น cmegroup.com (ไม่ต้องมี account) GET แรกได้แท็บ
-  Intraday แล้ว POST จำลอง `__doPostBack` (WebForms: ส่ง `__VIEWSTATE` กลับ + `__EVENTTARGET`
-  = `...lbOI`) เพื่อสลับไปแท็บ Open Interest — ข้อมูลฝังใน HTML เป็น `$create(...Chart, {...})`
-  รายละเอียดกลไก/ข้อจำกัดของข้อมูล (Vol คือ settle เมื่อคืน ฯลฯ) ดูโปรเจกต์ `~/src/claude_code/cme_scraping`
+- **ประวัติแหล่งข้อมูล**: เดิมใช้ CME QuikStrike Vol2Vol (พร้อม fallback pageth →
+  Barchart, สร้างช่วงเหตุล่มจริง 17 ก.ค. 2026) แต่ **ก.ย. 2026 CME ถอด intraday ออก
+  และใส่ bot detection โหด** → ย้าย Barchart ขึ้นเป็นแหล่งหลักตัวเดียว, ตัด Vol2Vol/pageth
+  ทิ้งทั้งสาย (โค้ดยุค QuikStrike ดูได้จาก git history / โปรเจกต์ `~/src/claude_code/cme_scraping`)
+- **Barchart** (feed CME ที่เขา license เอง, delayed 10-15 นาที): ก.ย. 2026 barchart
+  ใส่ **AWS WAF JS challenge บนหน้า HTML ทุกหน้า** แต่ path `/proxies/core-api` ไม่โดน —
+  เงื่อนไขจริงของ API มีแค่ header **`sec-fetch-site: same-origin`** (พิสูจน์ 10 ก.ย.:
+  ไม่ต้องมี cookie/XSRF/WAF-token) → fetcher **ห้ามโหลดหน้า HTML** ทำทุกอย่างผ่าน API:
+  - **discovery ไม่ใช้ dropdown แล้ว**: สร้างรหัส series จากตาราง `WEEK_CODES`
+    (จันทร์ `IY1-5` / อังคาร `I0A-E` / พุธ `IY6-10` / พฤหัส `I0G-K` / ศุกร์ `IG1-5`
+    ต่อด้วย month code + ปี เช่น `I0HU26` = พฤหัสสัปดาห์ 2 ก.ย. 26) แล้วยิง chain
+    ไล่จากวันใกล้สุด — ตัวจริงยืนยันจาก `symbolName` ใน response
+    ("Gold Thursday Week 2 Options Sep '26") ไม่เดาจากรหัส / series หมดอายุ = chain ว่าง
+  - **chain เดียวได้ครบ**: volume, OI, lastPrice, bid/ask, `optImpliedVolatility`
+    (ชื่อ field แกะจาก class ตารางหน้า volatility-greeks — `impliedVolatility` เฉยๆ
+    คืน null / หน่วยเป็น % แล้ว) + underlying คิดจากกติกา monthly-option-expiry
+    (weekly อ้าง GC เดือนมาตรฐานตัวใกล้สุดที่ option รายเดือนยังไม่หมด ณ วัน expiry)
+  / **semantic เปลี่ยนจากยุค QuikStrike**: IV/smile เป็นค่า "ปัจจุบัน" (delayed)
+  ไม่ใช่ settle เมื่อคืน และไม่มี IV Chg (ช่อง IVCHG ใน clip ว่าง — Pine รับได้อยู่แล้ว)
+- **IV วัน 0DTE**: barchart คืน `optImpliedVolatility=0` ทั้ง chain "ในวันหมดอายุของ
+  series นั้นเอง" (หน้าเว็บจริงก็ว่าง — ข้อจำกัดฝั่งเขา ซึ่งคือทุกวันสำหรับ 0DTE) →
+  fetcher **คำนวณ IV เองแบบ Black-76** (bisection, r=0, t=dte/365 day-count เดียวกับ
+  สูตร SD) จาก **mid ของ bid/ask** ฝั่ง OTM — mid เป็น quote สด ต่างจาก lastPrice
+  ที่ค้างได้ทั้งวัน + ตัดปลายปีกที่ IV > 2.5×ATM (artifact ของ minimum tick) /
+  JSON มี `iv_src`: barchart / computed / inherit → ไม่ได้ทั้งคู่ค่อย inherit จาก
+  clip เดิมของวันเดียวกัน (PricingSheet ของ QuikStrike ยังหา URL จริงไม่เจอ —
+  Vol2Vol โดนถอดข้อมูลเหลือแต่โครง WebForms)
 - **cme_fetcher.py**: รายชั่วโมงพอ (Intraday สะสมทั้งวัน / OI นิ่งจนถึง refresh เช้า) เขียน
   `/tmp/cme_putcall.json` (ให้ widget) + `/tmp/cme_putcall_clip.txt` (string สำหรับ Pine)
-  + `/tmp/cme_curve.json` (futures curve ให้ gold_fetcher ใช้ทำ Theory Diff — ดึงทุก 12 ชม.
-  เพราะ carry ขยับช้า และการดึงกิน 3 page load ซึ่งเป็นตัวถ่วงเวลาหลักตอนเซิร์ฟช้า)
-- **Fallback chain: QuikStrike → pageth → Barchart** (ทดสอบครบสายกับเหตุล่มจริง 17 ก.ค.):
-  - **pageth** (github mirror): เช็คความสดจาก commit ล่าสุดก่อน (>20 นาที = ตัดทิ้ง เพราะ
-    บอทเขาตายพร้อม QuikStrike เสมอ — ช่วยเฉพาะเคสฝั่งเราพัง เช่น IP โดนแบน)
-  - **Barchart** (feed CME อิสระ, delayed 10-15 นาที): โหลดหน้า → cookie/XSRF → core-api
-    `quotes/get?list=futures.options` ได้ volume+OI รายสไตรค์เต็ม chain / discovery เลือก
-    ประเภทตามวันในสัปดาห์ ("Friday Weekly Options" ฯลฯ) แล้วอ่าน dropdown สัปดาห์ทั้งลิสต์
-    เลือกวันหมดอายุใกล้สุดเอง (**default ของ barchart เชื่อไม่ได้** — มัน roll ข้าม series
-    ที่ยังเทรดอยู่) วันศุกร์มีรหัสสร้างตรง `IG{week}{month}{yy}` เป็น candidate เสริม
-    / ไม่มี IV+smile → inherit จาก clip เดิมของวันเดียวกัน (settle นิ่งทั้งวันโดยนิยาม)
-  - งบเวลาเป็น**ต่อแหล่ง** (100/30/75s) — ถ้าเป็นงบรวม แหล่งแรกที่ช้าจะกินหมดแล้วตัดสิทธิ์
-    แหล่งสำรอง / JSON มี field `source` และ widget ขึ้นป้าย "via barchart" เมื่อไม่ใช่ QS
-- **เวลา QuikStrike ล่ม** (เจอจริง 17 ก.ค. 2026 — DB ฝั่งเขา timeout): เซิร์ฟตอบ
-  **HTTP 200 พร้อมหน้า `/Error/ErrorPage.aspx?MSG=Timeout+expired...`** ดู status code
-  อย่างเดียวไม่พอ → `_check_page()` จับหน้า error/login ก่อน parse, `MAX_RUNTIME=100s`
-  กันค้าง (ไม่งั้น per-socket timeout × redirect hop × retry = ค้าง 4 นาที),
-  exit code **2 = ฝั่ง CME ล่ม** / 1 = error อื่น / 0 = ปกติ
+  + `/tmp/cme_curve.json` (futures curve — ยุค barchart ได้ฟรีจาก quotes คอลเดียว
+  เลยดึงทุกรอบ ไม่ต้อง gate 12 ชม. แบบเดิม; spread คิดใน feed เดียวกันเสมอ)
+  / งบเวลาเป็น**ต่อแหล่ง** (barchart 90s / pricingsheet 40s)
+  exit code **2 = ฝั่งแหล่งข้อมูลล่ม** / 1 = error อื่น / 0 = ปกติ
   — ล้มเหลวแล้ว**ไม่เขียนทับไฟล์เดิม** widget ขึ้น STALE เองหลัง 2 ชม. และกด ↻ เองได้
-- **cme-putcall.jsx**: สรุป P/C + ratio bar + Top Active + ธงแดงเมื่อ |IV Chg| > 2 (ตลาด
-  reprice vol — กรอบ SD จาก settle เชื่อไม่ได้) **คลิก widget = copy clip ลง clipboard**
-  แล้วไปวางในช่อง "Paste P/C Data" ของ indicator `oi_block.pine` (โปรเจกต์ `tdw_indi`)
+- ⚠️ **www.cmegroup.com (WAF) แบน IP เครื่องนี้จากการ scrape แล้ว — ห้ามยิงตรง**
+  (quikstrike.net เป็น infra คนละเจ้า/Bantix ใช้ Referer cmegroup.com ได้ตามเดิม)
+- **cme-putcall.jsx**: สรุป P/C + ratio bar + Top Active + ธงแดงเมื่อ |IV Chg| > 2
+  **คลิก widget = copy clip ลง clipboard** แล้วไปวางในช่อง "Paste P/C Data" ของ
+  indicator `oi_block.pine` (โปรเจกต์ `tdw_indi`) / ป้าย "via ..." ขึ้นเมื่อ source
+  ไม่ใช่ barchart (แหล่งหลักปัจจุบัน)
 - format ของ clip: บรรทัด meta `F:...|D:...|S:...|IV:...|IVCHG:...|DTE:...` ตามด้วย
   `ID;strike:put:call;...` และ `OI;strike:put:call;...` (เฉพาะ strike ที่ put+call > 0)
-  และ `VS;strike:vol%;...` (settle vol ทุก strike — ฝั่ง Pine ใช้วาด volatility smile)
+  และ `VS;strike:vol%;...` (IV รายสไตรค์ — ฝั่ง Pine ใช้วาด volatility smile)
 
 ---
 

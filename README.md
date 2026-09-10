@@ -69,6 +69,10 @@ crontab ปัจจุบัน:
   `/tmp/cme_putcall.json` (ให้ widget) + `/tmp/cme_putcall_clip.txt` (string สำหรับ Pine)
   + `/tmp/cme_curve.json` (futures curve — ยุค barchart ได้ฟรีจาก quotes คอลเดียว
   เลยดึงทุกรอบ ไม่ต้อง gate 12 ชม. แบบเดิม; spread คิดใน feed เดียวกันเสมอ)
+  + `/tmp/cme_chart.html` — **กราฟหน้าตาแบบ CME Vol2Vol** (แท่ง Put ส้ม/Call น้ำเงิน
+  รายสไตรค์ สลับ Intraday/OI ได้, smile IV เส้นประแดงแกนขวา, เส้น Future, SD band
+  ±1-3σ วงในเข้มสุด) self-contained เปิด `open /tmp/cme_chart.html` ค้างไว้ได้
+  หน้า reload ตัวเองทุก 5 นาที รับข้อมูลใหม่ตามรอบ cron
   / งบเวลารวม 90s (แหล่งเดียวแล้ว ไม่ต้องแบ่งงบต่อแหล่งแบบยุค fallback chain)
   exit code **2 = ฝั่งแหล่งข้อมูลล่ม** / 1 = error อื่น / 0 = ปกติ
   — ล้มเหลวแล้ว**ไม่เขียนทับไฟล์เดิม** widget ขึ้น STALE เองหลัง 2 ชม. และกด ↻ เองได้

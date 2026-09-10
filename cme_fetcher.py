@@ -61,6 +61,7 @@ UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
 JSON_OUT = "/tmp/cme_putcall.json"
 CLIP_OUT = "/tmp/cme_putcall_clip.txt"
 CURVE_OUT = "/tmp/cme_curve.json"
+CHART_OUT = "/tmp/cme_chart.html"   # กราฟหน้าตาแบบ CME Vol2Vol เปิดค้างใน browser ได้
 
 # SD จากราคาเปิดวัน (Yahoo แม่นกว่า investing — pattern เดียวกับ gold_fetcher.py)
 # DTE fix 0.6 = ตัดช่วงเอเชียเช้าทิ้ง / vol = IV - IVCHG เมื่อมี chg (ยุค barchart
@@ -532,6 +533,146 @@ def top_changes(rows_now, prev_map, n=2):
     return changes[:n]
 
 
+# --------------------------------------------------------------------------- #
+# กราฟ HTML หน้าตาแบบ CME Vol2Vol (เปิด /tmp/cme_chart.html ค้างใน browser ได้
+# หน้า reload ตัวเองทุก 5 นาที ข้อมูลใหม่มาตามรอบ cron) -- ทั้งไฟล์ self-contained
+# ไม่มี dependency ภายนอก เพราะต้องเปิดแบบ file:// ได้
+# --------------------------------------------------------------------------- #
+CHART_TMPL = r"""<!DOCTYPE html>
+<html><head><meta charset="utf-8"><meta http-equiv="refresh" content="300">
+<title>Gold 0DTE Put/Call</title>
+<style>
+ body{font-family:-apple-system,Helvetica,Arial,sans-serif;background:#fafafa;margin:14px;color:#222}
+ #hdr{display:flex;align-items:baseline;gap:24px;margin:2px 4px 8px}
+ #title{font-size:19px;font-weight:700}
+ #totals{font-size:14px}
+ #totals b.put{color:#f5a623}#totals b.call{color:#4a80e8}#totals b.iv{color:#c0392b}
+ #mode{margin-left:auto;display:flex;gap:6px;align-items:center}
+ #mode button{border:1px solid #ccc;background:#fff;padding:3px 12px;border-radius:4px;cursor:pointer;font-size:12px}
+ #mode button.on{background:#4a80e8;color:#fff;border-color:#4a80e8}
+ #legend{font-size:12px;color:#555;margin-left:12px}
+ #legend .sw{display:inline-block;width:9px;height:9px;border-radius:50%;margin:0 3px 0 10px}
+ #upd{font-size:11px;color:#999;margin:6px 4px}
+ svg{background:#f5f5f5;border:1px solid #e2e2e2;border-radius:4px}
+</style></head><body>
+<div id="hdr">
+ <span id="title"></span>
+ <span id="totals"></span>
+ <span id="mode">
+  <span id="legend"><span class="sw" style="background:#f5a623"></span>Put
+   <span class="sw" style="background:#4a80e8"></span>Call
+   <span style="color:#c0392b;margin-left:10px">- - -</span> IV</span>
+  <button id="bId">Intraday</button><button id="bOi">OI</button>
+ </span>
+</div>
+<svg id="c" width="960" height="600"></svg>
+<div id="upd"></div>
+<script>
+const D = __DATA__;
+let mode = "id";
+const NS = "http://www.w3.org/2000/svg";
+function el(tag, attrs, parent, tip){
+  const e = document.createElementNS(NS, tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  if (tip){ const t = document.createElementNS(NS, "title"); t.textContent = tip; e.appendChild(t); }
+  parent.appendChild(e); return e;
+}
+function fmt(x){ return x==null ? "--" : x.toLocaleString("en-US"); }
+function render(){
+  const svg = document.getElementById("c"); svg.innerHTML = "";
+  const W = 960, H = 600, L = 52, R = 58, T = 16, B = 34;
+  const rows = D[mode].filter(r => r[1] + r[2] > 0);
+  document.getElementById("title").textContent = D.series + (mode === "id" ? " Intraday Volume" : " Open Interest");
+  const tp = rows.reduce((a, r) => a + r[1], 0), tc = rows.reduce((a, r) => a + r[2], 0);
+  document.getElementById("totals").innerHTML =
+    'Put: <b class="put">' + fmt(tp) + '</b> &nbsp;Call: <b class="call">' + fmt(tc) +
+    '</b> &nbsp;IV' + (D.iv_src && D.iv_src !== "barchart" ? " (" + D.iv_src + ")" : "") +
+    ': <b class="iv">' + (D.iv ?? "--") + '</b>';
+  document.getElementById("bId").className = mode === "id" ? "on" : "";
+  document.getElementById("bOi").className = mode === "oi" ? "on" : "";
+  document.getElementById("upd").textContent = "updated " + D.updated + " · " + D.series +
+    " on " + D.und + " · DTE " + D.dte + " · source barchart (delayed 10-15m)";
+  if (!rows.length) return;
+  // โดเมนแกน x: ±3.5σ รอบ F (ไม่งั้นปีก OI ลากกราฟกว้างจนแท่งกลางจมหาย)
+  const sig = (D.F && D.iv && D.dte > 0) ? D.F * D.iv / 100 * Math.sqrt(D.dte / 365) : null;
+  let lo = Math.min(...rows.map(r => r[0])), hi = Math.max(...rows.map(r => r[0]));
+  if (sig && D.F){ lo = Math.max(lo, D.F - 3.5 * sig); hi = Math.min(hi, D.F + 3.5 * sig); }
+  lo -= 5; hi += 5;
+  const x = v => L + (v - lo) / (hi - lo) * (W - L - R);
+  const vrows = rows.filter(r => r[0] >= lo && r[0] <= hi);
+  const ymax = Math.max(...vrows.map(r => Math.max(r[1], r[2]))) * 1.08;
+  const y = v => T + (1 - v / ymax) * (H - T - B);
+  // แถบ SD band รอบ F (ในเข้มออกอ่อน แบบ expected range ของ CME)
+  if (sig && D.F){
+    const shades = ["#d7d7d7", "#e2e2e2", "#ececec"];  // วงใน (1σ) เข้มสุดแบบ CME
+    for (let n = 3; n >= 1; n--){
+      const a = Math.max(x(D.F - n * sig), L), b = Math.min(x(D.F + n * sig), W - R);
+      el("rect", {x: a, y: T, width: b - a, height: H - T - B, fill: shades[n - 1]}, svg,
+         "±" + n + "σ: " + (D.F - n * sig).toFixed(1) + " - " + (D.F + n * sig).toFixed(1));
+    }
+  }
+  // grid + แกนซ้าย (volume)
+  const step = Math.pow(10, Math.floor(Math.log10(ymax))) * (ymax / Math.pow(10, Math.floor(Math.log10(ymax))) > 5 ? 1 : 0.5) || 1;
+  for (let v = 0; v <= ymax; v += step){
+    el("line", {x1: L, x2: W - R, y1: y(v), y2: y(v), stroke: "#ddd", "stroke-width": 1}, svg);
+    el("text", {x: L - 6, y: y(v) + 4, "text-anchor": "end", "font-size": 11, fill: "#888"}, svg).textContent = fmt(v);
+  }
+  // แท่ง Put(ส้ม)/Call(น้ำเงิน) เคียงกันต่อ strike
+  const stepX = vrows.length > 1 ? Math.min(...vrows.slice(1).map((r, i) => r[0] - vrows[i][0])) : 5;
+  const bw = Math.max(1.5, (x(lo + stepX) - x(lo)) * 0.36);
+  for (const [s, p, c] of vrows){
+    const tip = s + "  Put " + fmt(p) + "  Call " + fmt(c) + "  Total " + fmt(p + c);
+    if (p) el("rect", {x: x(s) - bw - 0.5, y: y(p), width: bw, height: y(0) - y(p), fill: "#f5a623"}, svg, tip);
+    if (c) el("rect", {x: x(s) + 0.5, y: y(c), width: bw, height: y(0) - y(c), fill: "#4a80e8"}, svg, tip);
+  }
+  // smile IV แกนขวา (เส้นประแดง)
+  const vs = D.vs.filter(r => r[0] >= lo && r[0] <= hi);
+  if (vs.length > 2){
+    let vlo = Math.min(...vs.map(r => r[1])), vhi = Math.max(...vs.map(r => r[1]));
+    const pad = (vhi - vlo) * 0.15 + 0.5; vlo -= pad; vhi += pad;
+    const yr = v => T + (1 - (v - vlo) / (vhi - vlo)) * (H - T - B);
+    el("path", {d: vs.map((r, i) => (i ? "L" : "M") + x(r[0]).toFixed(1) + "," + yr(r[1]).toFixed(1)).join(""),
+                fill: "none", stroke: "#e05252", "stroke-width": 1.6, "stroke-dasharray": "6 4", opacity: 0.9}, svg);
+    for (let k = 0; k <= 5; k++){
+      const v = vlo + (vhi - vlo) * k / 5;
+      el("text", {x: W - R + 6, y: yr(v) + 4, "font-size": 11, fill: "#888"}, svg).textContent = v.toFixed(1);
+    }
+    el("text", {x: W - 12, y: H / 2, "font-size": 11, fill: "#aaa",
+                transform: "rotate(90 " + (W - 12) + " " + H / 2 + ")", "text-anchor": "middle"}, svg).textContent = "Volatility";
+  }
+  // เส้น Future
+  if (D.F && D.F > lo && D.F < hi){
+    el("line", {x1: x(D.F), x2: x(D.F), y1: T, y2: H - B, stroke: "#333", "stroke-width": 1.2, "stroke-dasharray": "5 3"}, svg);
+    el("text", {x: x(D.F) - 5, y: T + 8, "font-size": 11, fill: "#333",
+                transform: "rotate(90 " + (x(D.F) - 5) + " " + (T + 8) + ")"}, svg).textContent = "Future: " + fmt(D.F);
+  }
+  // แกน x
+  const t0 = Math.ceil(lo / 50) * 50;
+  for (let s = t0; s <= hi; s += 50)
+    el("text", {x: x(s), y: H - B + 18, "text-anchor": "middle", "font-size": 11, fill: "#666"}, svg).textContent = fmt(s);
+  el("text", {x: 16, y: H / 2, "font-size": 11, fill: "#aaa",
+              transform: "rotate(-90 16 " + H / 2 + ")", "text-anchor": "middle"}, svg).textContent =
+    mode === "id" ? "Intraday Volume" : "Open Interest";
+}
+document.getElementById("bId").onclick = () => { mode = "id"; render(); };
+document.getElementById("bOi").onclick = () => { mode = "oi"; render(); };
+render();
+</script></body></html>
+"""
+
+
+def chart_html(snap, now):
+    payload = {
+        "series": snap["series"], "und": snap.get("und_sym"), "F": snap["F"],
+        "dte": snap["dte"], "iv": snap["iv"], "iv_src": snap.get("iv_src"),
+        "updated": "{:%Y-%m-%d %H:%M}".format(now),
+        "id": [list(r) for r in snap["id_rows"]],
+        "oi": [list(r) for r in snap["oi_rows"]],
+        "vs": [list(r) for r in snap["vs_rows"]],
+    }
+    return CHART_TMPL.replace("__DATA__", json.dumps(payload))
+
+
 def main():
     global _deadline
     now = datetime.now()
@@ -611,7 +752,8 @@ def main():
         "oi": {str(s): [p, c] for s, p, c in oi_rows},
     })
     writes = [(JSON_OUT, json.dumps(data, ensure_ascii=False)),
-              (CLIP_OUT, clip), (PREV_STATE, new_state)]
+              (CLIP_OUT, clip), (PREV_STATE, new_state),
+              (CHART_OUT, chart_html(snap, now))]
     if curve:
         writes.append((CURVE_OUT, json.dumps(curve)))
     for path, content in writes:

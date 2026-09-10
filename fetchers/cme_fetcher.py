@@ -62,6 +62,15 @@ JSON_OUT = "/tmp/cme_putcall.json"
 CLIP_OUT = "/tmp/cme_putcall_clip.txt"
 CURVE_OUT = "/tmp/cme_curve.json"
 CHART_OUT = "/tmp/cme_chart.html"   # กราฟหน้าตาแบบ CME Vol2Vol เปิดค้างใน browser ได้
+EVENTVOL_OUT = "/tmp/cme_eventvol.json"
+
+# Event Volatility Calculator ของ QuikStrike ยังเข้า anonymous ได้ (Referer trick เดิม)
+# viewitemid จริงคือ IntegratedEventVolCalculator -- แกะจาก ContainerId ใน payload
+# (ลิงก์บน cmegroup.com เป็นแค่ iframe ครอบหน้านี้ -- ห้ามยิง cmegroup.com เอง IP โดนแบน)
+# ให้ ATM vol + forward vol รายช่วงของทุก expiration -> forward vol ที่โดดคือวันมี event
+QS_EVC_URL = ("https://cmegroup-tools.quikstrike.net/User/QuikStrikeView.aspx"
+              "?pid=40&pf=6&viewitemid=IntegratedEventVolCalculator")
+QS_REFERER = "https://www.cmegroup.com/"
 
 # SD จากราคาเปิดวัน (Yahoo แม่นกว่า investing — pattern เดียวกับ gold_fetcher.py)
 # DTE fix 0.6 = ตัดช่วงเอเชียเช้าทิ้ง / vol = IV - IVCHG เมื่อมี chg (ยุค barchart
@@ -533,6 +542,44 @@ def top_changes(rows_now, prev_map, n=2):
     return changes[:n]
 
 
+def fetch_eventvol():
+    """[{sym, expires, dte, vol, fwd}] จาก QuikStrike Event Volatility Calculator
+    (ตัวเสริม -- QuikStrike ล่ม/เปลี่ยนโครงเมื่อไหร่ก็ข้าม ไม่กระทบข้อมูลหลัก)
+    ข้อมูลฝังใน HTML เป็น $create(...EventVol.Calculator.Chart, {"JSONSettings": ...})
+    แบบเดียวกับ Vol2Vol ยุคเก่า / vol = ATM vol ของ expiration, fwd = forward vol
+    ของช่วงระหว่าง expiration ก่อนหน้า -> fwd ที่โดดจากเพื่อน = ช่วงนั้นมี event"""
+    req = urllib.request.Request(QS_EVC_URL, headers={
+        "User-Agent": UA, "Referer": QS_REFERER})
+    html = urllib.request.urlopen(req, timeout=_budget(35)).read().decode()
+    i = html.find("EventVol.Calculator.Chart")
+    if i < 0:
+        raise RuntimeError("EventVol: ไม่เจอ chart payload (โดน error/login page?)")
+    m = re.search(r'"JSONSettings":"((?:[^"\\]|\\.)*)"', html[i - 50:])
+    d = json.loads(m.group(1).encode().decode("unicode_escape"))
+    pts = []
+    for s in d.get("Series", []):
+        if s.get("name") != "Volatility":
+            continue
+        for p in s.get("data") or []:
+            try:
+                vol = float(str(p.get("vol", "")).replace("%", "").strip())
+                dte = float(p.get("dte"))
+            except (ValueError, TypeError):
+                continue
+            try:
+                fwd = float(str(p.get("forwardVol", "")).replace("%", "").strip())
+                if math.isnan(fwd):
+                    fwd = None
+            except (ValueError, TypeError):
+                fwd = None
+            pts.append({"sym": p.get("symbol"), "expires": p.get("expires"),
+                        "dte": round(dte, 2), "vol": vol, "fwd": fwd})
+    pts.sort(key=lambda x: x["dte"])
+    if not pts:
+        raise RuntimeError("EventVol: payload ว่าง")
+    return pts
+
+
 # --------------------------------------------------------------------------- #
 # กราฟ HTML หน้าตาแบบ CME Vol2Vol (เปิด /tmp/cme_chart.html ค้างใน browser ได้
 # หน้า reload ตัวเองทุก 5 นาที ข้อมูลใหม่มาตามรอบ cron) -- ทั้งไฟล์ self-contained
@@ -566,6 +613,10 @@ CHART_TMPL = r"""<!DOCTYPE html>
  </span>
 </div>
 <svg id="c" width="960" height="600"></svg>
+<div id="evhdr" style="display:none;margin:16px 4px 6px;font-size:14px;font-weight:700">
+  Forward &amp; Event Volatility <span style="font-weight:400;color:#888;font-size:12px">
+  (QuikStrike · ATM vol เส้นแดง / forward vol แท่งฟ้า — แท่งที่โดดคือช่วงมี event)</span></div>
+<svg id="ev" width="960" height="230" style="display:none"></svg>
 <div id="upd"></div>
 <script>
 const D = __DATA__;
@@ -578,6 +629,32 @@ function el(tag, attrs, parent, tip){
   parent.appendChild(e); return e;
 }
 function fmt(x){ return x==null ? "--" : x.toLocaleString("en-US"); }
+function smooth(vs){                       // median-3 + weighted MA (1,2,3,2,1)
+  if (vs.length < 5) return vs;
+  const v = vs.map(r => r[1]);
+  const med = v.map((x, i) => (i > 0 && i < v.length - 1)
+    ? [v[i-1], x, v[i+1]].sort((a, b) => a - b)[1] : x);
+  const w = [1, 2, 3, 2, 1];
+  return vs.map((r, i) => {
+    let s = 0, ws = 0;
+    for (let k = -2; k <= 2; k++){
+      const j = i + k;
+      if (j >= 0 && j < med.length){ s += med[j] * w[k + 2]; ws += w[k + 2]; }
+    }
+    return [r[0], s / ws];
+  });
+}
+function splinePath(p){                    // Catmull-Rom -> cubic bezier
+  if (p.length < 3) return p.map((q, i) => (i ? "L" : "M") + q[0].toFixed(1) + "," + q[1].toFixed(1)).join("");
+  let d = "M" + p[0][0].toFixed(1) + "," + p[0][1].toFixed(1);
+  for (let i = 0; i < p.length - 1; i++){
+    const p0 = p[Math.max(i - 1, 0)], p1 = p[i], p2 = p[i + 1], p3 = p[Math.min(i + 2, p.length - 1)];
+    const c1 = [p1[0] + (p2[0] - p0[0]) / 6, p1[1] + (p2[1] - p0[1]) / 6];
+    const c2 = [p2[0] - (p3[0] - p1[0]) / 6, p2[1] - (p3[1] - p1[1]) / 6];
+    d += "C" + c1[0].toFixed(1) + "," + c1[1].toFixed(1) + " " + c2[0].toFixed(1) + "," + c2[1].toFixed(1) + " " + p2[0].toFixed(1) + "," + p2[1].toFixed(1);
+  }
+  return d;
+}
 function render(){
   const svg = document.getElementById("c"); svg.innerHTML = "";
   const W = 960, H = 600, L = 52, R = 58, T = 16, B = 34;
@@ -625,13 +702,15 @@ function render(){
     if (p) el("rect", {x: x(s) - bw - 0.5, y: y(p), width: bw, height: y(0) - y(p), fill: "#f5a623"}, svg, tip);
     if (c) el("rect", {x: x(s) + 0.5, y: y(c), width: bw, height: y(0) - y(c), fill: "#4a80e8"}, svg, tip);
   }
-  // smile IV แกนขวา (เส้นประแดง)
-  const vs = D.vs.filter(r => r[0] >= lo && r[0] <= hi);
+  // smile IV แกนขวา (เส้นประแดง) -- ค่า computed มี noise จาก bid/ask spread
+  // เลย smooth ตอน render: median-3 กัน outlier + moving average ถ่วงน้ำหนัก
+  // แล้ววาดเป็น Catmull-Rom spline (ข้อมูลดิบใน clip/VS ไม่ถูกแตะ)
+  const vs = smooth(D.vs.filter(r => r[0] >= lo && r[0] <= hi));
   if (vs.length > 2){
     let vlo = Math.min(...vs.map(r => r[1])), vhi = Math.max(...vs.map(r => r[1]));
     const pad = (vhi - vlo) * 0.15 + 0.5; vlo -= pad; vhi += pad;
     const yr = v => T + (1 - (v - vlo) / (vhi - vlo)) * (H - T - B);
-    el("path", {d: vs.map((r, i) => (i ? "L" : "M") + x(r[0]).toFixed(1) + "," + yr(r[1]).toFixed(1)).join(""),
+    el("path", {d: splinePath(vs.map(r => [x(r[0]), yr(r[1])])),
                 fill: "none", stroke: "#e05252", "stroke-width": 1.6, "stroke-dasharray": "6 4", opacity: 0.9}, svg);
     for (let k = 0; k <= 5; k++){
       const v = vlo + (vhi - vlo) * k / 5;
@@ -654,14 +733,45 @@ function render(){
               transform: "rotate(-90 16 " + H / 2 + ")", "text-anchor": "middle"}, svg).textContent =
     mode === "id" ? "Intraday Volume" : "Open Interest";
 }
+function renderEv(){
+  const ev = (D.ev || []).slice(0, 14);   // 14 expiration ใกล้สุดพอ
+  if (ev.length < 2) return;
+  document.getElementById("evhdr").style.display = "block";
+  const svg = document.getElementById("ev"); svg.style.display = "block"; svg.innerHTML = "";
+  const W = 960, H = 230, L = 52, R = 58, T = 12, B = 44;
+  const xi = i => L + (i + 0.5) * (W - L - R) / ev.length;
+  const vmax = Math.max(...ev.map(p => Math.max(p.vol, p.fwd || 0))) * 1.15;
+  const y = v => T + (1 - v / vmax) * (H - T - B);
+  for (let v = 0; v <= vmax; v += vmax > 20 ? 10 : 5){
+    el("line", {x1: L, x2: W - R, y1: y(v), y2: y(v), stroke: "#ddd"}, svg);
+    el("text", {x: L - 6, y: y(v) + 4, "text-anchor": "end", "font-size": 10, fill: "#888"}, svg).textContent = v;
+  }
+  const bw = Math.min(26, (W - L - R) / ev.length * 0.55);
+  ev.forEach((p, i) => {
+    const tip = p.sym + "  exp " + p.expires + "  DTE " + p.dte + "\nATM vol " + p.vol + "%" +
+                (p.fwd != null ? "\nforward vol " + p.fwd + "%" : "");
+    if (p.fwd != null)
+      el("rect", {x: xi(i) - bw / 2, y: y(p.fwd), width: bw, height: y(0) - y(p.fwd),
+                  fill: "#9db8e8"}, svg, tip);
+    el("text", {x: xi(i), y: H - B + 13, "text-anchor": "middle", "font-size": 9.5, fill: "#666"}, svg)
+      .textContent = p.expires.replace(/\/20\d\d$/, "");
+    el("text", {x: xi(i), y: H - B + 25, "text-anchor": "middle", "font-size": 9, fill: "#aaa"}, svg)
+      .textContent = p.sym;
+  });
+  el("path", {d: splinePath(ev.map((p, i) => [xi(i), y(p.vol)])),
+              fill: "none", stroke: "#c0392b", "stroke-width": 1.6}, svg);
+  ev.forEach((p, i) =>
+    el("circle", {cx: xi(i), cy: y(p.vol), r: 2.6, fill: "#c0392b"}, svg,
+       p.sym + " ATM vol " + p.vol + "%"));
+}
 document.getElementById("bId").onclick = () => { mode = "id"; render(); };
 document.getElementById("bOi").onclick = () => { mode = "oi"; render(); };
-render();
+render(); renderEv();
 </script></body></html>
 """
 
 
-def chart_html(snap, now):
+def chart_html(snap, now, ev=None):
     payload = {
         "series": snap["series"], "und": snap.get("und_sym"), "F": snap["F"],
         "dte": snap["dte"], "iv": snap["iv"], "iv_src": snap.get("iv_src"),
@@ -669,6 +779,7 @@ def chart_html(snap, now):
         "id": [list(r) for r in snap["id_rows"]],
         "oi": [list(r) for r in snap["oi_rows"]],
         "vs": [list(r) for r in snap["vs_rows"]],
+        "ev": ev or [],
     }
     return CHART_TMPL.replace("__DATA__", json.dumps(payload))
 
@@ -681,6 +792,17 @@ def main():
     # แหล่งเดียว: barchart (CME/QuikStrike Vol2Vol ถูกถอดออก ก.ย. 2026)
     snap = snapshot_barchart()
     snap = inherit_same_day(snap)
+
+    # Event Volatility จาก QuikStrike -- ตัวเสริม พังก็ข้าม (ใช้ของเก่าใน chart ไม่ได้
+    # เพราะ forward vol เปลี่ยนรายวัน แต่ EVENTVOL_OUT ไฟล์เก่ายังอยู่ให้ดูย้อน)
+    ev = None
+    try:
+        ev = fetch_eventvol()
+        print("[{:%Y-%m-%d %H:%M:%S}] eventvol ok {} expirations".format(now, len(ev)),
+              file=sys.stderr)
+    except Exception as e:
+        print("[{:%Y-%m-%d %H:%M:%S}] eventvol พัง (ข้าม): {}: {}".format(
+            now, type(e).__name__, str(e)[:80]), file=sys.stderr)
 
     meta = {"series": snap["series"], "F": snap["F"], "dte": snap["dte"],
             "iv": snap["iv"], "future_chg": snap["future_chg"]}
@@ -753,9 +875,11 @@ def main():
     })
     writes = [(JSON_OUT, json.dumps(data, ensure_ascii=False)),
               (CLIP_OUT, clip), (PREV_STATE, new_state),
-              (CHART_OUT, chart_html(snap, now))]
+              (CHART_OUT, chart_html(snap, now, ev))]
     if curve:
         writes.append((CURVE_OUT, json.dumps(curve)))
+    if ev:
+        writes.append((EVENTVOL_OUT, json.dumps({"ts": now.timestamp(), "points": ev})))
     for path, content in writes:
         tmp = path + ".tmp"
         with open(tmp, "w") as f:

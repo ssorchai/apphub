@@ -70,9 +70,17 @@ crontab ปัจจุบัน:
   + `/tmp/cme_curve.json` (futures curve — ยุค barchart ได้ฟรีจาก quotes คอลเดียว
   เลยดึงทุกรอบ ไม่ต้อง gate 12 ชม. แบบเดิม; spread คิดใน feed เดียวกันเสมอ)
   + `/tmp/cme_chart.html` — **กราฟหน้าตาแบบ CME Vol2Vol** (แท่ง Put ส้ม/Call น้ำเงิน
-  รายสไตรค์ สลับ Intraday/OI ได้, smile IV เส้นประแดงแกนขวา, เส้น Future, SD band
-  ±1-3σ วงในเข้มสุด) self-contained เปิด `open /tmp/cme_chart.html` ค้างไว้ได้
-  หน้า reload ตัวเองทุก 5 นาที รับข้อมูลใหม่ตามรอบ cron
+  รายสไตรค์ สลับ Intraday/OI ได้, smile IV เส้นประแดงแกนขวา — smooth ตอน render
+  ด้วย median-3 + weighted MA + Catmull-Rom โดยข้อมูลดิบใน clip ไม่ถูกแตะ,
+  เส้น Future, SD band ±1-3σ วงในเข้มสุด) self-contained เปิด
+  `open /tmp/cme_chart.html` ค้างไว้ได้ หน้า reload ตัวเองทุก 5 นาที
+  + `/tmp/cme_eventvol.json` + panel ที่สองในกราฟ — **Forward & Event Volatility**
+  จาก QuikStrike Event Volatility Calculator (**ยัง anonymous ได้**: viewitemid จริงคือ
+  `IntegratedEventVolCalculator` — แกะจาก ContainerId ใน payload, ชื่อเมนู
+  "EventVolCalculator" ใช้เป็น viewitemid ตรงๆ ไม่ได้ / หน้า cmegroup.com เป็นแค่
+  iframe ครอบ ห้ามยิงเอง) ATM vol เส้นแดง + forward vol แท่งฟ้ารายช่วง — แท่งที่โดด
+  คือช่วงมี event (เช่น 16 ก.ย. 26 fwd 42% = FOMC) / เป็นตัวเสริม best-effort
+  QuikStrike พังก็ข้าม ไม่กระทบข้อมูลหลักและ exit code
   / งบเวลารวม 90s (แหล่งเดียวแล้ว ไม่ต้องแบ่งงบต่อแหล่งแบบยุค fallback chain)
   exit code **2 = ฝั่งแหล่งข้อมูลล่ม** / 1 = error อื่น / 0 = ปกติ
   — ล้มเหลวแล้ว**ไม่เขียนทับไฟล์เดิม** widget ขึ้น STALE เองหลัง 2 ชม. และกด ↻ เองได้

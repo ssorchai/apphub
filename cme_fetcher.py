@@ -21,20 +21,33 @@ same-origin` (พิสูจน์ 10 ก.ย.: ไม่ต้องมี coo
     เฉยๆ คืน null / หน่วยเป็น % อยู่แล้ว)
   - F + curve: quotes ของ underlying + futures 3 เดือนใกล้สุดในคอลเดียว
 
-IV วัน 0DTE: barchart คืน optImpliedVolatility=0 ทั้ง chain "ในวันหมดอายุของ series
-นั้นเอง" (หน้าเว็บจริงก็ว่าง -- ข้อจำกัดฝั่งเขา) -> คำนวณเองจาก premium (Black-76 +
-bisection, t=dte/365 day-count เดียวกับสูตร SD) เฉพาะฝั่ง OTM ที่มี volume วันนี้
+QuikStrike ยังใช้ได้ 2 view แบบ anonymous (Referer จาก cmegroup.com เหมือนยุค Vol2Vol
+-- viewitemid หาโดยจำลอง postback กดเมนูให้เซิร์ฟเวอร์เฉลย ชื่อในเมนูใช้ตรงๆ ไม่ได้):
+  - IntegratedEventVolCalculator -> event vol ของ 0DTE = **IV หลักที่ใช้คิด SD**
+    (forward vol ครอบช่วงที่จบวันนี้ วันมี event เช่น FOMC จะกว้างกว่าปกติ)
+    ⚠️ ค่านี้ re-mark ระหว่างวัน ตอนเช้าจะเท่า settle แล้วค่อยขยับตามตลาด
+  - IntegratedSettlementSheet -> ตาราง #pricing-sheet: **settle vol + Vol Chg รายสไตรค์**
+    ของ CME = smile ที่เอาไป plot (VS) และเป็นคู่เดียวที่ใช้สูตร Vol - Vol Chg ได้
+    เลือก expiration เองด้วย postback (จับคู่จากวันหมดอายุใน title ของ anchor เพราะ
+    barchart/QuikStrike ใช้คนละระบบรหัส: I0HU26 vs G2RU6) + ตั้ง ddlStrikes=(All)
+
+IV สำรองเมื่อ QuikStrike ล่ม: barchart คืน optImpliedVolatility=0 ทั้ง chain "ในวัน
+หมดอายุของ series นั้นเอง" (หน้าเว็บจริงก็ว่าง) -> คำนวณเองจาก mid ของ bid/ask
+(Black-76 + bisection, t=dte/365 day-count เดียวกับสูตร SD) ฝั่ง OTM
 / ไม่ได้อีกค่อย inherit จาก clip เดิมของวันเดียวกัน
-(QuikStrike PricingSheet ของเพื่อนยังหา URL จริงไม่เจอ ได้เมื่อไหร่ค่อยต่อเพิ่ม)
 
 Output (atomic เขียน .tmp แล้ว os.replace เหมือน fetcher ตัวอื่น):
   /tmp/cme_putcall.json      ให้ cme-putcall.jsx (Übersicht) อ่านแสดงผล
   /tmp/cme_putcall_clip.txt  string สำหรับ paste ลงช่อง P/C ของ oi_block.pine:
-      F:4405.6|D:2026-09-10 16:55|S:I0HU26|IV:23.57|IVCHG:|DTE:0.419
+      F:4407.7|D:2026-09-10 17:29|S:I0HU26|IV:41.55|IVCHG:|DTE:0.292|IVS:31.54|IVSCHG:3.69
       ID;4090:12:5;4100:44:10;...        (strike:put:call เฉพาะที่มีของ)
       OI;4000:821:66;...
-      VS;3900:31.87;3925:30.12;...       (strike:vol% ใช้วาด smile -- เป็น IV
-                                          "ปัจจุบัน" delayed ไม่ใช่ settle แบบเดิม)
+      VS;3900:31.87;3925:30.12;...       (strike:vol% = settle vol ของ CME นิ่งทั้งวัน)
+      IV/IVCHG = ตัวที่ใช้คิด SD (ปกติ IV = event vol, IVCHG ว่างเพราะ Vol Chg เป็นของ
+      คู่ settle -- เอามาลบ event vol จะไม่มีความหมาย) / IVS,IVSCHG = คู่ settle ของ CME
+      คีย์ IVS/IVSCHG เป็นของใหม่ ฝั่ง Pine จับคีย์ทีละตัวจึงข้ามคีย์ที่ไม่รู้จักเงียบๆ
+  /tmp/cme_eventvol.json     จุด event vol ของ 0DTE (vol/forward vol)
+  /tmp/cme_chart.html        กราฟแบบ CME Vol2Vol (แท่ง P/C + smile settle + SD band)
   /tmp/cme_curve.json        futures curve ให้ gold_fetcher ทำ Theory Diff
 
 cron รายชั่วโมง:
@@ -53,6 +66,7 @@ import sys
 import time
 import urllib.parse
 import urllib.request
+import http.cookiejar
 from datetime import date, datetime, timedelta
 
 UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
@@ -70,7 +84,19 @@ EVENTVOL_OUT = "/tmp/cme_eventvol.json"
 # ให้ ATM vol + forward vol รายช่วงของทุก expiration -> forward vol ที่โดดคือวันมี event
 QS_EVC_URL = ("https://cmegroup-tools.quikstrike.net/User/QuikStrikeView.aspx"
               "?pid=40&pf=6&viewitemid=IntegratedEventVolCalculator")
+# Settlement Sheet = ตาราง #pricing-sheet ตัวเดียวกับที่ script ของเพื่อนอ่าน และ
+# **เข้า anonymous ได้** (viewitemid จริง = IntegratedSettlementSheet -- ชื่อในเมนูคือ
+# "Settlement Prices" หา viewitemid ด้วยการจำลอง postback กดเมนูให้เซิร์ฟเวอร์เฉลยเอง)
+# ให้ settle vol + Vol Chg "รายสไตรค์" ของ CME = smile settle จริงแบบยุค Vol2Vol
+QS_SETTLE_URL = ("https://cmegroup-tools.quikstrike.net/User/QuikStrikeView.aspx"
+                 "?pid=40&pf=6&viewitemid=IntegratedSettlementSheet")
 QS_REFERER = "https://www.cmegroup.com/"
+QS_BUDGET = 45          # งบแยกของ QuikStrike -- ตัวเสริม ห้ามกินงบจนกระทบข้อมูลหลัก
+
+# คอลัมน์ของตาราง #pricing-sheet (ยืนยัน 10 ก.ย. 26 จาก header สองชั้น:
+# Call[Chg,Prior,Settle] | Strike | Put[Settle,Prior,Chg] | Volatility[S,P,C] |
+# BasisPointVol[S,P,C] | BlackScholesVol[S,P,C] | OpenInterest[Call,CallChg,Put,PutChg])
+SHEET_STRIKE, SHEET_VOL, SHEET_VOLCHG, SHEET_NCOL = 3, 7, 9, 20
 
 # SD จากราคาเปิดวัน (Yahoo แม่นกว่า investing — pattern เดียวกับ gold_fetcher.py)
 # DTE fix 0.6 = ตัดช่วงเอเชียเช้าทิ้ง / vol = IV - IVCHG เมื่อมี chg (ยุค barchart
@@ -440,6 +466,7 @@ def snapshot_barchart():
 
     return {
         "source": "barchart", "series": series, "und_sym": und_sym,
+        "expiry": expiry,
         "F": F, "dte": dte, "iv": round(iv, 2) if iv is not None else None,
         "iv_chg": None, "future_chg": None, "iv_src": iv_src,
         "id_rows": id_rows, "oi_rows": oi_rows, "vs_rows": vs_rows, "curve": curve,
@@ -542,6 +569,120 @@ def top_changes(rows_now, prev_map, n=2):
     return changes[:n]
 
 
+def _qs_opener():
+    jar = http.cookiejar.CookieJar()
+    op = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
+    op.addheaders = [("User-Agent", UA), ("Referer", QS_REFERER)]
+    return op
+
+
+def _qs_selects(html):
+    """{name: ค่าที่เลือกอยู่} ของ <select> ทุกตัวในฟอร์ม -- ASP.NET อ่าน state ของ
+    control จากฟอร์มที่ POST กลับ ถ้าไม่ส่งไปด้วยมันจะรีเซ็ตเป็น option แรก"""
+    out = {}
+    for m in re.finditer(r'<select[^>]*name="([^"]+)"[^>]*>(.*?)</select>', html, re.S):
+        opts = re.findall(r'<option([^>]*)value="([^"]*)"', m.group(2))
+        sel = next((v for a, v in opts if "selected" in a), opts[0][1] if opts else "")
+        out[m.group(1)] = sel
+    return out
+
+
+def _qs_postback(op, url, html, target, extra=None):
+    """จำลอง __doPostBack ของ WebForms (ส่ง __VIEWSTATE เดิมกลับ + __EVENTTARGET)"""
+    def val(n):
+        m = re.search(r'id="{}" value="([^"]*)"'.format(n), html)
+        return m.group(1) if m else ""
+    fields = _qs_selects(html)
+    fields.update({
+        "__EVENTTARGET": target, "__EVENTARGUMENT": "",
+        "__VIEWSTATE": val("__VIEWSTATE"),
+        "__VIEWSTATEGENERATOR": val("__VIEWSTATEGENERATOR"),
+        "__EVENTVALIDATION": val("__EVENTVALIDATION")})
+    fields.update(extra or {})
+    data = urllib.parse.urlencode(fields).encode()
+    req = urllib.request.Request(url, data=data, headers={
+        "User-Agent": UA, "Referer": url,
+        "Content-Type": "application/x-www-form-urlencoded"})
+    return op.open(req, timeout=_budget(35)).read().decode()
+
+
+def _parse_sheet(html):
+    """ตาราง #pricing-sheet -> ([(strike, vol_settle)], {strike: vol_chg})"""
+    m = re.search(r'id="pricing-sheet"(.*?)</table>', html, re.S)
+    if not m:
+        raise RuntimeError("settle sheet: ไม่เจอตาราง #pricing-sheet")
+    vs, chg = [], {}
+    for tr in re.findall(r"<tr[^>]*>(.*?)</tr>", m.group(1), re.S):
+        tds = [re.sub("<[^>]+>", "", td).replace("&nbsp;", "").replace(",", "").strip()
+               for td in re.findall(r"<td[^>]*>(.*?)</td>", tr, re.S)]
+        if len(tds) < SHEET_NCOL:
+            continue
+        try:
+            k = float(tds[SHEET_STRIKE])
+            v = float(tds[SHEET_VOL].replace("%", ""))
+            c = float(tds[SHEET_VOLCHG].replace("%", ""))
+        except ValueError:
+            continue
+        if k < 100 or not (0 < v < 300):   # กันแถวสรุป/แถวหัวที่หลุด filter มา
+            continue
+        k = int(k) if k == int(k) else k
+        vs.append((k, v))
+        chg[k] = c
+    if not vs:
+        raise RuntimeError("settle sheet: parse ไม่ได้สักแถว (โครงตารางเปลี่ยน?)")
+    vs.sort()
+    return vs, chg
+
+
+def fetch_settle_sheet(expiry):
+    """smile settle ของ CME รายสไตรค์ สำหรับ series ที่หมดอายุวันที่ expiry
+    -> (vs_rows, chg_map, qs_sym)
+
+    ต้องเลือก expiration ใน selector เองด้วย postback: default ของหน้าคือ series ถัดไป
+    ไม่ใช่ 0DTE / จับคู่จาก attribute title ของ anchor ซึ่งมีข้อมูลครบ (ชื่อสัญลักษณ์
+    อยู่ใน <div> ข้างในอีกที ใช้ text ของ anchor จับไม่ได้):
+      title="Option Contract:\tSep 2026
+             Option Expiration:\t9/10/2026 (0.31 DTE)
+             Option Symbol:\t\tG2RU6 ..."
+    จับด้วย "วันหมดอายุ" ไม่ใช่ชื่อ -- barchart กับ QuikStrike ใช้คนละระบบรหัส
+    (I0HU26 vs G2RU6) วันหมดอายุเป็นตัวเชื่อมเดียวที่เชื่อได้"""
+    op = _qs_opener()
+    r = op.open(urllib.request.Request(QS_SETTLE_URL, headers={
+        "User-Agent": UA, "Referer": QS_REFERER}), timeout=_budget(35))
+    html = r.read().decode()
+    url = r.geturl()
+    _qs_check_page(html, url)
+    want = "{}/{}/{}".format(expiry.month, expiry.day, expiry.year)
+    target = qs_sym = None
+    for m in re.finditer(r'title="([^"]*Option Expiration:[^"]*)"[^>]*?'
+                         r'href="javascript:__doPostBack\(&#39;([^&]*\$lbExpiration)&#39;', html):
+        title = m.group(1)
+        if re.search(r"Option Expiration:\s*" + re.escape(want) + r"\b", title):
+            target = m.group(2)
+            sm = re.search(r"Option Symbol:\s*([A-Z0-9]+)", title)
+            qs_sym = sm.group(1) if sm else None
+            break
+    if not target:
+        raise RuntimeError("settle sheet: ไม่เจอ expiration {} ใน selector".format(want))
+    # ddlStrikes = -1 คือ "(All)" -- default ของหน้าคือ 25 สไตรค์รอบ ATM ซึ่งแคบกว่ากรอบ
+    # 3σ ที่ใช้เทรด และ ladder นี้ถูกใช้เป็นแกนของ WormHole ฝั่ง Pine ด้วย
+    extra = {n: "-1" for n in _qs_selects(html) if n.endswith("ddlStrikes")}
+    html = _qs_postback(op, url, html, target, extra)
+    _qs_check_page(html)
+    vs, chg = _parse_sheet(html)
+    return vs, chg, qs_sym
+
+
+def _qs_check_page(html, url=""):
+    """จับหน้า error/login ของ QuikStrike (ทั้งคู่ตอบ HTTP 200 -- ดู status ไม่พอ)"""
+    if "/Error/ErrorPage.aspx" in url or "QuikStrike Error" in html[:3000]:
+        m = re.search(r"MSG=([^&]*)", url)
+        msg = urllib.parse.unquote_plus(m.group(1)).strip()[:80] if m else "ไม่ทราบสาเหตุ"
+        raise RuntimeError("QuikStrike error page: " + msg)
+    if "/Account/Login.aspx" in url:
+        raise RuntimeError("QuikStrike เด้งไปหน้า login (โดน bot detection?)")
+
+
 def fetch_eventvol():
     """[{sym, expires, dte, vol, fwd}] จาก QuikStrike Event Volatility Calculator
     (ตัวเสริม -- QuikStrike ล่ม/เปลี่ยนโครงเมื่อไหร่ก็ข้าม ไม่กระทบข้อมูลหลัก)
@@ -590,10 +731,11 @@ CHART_TMPL = r"""<!DOCTYPE html>
 <title>Gold 0DTE Put/Call</title>
 <style>
  body{font-family:-apple-system,Helvetica,Arial,sans-serif;background:#fafafa;margin:14px;color:#222}
- #hdr{display:flex;align-items:baseline;gap:24px;margin:2px 4px 8px}
- #title{font-size:19px;font-weight:700}
- #totals{font-size:14px}
+ #hdr{display:flex;align-items:baseline;flex-wrap:wrap;gap:6px 18px;margin:2px 4px 8px}
+ #title{font-size:19px;font-weight:700;white-space:nowrap}
+ #totals{font-size:14px;white-space:nowrap}
  #totals b.put{color:#f5a623}#totals b.call{color:#4a80e8}#totals b.iv{color:#c0392b}
+ #totals b.ev{color:#7b52c0}
  #mode{margin-left:auto;display:flex;gap:6px;align-items:center}
  #mode button{border:1px solid #ccc;background:#fff;padding:3px 12px;border-radius:4px;cursor:pointer;font-size:12px}
  #mode button.on{background:#4a80e8;color:#fff;border-color:#4a80e8}
@@ -608,15 +750,11 @@ CHART_TMPL = r"""<!DOCTYPE html>
  <span id="mode">
   <span id="legend"><span class="sw" style="background:#f5a623"></span>Put
    <span class="sw" style="background:#4a80e8"></span>Call
-   <span style="color:#c0392b;margin-left:10px">- - -</span> IV</span>
+   <span style="color:#c0392b;margin-left:10px">- - -</span> Vol Settle</span>
   <button id="bId">Intraday</button><button id="bOi">OI</button>
  </span>
 </div>
 <svg id="c" width="960" height="600"></svg>
-<div id="evhdr" style="display:none;margin:16px 4px 6px;font-size:14px;font-weight:700">
-  Forward &amp; Event Volatility <span style="font-weight:400;color:#888;font-size:12px">
-  (QuikStrike · ATM vol เส้นแดง / forward vol แท่งฟ้า — แท่งที่โดดคือช่วงมี event)</span></div>
-<svg id="ev" width="960" height="230" style="display:none"></svg>
 <div id="upd"></div>
 <script>
 const D = __DATA__;
@@ -661,14 +799,24 @@ function render(){
   const rows = D[mode].filter(r => r[1] + r[2] > 0);
   document.getElementById("title").textContent = D.series + (mode === "id" ? " Intraday Volume" : " Open Interest");
   const tp = rows.reduce((a, r) => a + r[1], 0), tc = rows.reduce((a, r) => a + r[2], 0);
-  document.getElementById("totals").innerHTML =
-    'Put: <b class="put">' + fmt(tp) + '</b> &nbsp;Call: <b class="call">' + fmt(tc) +
-    '</b> &nbsp;IV' + (D.iv_src && D.iv_src !== "barchart" ? " (" + D.iv_src + ")" : "") +
-    ': <b class="iv">' + (D.iv ?? "--") + '</b>';
+  // แถวตัวเลข: VolSettle (+Chg) แบบ CME + Event Vol ของ 0DTE / ตัวที่ขีดเส้นใต้คือตัวที่คิด SD
+  const un = k => D.iv_src === k ? "border-bottom:2px solid currentColor" : "";
+  let s = 'Put: <b class="put">' + fmt(tp) + '</b> &nbsp;Call: <b class="call">' + fmt(tc) + '</b>';
+  if (D.iv_settle != null)
+    s += ' &nbsp;VolSettle: <b class="iv" style="' + un("settle") + '">' + D.iv_settle + '</b>' +
+         (D.iv_settle_chg != null ? ' <span style="color:#999">(' +
+          (D.iv_settle_chg > 0 ? "+" : "") + D.iv_settle_chg + ')</span>' : "");
+  if (D.iv_event != null)
+    s += ' &nbsp;EventVol 0DTE: <b class="ev" style="' + un("event") + '">' + D.iv_event + '</b>';
+  if (D.iv_settle == null && D.iv_event == null)
+    s += ' &nbsp;IV (' + D.iv_src + '): <b class="iv">' + (D.iv ?? "--") + '</b>';
+  document.getElementById("totals").innerHTML = s;
   document.getElementById("bId").className = mode === "id" ? "on" : "";
   document.getElementById("bOi").className = mode === "oi" ? "on" : "";
   document.getElementById("upd").textContent = "updated " + D.updated + " · " + D.series +
-    " on " + D.und + " · DTE " + D.dte + " · source barchart (delayed 10-15m)";
+    (D.qs_sym ? " (" + D.qs_sym + ")" : "") + " on " + D.und + " · DTE " + D.dte +
+    " · P/C barchart delayed 10-15m · vol CME settle+event (QuikStrike)" +
+    " · ขีดเส้นใต้ = ตัวที่ใช้คิด SD";
   if (!rows.length) return;
   // โดเมนแกน x: ±3.5σ รอบ F (ไม่งั้นปีก OI ลากกราฟกว้างจนแท่งกลางจมหาย)
   const sig = (D.F && D.iv && D.dte > 0) ? D.F * D.iv / 100 * Math.sqrt(D.dte / 365) : null;
@@ -733,40 +881,9 @@ function render(){
               transform: "rotate(-90 16 " + H / 2 + ")", "text-anchor": "middle"}, svg).textContent =
     mode === "id" ? "Intraday Volume" : "Open Interest";
 }
-function renderEv(){
-  const ev = (D.ev || []).slice(0, 14);   // 14 expiration ใกล้สุดพอ
-  if (ev.length < 2) return;
-  document.getElementById("evhdr").style.display = "block";
-  const svg = document.getElementById("ev"); svg.style.display = "block"; svg.innerHTML = "";
-  const W = 960, H = 230, L = 52, R = 58, T = 12, B = 44;
-  const xi = i => L + (i + 0.5) * (W - L - R) / ev.length;
-  const vmax = Math.max(...ev.map(p => Math.max(p.vol, p.fwd || 0))) * 1.15;
-  const y = v => T + (1 - v / vmax) * (H - T - B);
-  for (let v = 0; v <= vmax; v += vmax > 20 ? 10 : 5){
-    el("line", {x1: L, x2: W - R, y1: y(v), y2: y(v), stroke: "#ddd"}, svg);
-    el("text", {x: L - 6, y: y(v) + 4, "text-anchor": "end", "font-size": 10, fill: "#888"}, svg).textContent = v;
-  }
-  const bw = Math.min(26, (W - L - R) / ev.length * 0.55);
-  ev.forEach((p, i) => {
-    const tip = p.sym + "  exp " + p.expires + "  DTE " + p.dte + "\nATM vol " + p.vol + "%" +
-                (p.fwd != null ? "\nforward vol " + p.fwd + "%" : "");
-    if (p.fwd != null)
-      el("rect", {x: xi(i) - bw / 2, y: y(p.fwd), width: bw, height: y(0) - y(p.fwd),
-                  fill: "#9db8e8"}, svg, tip);
-    el("text", {x: xi(i), y: H - B + 13, "text-anchor": "middle", "font-size": 9.5, fill: "#666"}, svg)
-      .textContent = p.expires.replace(/\/20\d\d$/, "");
-    el("text", {x: xi(i), y: H - B + 25, "text-anchor": "middle", "font-size": 9, fill: "#aaa"}, svg)
-      .textContent = p.sym;
-  });
-  el("path", {d: splinePath(ev.map((p, i) => [xi(i), y(p.vol)])),
-              fill: "none", stroke: "#c0392b", "stroke-width": 1.6}, svg);
-  ev.forEach((p, i) =>
-    el("circle", {cx: xi(i), cy: y(p.vol), r: 2.6, fill: "#c0392b"}, svg,
-       p.sym + " ATM vol " + p.vol + "%"));
-}
 document.getElementById("bId").onclick = () => { mode = "id"; render(); };
 document.getElementById("bOi").onclick = () => { mode = "oi"; render(); };
-render(); renderEv();
+render();
 </script></body></html>
 """
 
@@ -775,6 +892,8 @@ def chart_html(snap, now, ev=None):
     payload = {
         "series": snap["series"], "und": snap.get("und_sym"), "F": snap["F"],
         "dte": snap["dte"], "iv": snap["iv"], "iv_src": snap.get("iv_src"),
+        "iv_event": snap.get("iv_event"), "iv_settle": snap.get("iv_settle"),
+        "iv_settle_chg": snap.get("iv_settle_chg"), "qs_sym": snap.get("qs_sym"),
         "updated": "{:%Y-%m-%d %H:%M}".format(now),
         "id": [list(r) for r in snap["id_rows"]],
         "oi": [list(r) for r in snap["oi_rows"]],
@@ -793,16 +912,56 @@ def main():
     snap = snapshot_barchart()
     snap = inherit_same_day(snap)
 
-    # Event Volatility จาก QuikStrike -- ตัวเสริม พังก็ข้าม (ใช้ของเก่าใน chart ไม่ได้
-    # เพราะ forward vol เปลี่ยนรายวัน แต่ EVENTVOL_OUT ไฟล์เก่ายังอยู่ให้ดูย้อน)
-    ev = None
+    # ---- ส่วนเสริมจาก QuikStrike (งบเวลาแยก / พังก็ข้าม ไม่กระทบข้อมูลหลักและ exit code) ----
+    # 1) Event Vol Calculator: เอาเฉพาะ "จุด 0DTE" ตามที่ใช้จริง (จับคู่ด้วยวันหมดอายุ
+    #    ไม่ใช่ชื่อ -- QuikStrike ใช้รหัส CME 'G2RU6' ส่วน barchart ใช้ 'I0HU26')
+    #    -> ได้ทั้ง event vol (forward vol ของช่วงที่จบวันนี้) และรหัส CME ของ series
+    # 2) Settlement Sheet: smile settle + Vol Chg รายสไตรค์ของ series เดียวกันนั้น
+    _deadline = time.monotonic() + QS_BUDGET
+    ev0 = qs_sym = None
     try:
-        ev = fetch_eventvol()
-        print("[{:%Y-%m-%d %H:%M:%S}] eventvol ok {} expirations".format(now, len(ev)),
-              file=sys.stderr)
+        for p in fetch_eventvol():
+            if datetime.strptime(p["expires"], "%m/%d/%Y").date() == snap["expiry"]:
+                ev0, qs_sym = p, p["sym"]
+                break
+        print("[{:%Y-%m-%d %H:%M:%S}] eventvol 0DTE {}".format(now, ev0), file=sys.stderr)
     except Exception as e:
         print("[{:%Y-%m-%d %H:%M:%S}] eventvol พัง (ข้าม): {}: {}".format(
             now, type(e).__name__, str(e)[:80]), file=sys.stderr)
+
+    iv_settle = iv_settle_chg = None
+    if True:
+        try:
+            vs_settle, chg_map, sheet_sym = fetch_settle_sheet(snap["expiry"])
+            qs_sym = qs_sym or sheet_sym
+            iv_settle = iv_at(vs_settle, snap["F"])
+            iv_settle = round(iv_settle, 2) if iv_settle is not None else None
+            # ladder "(All)" ยาวถึง 3000-6000 และปีกไกลมี vol หลักร้อย (ของจริงแต่ทำให้
+            # smile ที่ plot เพี้ยนหมด) -- ตัดที่ 2.5x ATM กติกาเดียวกับ smile ที่คำนวณเอง
+            if iv_settle:
+                vs_settle = [(s, v) for s, v in vs_settle if v <= iv_settle * 2.5]
+            snap["vs_rows"] = vs_settle          # smile ที่ plot = settle ของ CME
+            snap["iv_src"] = "settle"
+            iv_settle_chg = iv_at(sorted(chg_map.items()), snap["F"])
+            iv_settle_chg = round(iv_settle_chg, 2) if iv_settle_chg is not None else None
+            print("[{:%Y-%m-%d %H:%M:%S}] settle sheet {} ok {} strikes ATM {} chg {}".format(
+                now, sheet_sym, len(vs_settle), iv_settle, iv_settle_chg), file=sys.stderr)
+        except Exception as e:
+            print("[{:%Y-%m-%d %H:%M:%S}] settle sheet พัง (ข้าม): {}: {}".format(
+                now, type(e).__name__, str(e)[:80]), file=sys.stderr)
+
+    # IV หลักที่ใช้คิด SD = event vol ของ 0DTE (forward vol ครอบช่วงที่จบวันนี้ -- วันมี
+    # event เช่น FOMC จะกว้างกว่า settle vol เอง) ไล่ fallback: event -> settle -> computed
+    snap["iv_event"] = ev0.get("fwd") if ev0 else None
+    snap["iv_settle"] = iv_settle
+    snap["iv_settle_chg"] = iv_settle_chg
+    if snap["iv_event"] is not None:
+        snap["iv"], snap["iv_src"] = snap["iv_event"], "event"
+    elif iv_settle is not None:
+        snap["iv"], snap["iv_src"] = iv_settle, "settle"
+    # IVCHG ต้องว่างเมื่อ IV เป็น event vol: ฝั่ง Pine คิด vol = IV - IVCHG ซึ่งเป็นสูตร
+    # ของคู่ settle เท่านั้น เอา settle chg ไปลบ event vol จะได้ค่าที่ไม่มีความหมาย
+    snap["iv_chg"] = None if snap["iv_src"] == "event" else iv_settle_chg
 
     meta = {"series": snap["series"], "F": snap["F"], "dte": snap["dte"],
             "iv": snap["iv"], "future_chg": snap["future_chg"]}
@@ -829,11 +988,16 @@ def main():
         "oi": top_changes(oi_rows, prev.get("oi", {}), n=4) if prev else [],
     }
 
-    header = ("F:{}|D:{:%Y-%m-%d %H:%M}|S:{}|IV:{}|IVCHG:{}|DTE:{}".format(
+    # IVS/IVSCHG = settle vol ของ CME (คู่ที่ใช้สูตร Vol - Vol Chg ได้) เพิ่มเข้ามาใหม่ --
+    # parser ฝั่ง Pine จับคีย์แบบ if ทีละตัว คีย์ที่ไม่รู้จักถูกข้ามเงียบๆ จึงเข้ากันได้กับ
+    # indicator เวอร์ชันปัจจุบัน (ถ้าจะเพิ่มโหมด SD จาก settle ค่อยไปอ่านคีย์นี้)
+    header = ("F:{}|D:{:%Y-%m-%d %H:%M}|S:{}|IV:{}|IVCHG:{}|DTE:{}|IVS:{}|IVSCHG:{}".format(
         meta["F"] if meta["F"] is not None else "", now, meta["series"],
         meta["iv"] if meta["iv"] is not None else "",
         iv_chg if iv_chg is not None else "",
-        round(meta["dte"], 3) if meta["dte"] is not None else ""))
+        round(meta["dte"], 3) if meta["dte"] is not None else "",
+        snap["iv_settle"] if snap.get("iv_settle") is not None else "",
+        snap["iv_settle_chg"] if snap.get("iv_settle_chg") is not None else ""))
     vs_rows = snap["vs_rows"]
     clip = "\n".join([
         header,
@@ -850,9 +1014,15 @@ def main():
         "und_sym": snap.get("und_sym"),  # underlying ของ 0DTE เช่น GCV26
         "F": meta["F"],
         "dte": round(meta["dte"], 3) if meta["dte"] is not None else None,
-        "iv": meta["iv"],
+        "iv": meta["iv"],                # ตัวที่ใช้คิด SD จริง (ปกติ = event vol)
         "iv_chg": iv_chg,
-        "iv_src": snap.get("iv_src"),    # barchart / computed (Black-76) / inherit
+        # event = forward vol 0DTE จาก QuikStrike EVC / settle = ATM ของ smile settle /
+        # computed = Black-76 จาก bid/ask ของ barchart / inherit = ยืม clip วันเดียวกัน
+        "iv_src": snap.get("iv_src"),
+        "iv_event": snap.get("iv_event"),
+        "iv_settle": snap.get("iv_settle"),
+        "iv_settle_chg": snap.get("iv_settle_chg"),
+        "qs_sym": qs_sym,                # รหัส CME ของ series เดียวกัน เช่น G2RU6
         "future_chg": meta["future_chg"],
         "intraday": {
             "put": sum(r[1] for r in id_rows),
@@ -875,11 +1045,11 @@ def main():
     })
     writes = [(JSON_OUT, json.dumps(data, ensure_ascii=False)),
               (CLIP_OUT, clip), (PREV_STATE, new_state),
-              (CHART_OUT, chart_html(snap, now, ev))]
+              (CHART_OUT, chart_html(snap, now, ev0))]
     if curve:
         writes.append((CURVE_OUT, json.dumps(curve)))
-    if ev:
-        writes.append((EVENTVOL_OUT, json.dumps({"ts": now.timestamp(), "points": ev})))
+    if ev0:
+        writes.append((EVENTVOL_OUT, json.dumps({"ts": now.timestamp(), "point": ev0})))
     for path, content in writes:
         tmp = path + ".tmp"
         with open(tmp, "w") as f:

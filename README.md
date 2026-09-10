@@ -62,8 +62,9 @@ crontab ปัจจุบัน:
   สูตร SD) จาก **mid ของ bid/ask** ฝั่ง OTM — mid เป็น quote สด ต่างจาก lastPrice
   ที่ค้างได้ทั้งวัน + ตัดปลายปีกที่ IV > 2.5×ATM (artifact ของ minimum tick) /
   JSON มี `iv_src`: barchart / computed / inherit → ไม่ได้ทั้งคู่ค่อย inherit จาก
-  clip เดิมของวันเดียวกัน (PricingSheet ของ QuikStrike ยังหา URL จริงไม่เจอ —
-  Vol2Vol โดนถอดข้อมูลเหลือแต่โครง WebForms)
+  clip เดิมของวันเดียวกัน (PricingSheet ของ QuikStrike อยู่บน cmegroup-sso.quikstrike.net ซึ่งบังคับ
+  SAML login ผ่าน auth.cmegroup.com — anonymous ไม่ได้ และ ban เป็นระดับบัญชี
+  จึงไม่เอาเข้า pipeline / Vol2Vol เดิมโดนถอดข้อมูลเหลือแต่โครง WebForms)
 - **cme_fetcher.py**: รายชั่วโมงพอ (Intraday สะสมทั้งวัน / OI นิ่งจนถึง refresh เช้า) เขียน
   `/tmp/cme_putcall.json` (ให้ widget) + `/tmp/cme_putcall_clip.txt` (string สำหรับ Pine)
   + `/tmp/cme_curve.json` (futures curve — ยุค barchart ได้ฟรีจาก quotes คอลเดียว

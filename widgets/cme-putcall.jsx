@@ -141,7 +141,7 @@ const ChangeRow = ({ rows, since, sc }) => {
   );
 };
 
-// กรอบ SD: mean = ราคาเปิด Yahoo, DTE 0.6, vol = Vol + Vol Chg (คำนวณโดย fetcher)
+// กรอบ SD: mean = ราคาเปิด Yahoo, DTE 0.6, vol = event vol ของ 0DTE (คำนวณโดย fetcher)
 const SdBlock = ({ sd }) => {
   if (!sd) {
     return (
@@ -252,8 +252,9 @@ export const render = (state, dispatch) => {
   // fetcher รันรายชั่วโมง — เกิน 2 ชม. = ข้อมูลค้าง (cron ตาย/วันหยุด)
   const stale = data.ts && Date.now() / 1000 - data.ts > 7200;
 
-  const ivChg = data.iv_chg;
-  // Vol Chg พอง >2-3 จุด = ตลาด reprice vol — กรอบ SD จาก settle แคบเกินจริง
+  // Vol Chg มาคู่กับ settle vol เสมอ (ยุค barchart ช่อง iv_chg ว่างเพราะ IV หลักเป็น event vol)
+  const ivChg = data.iv_settle_chg != null ? data.iv_settle_chg : data.iv_chg;
+  // Vol Chg พอง >2-3 จุด = ตลาด reprice vol ข้ามคืน (settle เมื่อวานอ้างอิงไม่ได้)
   const ivAlert = ivChg != null && Math.abs(ivChg) > 2;
 
   // strike สูงกว่า F ที่ดึงได้ = เขียว / ต่ำกว่า = แดง
@@ -281,9 +282,17 @@ export const render = (state, dispatch) => {
             <span style={{ fontSize: '20px', fontWeight: '600', letterSpacing: '-0.3px' }}>
               F {fmt(data.F)}
             </span>
+            {/* IV = ตัวที่คิด SD จริง (event vol ของ 0DTE) / วงเล็บ = settle vol + Vol Chg แบบ CME */}
             <span style={{ fontSize: '12px', fontWeight: '600', color: ivAlert ? macos.red : macos.secondary }}>
               IV {data.iv != null ? data.iv.toFixed(2) : '--'}
-              {ivChg != null && (
+              {data.iv_src === 'event' && <span style={{ color: macos.tertiary, marginLeft: '2px' }}>ev</span>}
+              {data.iv_settle != null && (
+                <span style={{ marginLeft: '5px', color: ivAlert ? macos.red : macos.tertiary, fontWeight: '500' }}>
+                  s {data.iv_settle.toFixed(2)}
+                  {ivChg != null && (ivChg > 0 ? ' +' : ' ') + ivChg.toFixed(2)}
+                </span>
+              )}
+              {data.iv_settle == null && ivChg != null && (
                 <span style={{ marginLeft: '4px', color: ivAlert ? macos.red : macos.tertiary }}>
                   {ivChg > 0 ? '+' : ''}{ivChg.toFixed(2)}
                 </span>

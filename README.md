@@ -56,15 +56,28 @@ crontab ปัจจุบัน:
     (weekly อ้าง GC เดือนมาตรฐานตัวใกล้สุดที่ option รายเดือนยังไม่หมด ณ วัน expiry)
   / **semantic เปลี่ยนจากยุค QuikStrike**: IV/smile เป็นค่า "ปัจจุบัน" (delayed)
   ไม่ใช่ settle เมื่อคืน และไม่มี IV Chg (ช่อง IVCHG ใน clip ว่าง — Pine รับได้อยู่แล้ว)
-- **IV วัน 0DTE**: barchart คืน `optImpliedVolatility=0` ทั้ง chain "ในวันหมดอายุของ
-  series นั้นเอง" (หน้าเว็บจริงก็ว่าง — ข้อจำกัดฝั่งเขา ซึ่งคือทุกวันสำหรับ 0DTE) →
-  fetcher **คำนวณ IV เองแบบ Black-76** (bisection, r=0, t=dte/365 day-count เดียวกับ
-  สูตร SD) จาก **mid ของ bid/ask** ฝั่ง OTM — mid เป็น quote สด ต่างจาก lastPrice
-  ที่ค้างได้ทั้งวัน + ตัดปลายปีกที่ IV > 2.5×ATM (artifact ของ minimum tick) /
-  JSON มี `iv_src`: barchart / computed / inherit → ไม่ได้ทั้งคู่ค่อย inherit จาก
-  clip เดิมของวันเดียวกัน (PricingSheet ของ QuikStrike อยู่บน cmegroup-sso.quikstrike.net ซึ่งบังคับ
-  SAML login ผ่าน auth.cmegroup.com — anonymous ไม่ได้ และ ban เป็นระดับบัญชี
-  จึงไม่เอาเข้า pipeline / Vol2Vol เดิมโดนถอดข้อมูลเหลือแต่โครง WebForms)
+- **ค่า vol ทั้งหมดมาจาก QuikStrike (anonymous ได้)** — Vol2Vol โดนถอดข้อมูลแล้ว แต่
+  อีก 2 view ยังใช้ได้ด้วย Referer trick เดิม / **viewitemid หาโดยจำลอง postback กดเมนู
+  ให้เซิร์ฟเวอร์เฉลยเอง** (ชื่อในเมนูใช้เป็น viewitemid ตรงๆ ไม่ได้ — เดาแล้วได้ error page ทุกตัว):
+  - `IntegratedEventVolCalculator` (เมนู "EventVolCalculator") → **event vol ของ 0DTE
+    = IV หลักที่ใช้คิด SD** (forward vol ครอบช่วงที่จบวันนี้ วันมี event เช่น FOMC กว้างกว่าปกติ)
+    เอาเฉพาะจุด 0DTE พอ / ⚠️ ค่านี้ **re-mark ระหว่างวัน** เช้าเท่า settle แล้วขยับตามตลาด
+  - `IntegratedSettlementSheet` (เมนู "Settlement Prices") → ตาราง `#pricing-sheet`
+    ตัวเดียวกับที่ script ของเพื่อนอ่าน: **settle vol + Vol Chg รายสไตรค์ของ CME** →
+    เป็นเส้น smile ที่ plot (`VS;`) นิ่งทั้งวันแบบยุค Vol2Vol / ยืนยันตรงกับที่ CME โชว์
+    (ATM 31.54 vs "VolSettle 31.43" ในภาพจาก Vol2Vol) / ต้องเลือก expiration เองด้วย
+    postback (default เป็น series ถัดไป) — **จับคู่ด้วยวันหมดอายุจาก attribute `title`
+    ของ anchor** เพราะ barchart กับ QuikStrike ใช้คนละระบบรหัส (`I0HU26` vs `G2RU6`)
+    และตั้ง `ddlStrikes=(All)` เพราะ default 25 สไตรค์แคบกว่ากรอบ 3σ (ladder นี้เป็นแกน
+    ของ WormHole ฝั่ง Pine ด้วย) แล้วตัดปีกที่ vol > 2.5×ATM ทิ้ง (ปีกไกลถึง 264%)
+- **IV สำรองเมื่อ QuikStrike ล่ม**: barchart คืน `optImpliedVolatility=0` ทั้ง chain
+  "ในวันหมดอายุของ series นั้นเอง" (หน้าเว็บจริงก็ว่าง = ทุกวันสำหรับ 0DTE) → fetcher
+  **คำนวณเองแบบ Black-76** (bisection, r=0, t=dte/365 day-count เดียวกับสูตร SD) จาก
+  **mid ของ bid/ask** ฝั่ง OTM — mid เป็น quote สด ต่างจาก lastPrice ที่ค้างได้ทั้งวัน /
+  JSON มี `iv_src`: **event** (ปกติ) / settle / computed / inherit(clip วันเดียวกัน)
+- ⚠️ **PricingSheet บน cmegroup-sso.quikstrike.net เข้าไม่ได้** (บังคับ SAML login ผ่าน
+  auth.cmegroup.com, ban เป็นระดับบัญชี) — แต่ไม่ต้องใช้แล้วเพราะ Settlement Sheet
+  ให้ข้อมูลชุดเดียวกันแบบ anonymous
 - **cme_fetcher.py**: รายชั่วโมงพอ (Intraday สะสมทั้งวัน / OI นิ่งจนถึง refresh เช้า) เขียน
   `/tmp/cme_putcall.json` (ให้ widget) + `/tmp/cme_putcall_clip.txt` (string สำหรับ Pine)
   + `/tmp/cme_curve.json` (futures curve — ยุค barchart ได้ฟรีจาก quotes คอลเดียว
@@ -74,13 +87,10 @@ crontab ปัจจุบัน:
   ด้วย median-3 + weighted MA + Catmull-Rom โดยข้อมูลดิบใน clip ไม่ถูกแตะ,
   เส้น Future, SD band ±1-3σ วงในเข้มสุด) self-contained เปิด
   `open /tmp/cme_chart.html` ค้างไว้ได้ หน้า reload ตัวเองทุก 5 นาที
-  + `/tmp/cme_eventvol.json` + panel ที่สองในกราฟ — **Forward & Event Volatility**
-  จาก QuikStrike Event Volatility Calculator (**ยัง anonymous ได้**: viewitemid จริงคือ
-  `IntegratedEventVolCalculator` — แกะจาก ContainerId ใน payload, ชื่อเมนู
-  "EventVolCalculator" ใช้เป็น viewitemid ตรงๆ ไม่ได้ / หน้า cmegroup.com เป็นแค่
-  iframe ครอบ ห้ามยิงเอง) ATM vol เส้นแดง + forward vol แท่งฟ้ารายช่วง — แท่งที่โดด
-  คือช่วงมี event (เช่น 16 ก.ย. 26 fwd 42% = FOMC) / เป็นตัวเสริม best-effort
-  QuikStrike พังก็ข้าม ไม่กระทบข้อมูลหลักและ exit code
+  + `/tmp/cme_eventvol.json` — จุด event vol ของ **0DTE เท่านั้น** (vol + forward vol)
+  / หัวกราฟโชว์ `VolSettle 31.54 (+3.69)` คู่กับ `EventVol 0DTE 41.74` โดย**ขีดเส้นใต้
+  ตัวที่ใช้คิด SD จริง** / ส่วนเสริมจาก QuikStrike ใช้งบเวลาแยก (`QS_BUDGET` 45s)
+  พังก็ข้าม ไม่กระทบข้อมูลหลักและ exit code
   / งบเวลารวม 90s (แหล่งเดียวแล้ว ไม่ต้องแบ่งงบต่อแหล่งแบบยุค fallback chain)
   exit code **2 = ฝั่งแหล่งข้อมูลล่ม** / 1 = error อื่น / 0 = ปกติ
   — ล้มเหลวแล้ว**ไม่เขียนทับไฟล์เดิม** widget ขึ้น STALE เองหลัง 2 ชม. และกด ↻ เองได้
@@ -90,9 +100,17 @@ crontab ปัจจุบัน:
   **คลิก widget = copy clip ลง clipboard** แล้วไปวางในช่อง "Paste P/C Data" ของ
   indicator `oi_block.pine` (โปรเจกต์ `tdw_indi`) / ป้าย "via ..." ขึ้นเมื่อ source
   ไม่ใช่ barchart (แหล่งหลักปัจจุบัน)
-- format ของ clip: บรรทัด meta `F:...|D:...|S:...|IV:...|IVCHG:...|DTE:...` ตามด้วย
+- format ของ clip: บรรทัด meta
+  `F:...|D:...|S:...|IV:...|IVCHG:...|DTE:...|IVS:...|IVSCHG:...` ตามด้วย
   `ID;strike:put:call;...` และ `OI;strike:put:call;...` (เฉพาะ strike ที่ put+call > 0)
-  และ `VS;strike:vol%;...` (IV รายสไตรค์ — ฝั่ง Pine ใช้วาด volatility smile)
+  และ `VS;strike:vol%;...` (settle vol รายสไตรค์ — ฝั่ง Pine ใช้วาด volatility smile
+  และเป็น ladder ของ WormHole)
+  - `IV`/`IVCHG` = ตัวที่ใช้คิด SD → ปกติ `IV` = **event vol** และ **`IVCHG` ว่างเสมอ**
+    เพราะ Vol Chg เป็นของคู่ settle เอาไปลบ event vol จะไม่มีความหมาย (ฝั่ง Pine คิด
+    vol = IV − IVCHG → ได้ event vol ตรงๆ ตามต้องการ)
+  - `IVS`/`IVSCHG` = คู่ settle ของ CME (**คีย์ใหม่**) — parser ฝั่ง Pine จับคีย์ทีละตัว
+    ด้วย if จึงข้ามคีย์ที่ไม่รู้จักเงียบๆ เข้ากันได้กับ indicator เวอร์ชันปัจจุบัน
+    ถ้าจะเพิ่มโหมด SD จาก settle ค่อยไปอ่านคีย์นี้
 
 ---
 

@@ -345,6 +345,13 @@ const Chart = ({ data, liveF, mode, hover, dispatch }) => {
           </g>
         ))}
         <line x1={L} x2={W - R} y1={y(0)} y2={y(0)} stroke="rgba(255,255,255,0.25)" />
+        {/* เส้น Future วาดก่อนแท่ง ให้แท่ง P/C ทับเส้น ไม่ใช่เส้นบังแท่ง / ป้ายราคาวาดทีหลังสุด */}
+        {liveF != null && F && F > lo && F < hi && (
+          <line x1={x(F)} x2={x(F)} y1={T} y2={H - B} stroke="rgba(255,255,255,0.25)" strokeWidth="0.8" strokeDasharray="2 4" />
+        )}
+        {fNow && fNow > lo && fNow < hi && (
+          <line x1={x(fNow)} x2={x(fNow)} y1={T + 16} y2={H - B} stroke="rgba(255,255,255,0.45)" strokeWidth="0.8" />
+        )}
         {vrows.map(([s, p, c]) => (
           <g key={s}>
             {p > 0 && <rect x={x(s) - bw - 0.4} y={y(p)} width={bw} height={y(0) - y(p)} fill={macos.orange} />}
@@ -360,14 +367,10 @@ const Chart = ({ data, liveF, mode, hover, dispatch }) => {
             ))}
           </g>
         )}
-        {liveF != null && F && F > lo && F < hi && (
-          <line x1={x(F)} x2={x(F)} y1={T} y2={H - B} stroke="rgba(255,255,255,0.45)" strokeDasharray="3 4" />
-        )}
         {fNow && fNow > lo && fNow < hi && (
           <g>
-            <line x1={x(fNow)} x2={x(fNow)} y1={T} y2={H - B} stroke="#fff" strokeWidth="1.5" />
-            <rect x={x(fNow) + 1} y={T} width="92" height="16" rx="3" fill="#fff" />
-            <text x={x(fNow) + 5} y={T + 12} fontSize="10.5" fontWeight="700" fill="#111">
+            <rect x={x(fNow) - 46} y={T} width="92" height="16" rx="3" fill="rgba(255,255,255,0.85)" />
+            <text x={x(fNow)} y={T + 12} fontSize="10.5" fontWeight="700" fill="#111" textAnchor="middle">
               {`Future ${fmt(fNow)}`}
             </text>
           </g>

@@ -9,13 +9,31 @@ export const refreshFrequency = 5000;
 
 // state แบบ redux ของ Übersicht: รองรับปุ่ม refresh (รัน fetcher ทันที + copy อัตโนมัติ)
 // chartMode = กราฟโชว์ Intraday หรือ OI / hover = สไตรค์ที่เมาส์ชี้อยู่
-export const initialState = { output: null, refreshing: false, chartMode: 'id', hover: null };
+// ค่าที่ผู้ใช้เลือกในกราฟ (Intraday/OI, SD แบบไหน) จำไว้ใน localStorage ไม่งั้นรีเซ็ตทุกครั้งที่
+// Übersicht โหลด widget ใหม่ (แก้ไฟล์ / restart)
+const PREF_KEY = 'cme-putcall.prefs';
+const pref = (k, dflt) => {
+  try { const v = (JSON.parse(localStorage.getItem(PREF_KEY)) || {})[k]; return v != null ? v : dflt; } catch (e) { return dflt; }
+};
+const savePref = (k, v) => {
+  try {
+    const all = JSON.parse(localStorage.getItem(PREF_KEY)) || {};
+    all[k] = v;
+    localStorage.setItem(PREF_KEY, JSON.stringify(all));
+  } catch (e) { /* localStorage ใช้ไม่ได้ก็แค่ไม่จำ */ }
+};
+// sdMode: 'open' = anchor ราคาเปิด + DTE 0.6 (ตรงกับกล่อง SD Range) / 'cme' = รอบ F + DTE ที่เหลือจริง
+export const initialState = {
+  output: null, refreshing: false, hover: null,
+  chartMode: pref('chartMode', 'id'), sdMode: pref('sdMode', 'open'),
+};
 export const updateState = (event, prev) => {
   switch (event.type) {
     case 'UB/COMMAND_RAN': return { ...prev, output: event.output };
     case 'REFRESH_START': return { ...prev, refreshing: true };
     case 'REFRESH_DONE': return { ...prev, refreshing: false, output: event.output || prev.output };
     case 'CHART_MODE': return { ...prev, chartMode: event.mode };
+    case 'SD_MODE': return { ...prev, sdMode: event.mode };
     case 'HOVER': return { ...prev, hover: event.k };
     default: return prev;
   }
@@ -235,7 +253,7 @@ const ModePill = ({ label, on, onPick }) => (
   </span>
 );
 
-const Chart = ({ data, liveF, mode, hover, dispatch }) => {
+const Chart = ({ data, liveF, mode, sdMode, hover, dispatch }) => {
   const ch = data.chart;
   if (!ch) return null;
   const W = CHART_W, H = CHART_H, L = 38, R = 38, T = 8, B = 22;
@@ -246,8 +264,18 @@ const Chart = ({ data, liveF, mode, hover, dispatch }) => {
   const strikes = [...new Set([...ch.id, ...ch.oi].map((r) => r[0]))].sort((a, b) => a - b);
   if (!strikes.length) return null;
   // ช่วงแกน x: ±3.5σ รอบ F เหมือนหน้าเว็บ (ไม่เกินช่วงข้อมูลที่มี)
+  // แถบ SD: 'open' = จุดกลางราคาเปิด + 1σ จาก DTE 0.6 (ค่าเดียวกับกล่อง SD Range จาก fetcher)
+  //         'cme'  = จุดกลาง F ตอนดึงข้อมูล + 1σ จาก DTE ที่เหลือจริง (แบบ Expected Range ของ CME)
+  const sdOpen = data.sd && data.sd.open && data.sd.sd1 ? data.sd : null;
+  const useOpen = sdMode === 'open' && sdOpen;
+  const bandC = useOpen ? sdOpen.open : F;
+  const bandS = useOpen ? sdOpen.sd1 : sig;
   let lo = strikes[0], hi = strikes[strikes.length - 1];
-  if (sig && F) { lo = Math.max(lo, F - 3.5 * sig); hi = Math.min(hi, F + 3.5 * sig); }
+  if (sig && F) {
+    let a = F - 3.5 * sig, b = F + 3.5 * sig;
+    if (useOpen) { a = Math.min(a, bandC - 3.3 * bandS); b = Math.max(b, bandC + 3.3 * bandS); }
+    lo = Math.max(lo, a); hi = Math.min(hi, b);
+  }
   lo -= 5; hi += 5;
   const x = (v) => L + ((v - lo) / (hi - lo)) * (W - L - R);
   const vrows = rows.filter((r) => r[0] >= lo && r[0] <= hi);
@@ -279,14 +307,15 @@ const Chart = ({ data, liveF, mode, hover, dispatch }) => {
   const xStep = (hi - lo) / 50 > 12 ? 100 : 50;
   const xt = [];
   for (let s = Math.ceil(lo / xStep) * xStep; s <= hi; s += xStep) xt.push(s);
-  const bands = sig && F ? [3, 2, 1] : [];
+  const bands = bandS && bandC ? [3, 2, 1] : [];
   const bandFill = { 1: 'rgba(255,255,255,0.10)', 2: 'rgba(255,255,255,0.065)', 3: 'rgba(255,255,255,0.035)' };
 
   let tip = null;
   if (hover != null && hover >= lo && hover <= hi) {
     const X = x(hover), idr = idm.get(hover), oir = oim.get(hover);
     const vk = interp(ch.vs || [], hover), vks = interp(vs, hover);
-    const dist = sig && fNow ? (hover - fNow) / sig : null;
+    // ระยะ σ ในกล่อง hover ใช้กรอบเดียวกับแถบที่เลือกอยู่
+    const dist = useOpen ? (hover - bandC) / bandS : sig && fNow ? (hover - fNow) / sig : null;
     const line = (name, r) => `${name}  P ${r ? fmt(r[1]) : 0}  C ${r ? fmt(r[2]) : 0}  Σ ${r ? fmt(r[1] + r[2]) : 0}`;
     const lines = mode === 'id'
       ? [[line('Intraday', idr), true], [line('OI', oir), false]]
@@ -301,7 +330,7 @@ const Chart = ({ data, liveF, mode, hover, dispatch }) => {
         <rect x={bx} y={T + 18} width={bxW} height={bxH} rx="6" fill="rgba(20,22,28,0.92)" stroke="rgba(255,255,255,0.25)" />
         <text x={bx + 10} y={T + 36} fontSize="13" fontWeight="700" fill="#fff">
           {fmt(hover)}
-          {dist != null && <tspan fontSize="10.5" fontWeight="400" fill={macos.tertiary}>{`  ${dist >= 0 ? '+' : ''}${dist.toFixed(2)}σ จาก F`}</tspan>}
+          {dist != null && <tspan fontSize="10.5" fontWeight="400" fill={macos.tertiary}>{`  ${dist >= 0 ? '+' : ''}${dist.toFixed(2)}σ จาก ${useOpen ? 'open' : 'F'}`}</tspan>}
         </text>
         {lines.map(([t, bold], i) => (
           <text key={i} x={bx + 10} y={T + 53 + i * 15} fontSize="11" fontWeight={bold ? '700' : '400'}
@@ -322,18 +351,20 @@ const Chart = ({ data, liveF, mode, hover, dispatch }) => {
     <div style={{ marginTop: '10px', borderTop: `0.5px solid ${macos.divider}`, paddingTop: '8px' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '4px' }}>
         <span style={{ ...secTitle, color: macos.label, marginRight: '4px' }}>Put / Call by Strike</span>
-        <ModePill label="Intraday" on={mode === 'id'} onPick={() => dispatch({ type: 'CHART_MODE', mode: 'id' })} />
-        <ModePill label="OI" on={mode === 'oi'} onPick={() => dispatch({ type: 'CHART_MODE', mode: 'oi' })} />
+        <ModePill label="Intraday" on={mode === 'id'} onPick={() => { savePref('chartMode', 'id'); dispatch({ type: 'CHART_MODE', mode: 'id' }); }} />
+        <ModePill label="OI" on={mode === 'oi'} onPick={() => { savePref('chartMode', 'oi'); dispatch({ type: 'CHART_MODE', mode: 'oi' }); }} />
+        <span style={{ ...secTitle, marginLeft: '10px' }}>SD</span>
+        <ModePill label="Open 0.6" on={!!useOpen} onPick={() => { savePref('sdMode', 'open'); dispatch({ type: 'SD_MODE', mode: 'open' }); }} />
+        <ModePill label="CME" on={!useOpen} onPick={() => { savePref('sdMode', 'cme'); dispatch({ type: 'SD_MODE', mode: 'cme' }); }} />
         <span style={{ marginLeft: 'auto', fontSize: '11px', color: macos.tertiary }}>
           <span style={{ color: macos.orange }}>■</span> Put&nbsp;&nbsp;
           <span style={{ color: macos.blue }}>■</span> Call&nbsp;&nbsp;
-          <span style={{ color: '#ff8a8a' }}>- -</span> {data.iv_settle != null ? 'Vol Settle' : 'IV'}&nbsp;&nbsp;
-          <span style={{ color: '#fff' }}>│</span> Future {liveF != null ? `${fmt(liveF)} live` : fmt(F)}
+          <span style={{ color: '#ff8a8a' }}>- -</span> {data.iv_settle != null ? 'Vol Settle' : 'IV'}
         </span>
       </div>
       <svg width={W} height={H} style={{ display: 'block' }}>
         {bands.map((n) => {
-          const a = Math.max(x(F - n * sig), L), b = Math.min(x(F + n * sig), W - R);
+          const a = Math.max(x(bandC - n * bandS), L), b = Math.min(x(bandC + n * bandS), W - R);
           return <rect key={n} x={a} y={T} width={Math.max(0, b - a)} height={H - T - B} fill={bandFill[n]} />;
         })}
         {[0.5, 1].map((f) => (
@@ -378,6 +409,13 @@ const Chart = ({ data, liveF, mode, hover, dispatch }) => {
         {xt.map((s) => (
           <text key={s} x={x(s)} y={H - 6} fontSize="10" fill={macos.tertiary} textAnchor="middle">{fmt(s)}</text>
         ))}
+        {bandS && bandC && (
+          <text x={L + 4} y={T + 12} fontSize="10" fill={macos.tertiary}>
+            {useOpen
+              ? `SD open ${fmt(bandC)} · DTE 0.6 · 1σ ±${bandS.toFixed(1)}`
+              : `SD F ${fmt(bandC)} · DTE ${data.dte.toFixed(2)} · 1σ ±${bandS.toFixed(1)}`}
+          </text>
+        )}
         {tip}
         <rect x={L} y={T} width={W - L - R} height={H - T - B} fill="transparent"
           onMouseMove={onMove} onMouseLeave={() => dispatch({ type: 'HOVER', k: null })}
@@ -388,7 +426,7 @@ const Chart = ({ data, liveF, mode, hover, dispatch }) => {
 };
 
 export const render = (state, dispatch) => {
-  const { output, refreshing, chartMode, hover } = state || {};
+  const { output, refreshing, chartMode, sdMode, hover } = state || {};
   const [cmeTxt, liveTxt] = (output || '').split(LIVE_SEP);
   let data = null;
   try { data = JSON.parse(cmeTxt); } catch (e) { data = null; }
@@ -546,7 +584,7 @@ export const render = (state, dispatch) => {
         </div>
       </div>
 
-      <Chart data={data} liveF={liveF} mode={chartMode || 'id'} hover={hover} dispatch={dispatch} />
+      <Chart data={data} liveF={liveF} mode={chartMode || 'id'} sdMode={sdMode || 'open'} hover={hover} dispatch={dispatch} />
 
       <div style={{
         borderTop: `0.5px solid ${macos.divider}`,

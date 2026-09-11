@@ -605,6 +605,16 @@ def clip_window(F, iv, dte, k=CLIP_SD):
     return F - half, F + half
 
 
+def chart_rows(meta, snap, id_rows, oi_rows):
+    win = clip_window(meta["F"], meta["iv"] or snap.get("iv_settle"), meta["dte"])
+    inwin = (lambda s: win[0] <= s <= win[1]) if win else (lambda s: True)
+    return {
+        "id": [[s, p, c] for s, p, c in id_rows if inwin(s)],
+        "oi": [[s, p, c] for s, p, c in oi_rows if inwin(s)],
+        "vs": [[s, v] for s, v in snap["vs_rows"] if inwin(s)],
+    }
+
+
 def top_changes(rows_now, prev_map, n=2):
     """เทียบ per-strike กับรอบก่อน คืน n อันดับที่เปลี่ยนมากสุด [{strike, dp, dc}]
     นับเฉพาะ strike ที่อยู่ในรอบปัจจุบัน — ตัวที่หายไปมักเป็นเพราะช่วง strike เลื่อน
@@ -1321,6 +1331,8 @@ def main():
             "top": top_actives(oi_rows, n=4),
         },
         "sd": sd,
+        # ข้อมูลรายสไตรค์ให้กราฟใน widget (ช่วง ±4σ เดียวกับ clip แต่ไม่ถูกบีบตามความยาว)
+        "chart": chart_rows(meta, snap, id_rows, oi_rows),
         "changes": changes,
     }
 

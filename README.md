@@ -104,7 +104,8 @@ crontab ปัจจุบัน:
 - ⚠️ **www.cmegroup.com (WAF) แบน IP เครื่องนี้จากการ scrape แล้ว — ห้ามยิงตรง**
   (quikstrike.net เป็น infra คนละเจ้า/Bantix ใช้ Referer cmegroup.com ได้ตามเดิม)
 - **cme-putcall.jsx**: สรุป P/C + ratio bar + Top Active + ธงแดงเมื่อ |IV Chg| > 2
-  **คลิก widget = copy clip ลง clipboard** แล้วไปวางในช่อง "Paste P/C Data" ของ
+  **ดับเบิลคลิก widget = เปิดกราฟ Intraday/OI** (`open /tmp/cme_chart.html` ในเบราว์เซอร์หลัก)
+  / **คลิก widget = copy clip ลง clipboard** แล้วไปวางในช่อง "Paste P/C Data" ของ
   indicator `oi_block.pine` (โปรเจกต์ `tdw_indi`) / ป้าย "via ..." ขึ้นเมื่อ source
   ไม่ใช่ barchart (แหล่งหลักปัจจุบัน)
 - **clip ส่งเฉพาะสไตรค์ใน F ± 4σ** โดย σ = F × IV × √(DTE ที่เหลือจริง/365) — ไม่ใช่

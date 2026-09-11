@@ -197,6 +197,14 @@ export const render = (state, dispatch) => {
     run('cat /tmp/cme_putcall_clip.txt | pbcopy');
   };
 
+  // ดับเบิลคลิก = เปิดกราฟ Intraday/OI แบบ CME (fetcher เขียนไว้ทุกรอบ หน้า reload ตัวเองทุก 5 นาที)
+  // สองคลิกแรกของดับเบิลคลิกจะ copy ไปด้วย ซึ่งไม่เสียหายอะไร
+  const handleOpenChart = (e) => {
+    if (e.altKey) return;
+    e.preventDefault();
+    run('test -f /tmp/cme_chart.html && open /tmp/cme_chart.html');
+  };
+
   // ปุ่ม ↻ = รัน fetcher เดี๋ยวนั้น เสร็จแล้ว copy ให้อัตโนมัติ (กันกดซ้ำระหว่างรัน)
   const handleRefresh = (e) => {
     if (e.altKey) return;
@@ -214,6 +222,7 @@ export const render = (state, dispatch) => {
   const refreshPill = (
     <span
       onClick={handleRefresh}
+      onDoubleClick={(e) => e.stopPropagation()}
       title="Refresh CME data now + copy"
       style={{
         fontSize: '12px', fontWeight: '700', lineHeight: '1',
@@ -261,7 +270,8 @@ export const render = (state, dispatch) => {
   const strikeColor = (s) => (data.F == null ? macos.label : s >= data.F ? macos.green : macos.red);
 
   return (
-    <div style={container} onClick={handleCopy} onMouseDown={altDrag} title="Click = copy P/C data for TradingView · ⌥-drag = move">
+    <div style={container} onClick={handleCopy} onDoubleClick={handleOpenChart} onMouseDown={altDrag}
+      title="Click = copy P/C data for TradingView · Double-click = open Intraday/OI chart · ⌥-drag = move">
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <span style={{ fontSize: '11px', fontWeight: '700', letterSpacing: '0.6px', color: macos.label }}>
           CME GOLD {data.series || ''}

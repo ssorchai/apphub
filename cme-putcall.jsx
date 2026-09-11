@@ -485,8 +485,10 @@ export const render = (state, dispatch) => {
   // Vol Chg พอง >2-3 จุด = ตลาด reprice vol ข้ามคืน (settle เมื่อวานอ้างอิงไม่ได้)
   const ivAlert = ivChg != null && Math.abs(ivChg) > 2;
 
-  // strike สูงกว่า F ที่ดึงได้ = เขียว / ต่ำกว่า = แดง
-  const strikeColor = (s) => (data.F == null ? macos.label : s >= data.F ? macos.green : macos.red);
+  // F ปัจจุบัน = ราคาสดจาก gold_fetcher ถ้าใช้ได้ ไม่งั้นราคาตอน cme_fetcher ดึงข้อมูล
+  const fNow = liveF != null ? liveF : data.F;
+  // strike สูงกว่า F ปัจจุบัน = เขียว / ต่ำกว่า = แดง
+  const strikeColor = (s) => (fNow == null ? macos.label : s >= fNow ? macos.green : macos.red);
 
   return (
     <div style={container} onClick={handleCopy} onDoubleClick={handleOpenChart} onMouseDown={altDrag}
@@ -508,11 +510,15 @@ export const render = (state, dispatch) => {
         {/* คอลัมน์ซ้าย: ราคา + สัดส่วน P/C */}
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginTop: '6px' }}>
-            <span style={{ fontSize: '20px', fontWeight: '600', letterSpacing: '-0.3px' }}>
-              F {fmt(data.F)}
+            <span style={{ fontSize: '20px', fontWeight: '600', letterSpacing: '-0.3px', whiteSpace: 'nowrap' }}
+              title={liveF != null ? 'ราคาสดจาก gold_fetcher (อัปเดตทุก ~5 วินาที)'
+                                   : `ราคาตอน cme_fetcher ดึงข้อมูล ${data.system_time || ''}`}>
+              F {fNow == null ? '--' : Number(fNow).toLocaleString(undefined, { minimumFractionDigits: 1, maximumFractionDigits: 1 })}
+              <span style={{ fontSize: '9px', marginLeft: '4px', verticalAlign: 'middle',
+                color: liveF != null ? macos.green : macos.tertiary }}>●</span>
             </span>
             {/* IV = ตัวที่คิด SD จริง (event vol ของ 0DTE) / วงเล็บ = settle vol + Vol Chg แบบ CME */}
-            <span style={{ fontSize: '12px', fontWeight: '600', color: ivAlert ? macos.red : macos.secondary }}>
+            <span style={{ fontSize: '12px', fontWeight: '600', whiteSpace: 'nowrap', color: ivAlert ? macos.red : macos.secondary }}>
               IV {data.iv != null ? data.iv.toFixed(2) : '--'}
               {data.iv_src === 'event' && <span style={{ color: macos.tertiary, marginLeft: '2px' }}>ev</span>}
               {data.iv_settle != null && (

@@ -59,8 +59,11 @@ crontab ปัจจุบัน:
 - **ค่า vol ทั้งหมดมาจาก QuikStrike (anonymous ได้)** — Vol2Vol โดนถอดข้อมูลแล้ว แต่
   อีก 2 view ยังใช้ได้ด้วย Referer trick เดิม / **viewitemid หาโดยจำลอง postback กดเมนู
   ให้เซิร์ฟเวอร์เฉลยเอง** (ชื่อในเมนูใช้เป็น viewitemid ตรงๆ ไม่ได้ — เดาแล้วได้ error page ทุกตัว):
-  - `IntegratedEventVolCalculator` (เมนู "EventVolCalculator") → **event vol ของ 0DTE
-    = IV หลักที่ใช้คิด SD** (forward vol ครอบช่วงที่จบวันนี้ วันมี event เช่น FOMC กว้างกว่าปกติ)
+  - `IntegratedEventVolCalculator` (เมนู "EventVolCalculator") → **ช่อง `vol` ของจุด
+    0DTE = IV หลักที่ใช้คิด SD** (ตัวเลขเดียวกับที่หน้า EVC โชว์ — ยืนยัน 11 ก.ย. 26:
+    OG2U6 = 44.99) / ⚠️ **ห้ามใช้ `forwardVol`**: forward vol ที่ติดกับจุดไหนคือช่วง
+    "หลัง" expiry นั้นไปถึงตัวถัดไป ไม่ใช่วันนี้ (OG2U6 fwd 18.36 = ช่วงข้ามเสาร์-อาทิตย์,
+    G3WU6 16 ก.ย. fwd 44.8 = ช่วง 16→17 ที่มีประกาศ FOMC หลัง G3WU6 หมดอายุ)
     เอาเฉพาะจุด 0DTE พอ / ⚠️ ค่านี้ **re-mark ระหว่างวัน** เช้าเท่า settle แล้วขยับตามตลาด
   - `IntegratedSettlementSheet` (เมนู "Settlement Prices") → ตาราง `#pricing-sheet`
     ตัวเดียวกับที่ script ของเพื่อนอ่าน: **settle vol + Vol Chg รายสไตรค์ของ CME** →
@@ -70,6 +73,10 @@ crontab ปัจจุบัน:
     ของ anchor** เพราะ barchart กับ QuikStrike ใช้คนละระบบรหัส (`I0HU26` vs `G2RU6`)
     และตั้ง `ddlStrikes=(All)` เพราะ default 25 สไตรค์แคบกว่ากรอบ 3σ (ladder นี้เป็นแกน
     ของ WormHole ฝั่ง Pine ด้วย) แล้วตัดปีกที่ vol > 2.5×ATM ทิ้ง (ปีกไกลถึง 264%)
+    / ⚠️ **ช่วงเช้าไทยตารางถูกปิด**: หน้าขึ้น "Today's settlements are not available
+    for viewing until after 12:00am CT" → ได้ settle smile ตั้งแต่ **12:00 ไทย** (หน้าหนาว
+    13:00) เป็นต้นไป ก่อนหน้านั้น VS ใช้ smile สดจาก bid/ask แทน (กราฟเปลี่ยนป้ายเส้นเป็น
+    "IV live" และ `IVS`/`IVSCHG` ว่าง) — event vol ไม่โดนปิด ใช้ได้ตลอด
 - **IV สำรองเมื่อ QuikStrike ล่ม**: barchart คืน `optImpliedVolatility=0` ทั้ง chain
   "ในวันหมดอายุของ series นั้นเอง" (หน้าเว็บจริงก็ว่าง = ทุกวันสำหรับ 0DTE) → fetcher
   **คำนวณเองแบบ Black-76** (bisection, r=0, t=dte/365 day-count เดียวกับสูตร SD) จาก
@@ -88,7 +95,7 @@ crontab ปัจจุบัน:
   เส้น Future, SD band ±1-3σ วงในเข้มสุด) self-contained เปิด
   `open /tmp/cme_chart.html` ค้างไว้ได้ หน้า reload ตัวเองทุก 5 นาที
   + `/tmp/cme_eventvol.json` — จุด event vol ของ **0DTE เท่านั้น** (vol + forward vol)
-  / หัวกราฟโชว์ `VolSettle 31.54 (+3.69)` คู่กับ `EventVol 0DTE 41.74` โดย**ขีดเส้นใต้
+  / หัวกราฟโชว์ `VolSettle 31.54 (+3.69)` คู่กับ `EventVol 0DTE 44.99` โดย**ขีดเส้นใต้
   ตัวที่ใช้คิด SD จริง** / ส่วนเสริมจาก QuikStrike ใช้งบเวลาแยก (`QS_BUDGET` 45s)
   พังก็ข้าม ไม่กระทบข้อมูลหลักและ exit code
   / งบเวลารวม 90s (แหล่งเดียวแล้ว ไม่ต้องแบ่งงบต่อแหล่งแบบยุค fallback chain)

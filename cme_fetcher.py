@@ -851,6 +851,7 @@ CHART_TMPL = r"""<!DOCTYPE html>
 <div id="hdr">
  <span id="title"></span>
  <span id="totals"></span>
+ <span id="live"></span>
  <span id="mode">
   <span id="legend"><span class="sw" style="background:#f5a623"></span>Put
    <span class="sw" style="background:#4a80e8"></span>Call
@@ -973,12 +974,6 @@ function render(){
     el("text", {x: W - 12, y: H / 2, "font-size": 11, fill: "#aaa",
                 transform: "rotate(90 " + (W - 12) + " " + H / 2 + ")", "text-anchor": "middle"}, svg).textContent = "Volatility";
   }
-  // เส้น Future
-  if (D.F && D.F > lo && D.F < hi){
-    el("line", {x1: x(D.F), x2: x(D.F), y1: T, y2: H - B, stroke: "#333", "stroke-width": 1.2, "stroke-dasharray": "5 3"}, svg);
-    el("text", {x: x(D.F) - 5, y: T + 8, "font-size": 11, fill: "#333",
-                transform: "rotate(90 " + (x(D.F) - 5) + " " + (T + 8) + ")"}, svg).textContent = "Future: " + fmt(D.F);
-  }
   // แกน x
   const t0 = Math.ceil(lo / 50) * 50;
   for (let s = t0; s <= hi; s += 50)
@@ -986,6 +981,8 @@ function render(){
   el("text", {x: 16, y: H / 2, "font-size": 11, fill: "#aaa",
               transform: "rotate(-90 16 " + H / 2 + ")", "text-anchor": "middle"}, svg).textContent =
     mode === "id" ? "Intraday Volume" : "Open Interest";
+  G = {svg, T, H, B, lo, hi, x};
+  drawLive();
   cursor(svg, {W, H, L, R, T, B, lo, hi, x, yr, vs, sig, stepX});
 }
 
@@ -1043,7 +1040,8 @@ function cursor(svg, g){
     cur.setAttribute("visibility", "visible");
     // ค่า vol ในกล่องใช้ของดิบ (ตัวเลขของ CME) ส่วนจุดบนเส้นใช้ค่าที่ smooth ให้ตรงกับเส้นที่วาด
     const vraw = interp(D.vs, k);
-    const dist = (g.sig && D.F) ? (k - D.F) / g.sig : null;
+    const fNow = liveF() ?? D.F;
+    const dist = (g.sig && fNow) ? (k - fNow) / g.sig : null;
     const rows = mode === "id"
       ? row("Intraday", idm.get(k), true) + row("OI", oim.get(k), false)
       : row("OI", oim.get(k), true) + row("Intraday", idm.get(k), false);
@@ -1066,7 +1064,66 @@ function cursor(svg, g){
 }
 document.getElementById("bId").onclick = () => { mode = "id"; render(); };
 document.getElementById("bOi").onclick = () => { mode = "oi"; render(); };
+// ---- ราคา Future สด: gold_fetcher.py เขียน /tmp/gold_live.js ทุก ~5 วินาที ----
+// หน้านี้เปิดแบบ file:// จึง fetch JSON ไม่ได้ ต้องโหลดซ้ำผ่าน <script src> แทน
+// ใช้เฉพาะเมื่อสัญญาตรงกับ underlying ของ series (GCV6 = GCV26) และไฟล์ไม่เก่าเกิน 3 นาที
+let G = null;
+function liveF(){
+  const L = window.GOLD_LIVE;
+  if (!L || !L.price || !L.sym || !D.und) return null;
+  const und = D.und.slice(0, 3) + D.und.slice(-1);
+  if (L.sym !== und || Date.now() / 1000 - L.ts > 180) return null;
+  return L.price;
+}
+function vline(p, attrs, label, dark){
+  if (!G || p <= G.lo || p >= G.hi) return;
+  const X = G.x(p), g = el("g", {class: "fline"}, G.svg);
+  el("line", Object.assign({x1: X, x2: X, y1: G.T, y2: G.H - G.B}, attrs), g);
+  const t = el("text", {x: X + 4, y: G.T + 13, "font-size": 11, "font-weight": dark ? 700 : 400,
+                        fill: dark ? "#fff" : "#888"}, g);
+  t.textContent = label;
+  if (dark){
+    const w = t.getComputedTextLength() + 8;
+    const bg = el("rect", {x: X, y: G.T + 1, width: w, height: 17, rx: 3, fill: "#222"}, g);
+    g.insertBefore(bg, t);
+  }
+}
+function drawLive(){
+  const f = liveF(), L = window.GOLD_LIVE;
+  const box = document.getElementById("live");
+  if (f != null){
+    const ch = L.change_open;
+    box.innerHTML = '&nbsp;Future <b>' + fmt(f) + '</b>' +
+      (ch != null ? ' <span style="color:' + (ch >= 0 ? '#1a8f45' : '#c0392b') + '">' +
+                    (ch >= 0 ? '+' : '') + ch + ' จาก open</span>' : '') +
+      ' <span style="color:#999;font-size:12px">live ' + L.time + '</span>';
+  } else {
+    box.innerHTML = D.F ? '&nbsp;Future <b>' + fmt(D.F) + '</b> <span style="color:#999;font-size:12px">' +
+                          'ตอนดึงข้อมูล ' + D.updated.slice(11) + '</span>' : '';
+  }
+  if (!G) return;
+  G.svg.querySelectorAll(".fline").forEach(n => n.remove());
+  if (f != null){
+    if (D.F) vline(D.F, {stroke: "#999", "stroke-width": 1, "stroke-dasharray": "3 4"},
+                   "data " + fmt(D.F), false);
+    vline(f, {stroke: "#111", "stroke-width": 1.6}, "Future " + fmt(f), true);
+  } else if (D.F){
+    vline(D.F, {stroke: "#333", "stroke-width": 1.2, "stroke-dasharray": "5 3"}, "Future " + fmt(D.F), true);
+  }
+  // เส้นต้องอยู่ใต้ overlay ของ cursor ไม่งั้นบังการชี้เมาส์
+  const ov = G.svg.querySelector('rect[style*="crosshair"]');
+  if (ov) G.svg.querySelectorAll(".fline").forEach(n => G.svg.insertBefore(n, ov));
+}
+function pollLive(){
+  const s = document.createElement("script");
+  s.src = "gold_live.js?t=" + Date.now();
+  s.onload = () => { s.remove(); drawLive(); };
+  s.onerror = () => { s.remove(); drawLive(); };
+  document.head.appendChild(s);
+}
 render();
+pollLive();
+setInterval(pollLive, 5000);
 </script></body></html>
 """
 

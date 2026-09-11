@@ -15,6 +15,7 @@ from datetime import datetime
 # (chrome110/edge101 ได้ 200 ส่วน chrome124/safari17 โดน 403) — Yahoo กับ CME ยังใช้
 # brew curl ตามเดิมเพราะไม่มีปัญหาและ Yahoo แพ้ UA ยาวของ browser จริง
 JSON_PATH = "/tmp/gold_data.json"
+LIVE_JS_PATH = "/tmp/gold_live.js"
 
 # ต้องเป็น path เต็ม: curl เป็น keg-only และ cron เห็นแค่ /usr/bin/curl ซึ่งโดน 403
 # (เครื่องนี้ Homebrew prefix = /usr/local แม้เป็น arm64)
@@ -391,6 +392,15 @@ def tick(executor, yahoo_ref, state, anchor, roll_state):
         "ts": int(time.time()),
     }
     atomic_write(JSON_PATH, output)
+    # สำเนาราคา futures เป็น .js ให้หน้ากราฟ /tmp/cme_chart.html (เปิดแบบ file://) โหลดผ่าน
+    # <script src> ได้ -- browser ไม่ยอมให้หน้า file:// fetch ไฟล์ JSON แต่ยอมโหลด script
+    live = {k: fut_future.get(k) for k in ("price", "sym", "time", "change_open")} if fut_future else None
+    if live:
+        live["ts"] = output["ts"]
+    temp = LIVE_JS_PATH + ".tmp"
+    with open(temp, "w") as f:
+        f.write("window.GOLD_LIVE = " + json.dumps(live) + ";\n")
+    os.replace(temp, LIVE_JS_PATH)
     if errors:
         raise RuntimeError("; ".join(errors))
 

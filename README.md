@@ -102,7 +102,9 @@ crontab ปัจจุบัน:
   + `/tmp/cme_chart.html` — **กราฟหน้าตาแบบ CME Vol2Vol** (แท่ง Put ส้ม/Call น้ำเงิน
   รายสไตรค์ สลับ Intraday/OI ได้, smile IV เส้นประแดงแกนขวา — smooth ตอน render
   ด้วย median-3 + weighted MA + Catmull-Rom โดยข้อมูลดิบใน clip ไม่ถูกแตะ,
-  เส้น Future, SD band ±1-3σ วงในเข้มสุด) self-contained เปิด
+  เส้น Future, SD band ±1-3σ วงในเข้มสุด, **cursor แบบ CME**: เส้นตั้งดูดเข้าสไตรค์ใกล้สุด
+  + กล่องโชว์ Put/Call/Σ ทั้ง Intraday และ OI ของสไตรค์นั้น, Vol Settle ที่สไตรค์ และห่าง F
+  กี่ σ — ใช้ pointer events ลากนิ้วบนมือถือได้) self-contained เปิด
   `open /tmp/cme_chart.html` ค้างไว้ได้ หน้า reload ตัวเองทุก 5 นาที
   + `/tmp/cme_eventvol.json` — จุด event vol ของ **0DTE เท่านั้น** (vol + forward vol)
   / หัวกราฟโชว์ `VolSettle 31.54 (+3.69)` คู่กับ `EventVol 0DTE 44.99` โดย**ขีดเส้นใต้

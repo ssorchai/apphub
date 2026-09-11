@@ -810,7 +810,18 @@ CHART_TMPL = r"""<!DOCTYPE html>
  #legend{font-size:12px;color:#555;margin-left:12px}
  #legend .sw{display:inline-block;width:9px;height:9px;border-radius:50%;margin:0 3px 0 10px}
  #upd{font-size:11px;color:#999;margin:6px 4px}
- svg{background:#f5f5f5;border:1px solid #e2e2e2;border-radius:4px}
+ svg{background:#f5f5f5;border:1px solid #e2e2e2;border-radius:4px;display:block}
+ #wrap{position:relative;display:inline-block}
+ #tip{position:absolute;pointer-events:none;display:none;background:rgba(255,255,255,.97);
+      border:1px solid #bbb;border-radius:5px;box-shadow:0 2px 8px rgba(0,0,0,.18);
+      padding:7px 10px;font-size:12px;line-height:1.5;white-space:nowrap;color:#222}
+ #tip .k{font-size:14px;font-weight:700}
+ #tip .d{color:#999;font-weight:400;font-size:11px}
+ #tip table{border-collapse:collapse;margin-top:3px}
+ #tip td{padding:0 0 0 10px;text-align:right}
+ #tip td:first-child{padding-left:0;text-align:left;color:#777}
+ #tip tr.on td{font-weight:700}
+ #tip .p{color:#e8940c}#tip .c{color:#3b6fd6}#tip .v{color:#c0392b}
 </style></head><body>
 <div id="hdr">
  <span id="title"></span>
@@ -822,7 +833,7 @@ CHART_TMPL = r"""<!DOCTYPE html>
   <button id="bId">Intraday</button><button id="bOi">OI</button>
  </span>
 </div>
-<svg id="c" width="960" height="600"></svg>
+<div id="wrap"><svg id="c" width="960" height="600"></svg><div id="tip"></div></div>
 <div id="upd"></div>
 <script>
 const D = __DATA__;
@@ -923,10 +934,11 @@ function render(){
   // เลย smooth ตอน render: median-3 กัน outlier + moving average ถ่วงน้ำหนัก
   // แล้ววาดเป็น Catmull-Rom spline (ข้อมูลดิบใน clip/VS ไม่ถูกแตะ)
   const vs = smooth(D.vs.filter(r => r[0] >= lo && r[0] <= hi));
+  let yr = null;
   if (vs.length > 2){
     let vlo = Math.min(...vs.map(r => r[1])), vhi = Math.max(...vs.map(r => r[1]));
     const pad = (vhi - vlo) * 0.15 + 0.5; vlo -= pad; vhi += pad;
-    const yr = v => T + (1 - (v - vlo) / (vhi - vlo)) * (H - T - B);
+    yr = v => T + (1 - (v - vlo) / (vhi - vlo)) * (H - T - B);
     el("path", {d: splinePath(vs.map(r => [x(r[0]), yr(r[1])])),
                 fill: "none", stroke: "#e05252", "stroke-width": 1.6, "stroke-dasharray": "6 4", opacity: 0.9}, svg);
     for (let k = 0; k <= 5; k++){
@@ -949,6 +961,83 @@ function render(){
   el("text", {x: 16, y: H / 2, "font-size": 11, fill: "#aaa",
               transform: "rotate(-90 16 " + H / 2 + ")", "text-anchor": "middle"}, svg).textContent =
     mode === "id" ? "Intraday Volume" : "Open Interest";
+  cursor(svg, {W, H, L, R, T, B, lo, hi, x, yr, vs, sig, stepX});
+}
+
+// cursor แบบ CME: เส้นตั้งตามเมาส์ ดูดเข้าสไตรค์ใกล้สุด + กล่องค่า Put/Call ของสไตรค์นั้น
+// โชว์ทั้ง Intraday และ OI (โหมดที่ดูอยู่ตัวหนาอยู่บน) + vol ที่สไตรค์ + ห่างจาก F กี่ σ
+// ใช้ pointer events จึงลากนิ้วบนมือถือได้ด้วย / overlay โปร่งใสบังทับ <title> ของแท่งเดิม
+function interp(rows, k){
+  if (!rows.length) return null;
+  if (k <= rows[0][0]) return k === rows[0][0] ? rows[0][1] : null;
+  for (let i = 1; i < rows.length; i++)
+    if (k <= rows[i][0]){
+      const [k0, v0] = rows[i - 1], [k1, v1] = rows[i];
+      return v0 + (v1 - v0) * (k - k0) / (k1 - k0);
+    }
+  return null;
+}
+function cursor(svg, g){
+  const tip = document.getElementById("tip");
+  tip.style.display = "none";
+  const idm = new Map(D.id.map(r => [r[0], r])), oim = new Map(D.oi.map(r => [r[0], r]));
+  const ks = [...new Set([...D.id, ...D.oi].map(r => r[0]))]
+    .filter(k => k >= g.lo && k <= g.hi).sort((a, b) => a - b);
+  if (!ks.length) return;
+  const cur = el("g", {visibility: "hidden", "pointer-events": "none"}, svg);
+  const band = el("rect", {y: g.T, height: g.H - g.T - g.B, fill: "rgba(0,0,0,0.07)"}, cur);
+  const line = el("line", {y1: g.T, y2: g.H - g.B, stroke: "#222", "stroke-width": 1, "stroke-dasharray": "3 3"}, cur);
+  const dot = el("circle", {r: 4, fill: "#e05252", stroke: "#fff", "stroke-width": 1.5}, cur);
+  const lblBg = el("rect", {y: g.H - g.B + 3, height: 17, rx: 3, fill: "#222"}, cur);
+  const lbl = el("text", {y: g.H - g.B + 15.5, "text-anchor": "middle", "font-size": 11,
+                          "font-weight": 700, fill: "#fff"}, cur);
+  const ov = el("rect", {x: g.L, y: g.T, width: g.W - g.L - g.R, height: g.H - g.T - g.B,
+                         fill: "transparent", style: "cursor:crosshair;touch-action:pan-y"}, svg);
+  const cell = (r, i) => r ? fmt(r[i]) : "0";
+  const row = (name, r, on) =>
+    '<tr' + (on ? ' class="on"' : '') + '><td>' + name + '</td>' +
+    '<td class="p">P ' + cell(r, 1) + '</td><td class="c">C ' + cell(r, 2) + '</td>' +
+    '<td>Σ ' + (r ? fmt(r[1] + r[2]) : "0") + '</td></tr>';
+  function show(ev){
+    const bb = svg.getBoundingClientRect();
+    const px = (ev.clientX - bb.left) * g.W / bb.width;
+    const py = (ev.clientY - bb.top) * g.H / bb.height;
+    const v = g.lo + (px - g.L) / (g.W - g.L - g.R) * (g.hi - g.lo);
+    let k = ks[0];
+    for (const s of ks) if (Math.abs(s - v) < Math.abs(k - v)) k = s;
+    const X = g.x(k), bw = Math.max(4, g.x(g.lo + g.stepX) - g.x(g.lo));
+    band.setAttribute("x", X - bw / 2); band.setAttribute("width", bw);
+    line.setAttribute("x1", X); line.setAttribute("x2", X);
+    lbl.textContent = fmt(k);
+    const tw = lbl.getComputedTextLength ? lbl.getComputedTextLength() + 12 : 44;
+    lblBg.setAttribute("x", X - tw / 2); lblBg.setAttribute("width", tw); lbl.setAttribute("x", X);
+    const vk = interp(g.vs, k);
+    if (g.yr && vk != null){
+      dot.setAttribute("cx", X); dot.setAttribute("cy", g.yr(vk)); dot.setAttribute("visibility", "visible");
+    } else dot.setAttribute("visibility", "hidden");
+    cur.setAttribute("visibility", "visible");
+    // ค่า vol ในกล่องใช้ของดิบ (ตัวเลขของ CME) ส่วนจุดบนเส้นใช้ค่าที่ smooth ให้ตรงกับเส้นที่วาด
+    const vraw = interp(D.vs, k);
+    const dist = (g.sig && D.F) ? (k - D.F) / g.sig : null;
+    const rows = mode === "id"
+      ? row("Intraday", idm.get(k), true) + row("OI", oim.get(k), false)
+      : row("OI", oim.get(k), true) + row("Intraday", idm.get(k), false);
+    tip.innerHTML = '<div class="k">' + fmt(k) +
+      (dist != null ? ' <span class="d">' + (dist >= 0 ? "+" : "") + dist.toFixed(2) + 'σ จาก F</span>' : '') +
+      '</div><table>' + rows + '</table>' +
+      (vraw != null ? '<div class="v">' + (D.iv_settle != null ? "Vol Settle " : "IV ") +
+                      vraw.toFixed(2) + '%</div>' : '');
+    tip.style.display = "block";
+    const sx = bb.width / g.W, sy = bb.height / g.H;
+    let left = X * sx + 14;
+    if (left + tip.offsetWidth > bb.width - 4) left = X * sx - tip.offsetWidth - 14;
+    let top = Math.min(Math.max(py * sy - tip.offsetHeight / 2, 4), bb.height - tip.offsetHeight - 4);
+    tip.style.left = left + "px"; tip.style.top = top + "px";
+  }
+  function hide(){ cur.setAttribute("visibility", "hidden"); tip.style.display = "none"; }
+  ov.addEventListener("pointermove", show);
+  ov.addEventListener("pointerdown", show);
+  ov.addEventListener("pointerleave", hide);
 }
 document.getElementById("bId").onclick = () => { mode = "id"; render(); };
 document.getElementById("bOi").onclick = () => { mode = "oi"; render(); };

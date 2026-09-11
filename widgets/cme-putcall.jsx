@@ -1,16 +1,22 @@
 import { run } from 'uebersicht';
 
-// อ่าน JSON ที่ cme_fetcher.py (cron รายชั่วโมง) เขียนไว้
-export const command = "cat /tmp/cme_putcall.json";
-export const refreshFrequency = 60000;
+// อ่าน JSON ที่ cme_fetcher.py (cron รายชั่วโมง) เขียนไว้ + ราคา futures สดจาก gold_fetcher.py
+// (เขียนทุก ~5 วินาที) ต่อท้ายหลังตัวคั่น -- รอบ 5 วินาทีเพื่อให้เส้น Future ในกราฟขยับตามราคา
+const LIVE_SEP = '@@LIVE@@';
+const CMD = `cat /tmp/cme_putcall.json; echo; echo '${LIVE_SEP}'; cat /tmp/gold_data.json 2>/dev/null`;
+export const command = CMD;
+export const refreshFrequency = 5000;
 
 // state แบบ redux ของ Übersicht: รองรับปุ่ม refresh (รัน fetcher ทันที + copy อัตโนมัติ)
-export const initialState = { output: null, refreshing: false };
+// chartMode = กราฟโชว์ Intraday หรือ OI / hover = สไตรค์ที่เมาส์ชี้อยู่
+export const initialState = { output: null, refreshing: false, chartMode: 'id', hover: null };
 export const updateState = (event, prev) => {
   switch (event.type) {
     case 'UB/COMMAND_RAN': return { ...prev, output: event.output };
     case 'REFRESH_START': return { ...prev, refreshing: true };
     case 'REFRESH_DONE': return { ...prev, refreshing: false, output: event.output || prev.output };
+    case 'CHART_MODE': return { ...prev, chartMode: event.mode };
+    case 'HOVER': return { ...prev, hover: event.k };
     default: return prev;
   }
 };
@@ -173,10 +179,223 @@ const SdBlock = ({ sd }) => {
   );
 };
 
+// ---- กราฟ Put/Call รายสไตรค์แบบ CME Vol2Vol (ย่อจาก /tmp/cme_chart.html) ----
+const CHART_W = 708;   // ความกว้างการ์ด 740 - padding ซ้ายขวา
+const CHART_H = 400;
+
+// smile: median-3 กัน outlier + weighted MA แล้ววาดเป็น Catmull-Rom (ค่าดิบในกล่อง hover ไม่ถูกแตะ)
+const smooth = (vs) => {
+  if (vs.length < 5) return vs;
+  const v = vs.map((r) => r[1]);
+  const med = v.map((x, i) => (i > 0 && i < v.length - 1 ? [v[i - 1], x, v[i + 1]].sort((a, b) => a - b)[1] : x));
+  const w = [1, 2, 3, 2, 1];
+  return vs.map((r, i) => {
+    let s = 0, ws = 0;
+    for (let k = -2; k <= 2; k++) {
+      const j = i + k;
+      if (j >= 0 && j < med.length) { s += med[j] * w[k + 2]; ws += w[k + 2]; }
+    }
+    return [r[0], s / ws];
+  });
+};
+const splinePath = (p) => {
+  if (p.length < 2) return '';
+  let d = `M${p[0][0].toFixed(1)},${p[0][1].toFixed(1)}`;
+  for (let i = 0; i < p.length - 1; i++) {
+    const p0 = p[Math.max(i - 1, 0)], p1 = p[i], p2 = p[i + 1], p3 = p[Math.min(i + 2, p.length - 1)];
+    const c1 = [p1[0] + (p2[0] - p0[0]) / 6, p1[1] + (p2[1] - p0[1]) / 6];
+    const c2 = [p2[0] - (p3[0] - p1[0]) / 6, p2[1] - (p3[1] - p1[1]) / 6];
+    d += `C${c1[0].toFixed(1)},${c1[1].toFixed(1)} ${c2[0].toFixed(1)},${c2[1].toFixed(1)} ${p2[0].toFixed(1)},${p2[1].toFixed(1)}`;
+  }
+  return d;
+};
+const interp = (rows, k) => {
+  if (!rows.length || k < rows[0][0] || k > rows[rows.length - 1][0]) return null;
+  for (let i = 0; i < rows.length; i++) {
+    if (rows[i][0] === k) return rows[i][1];
+    if (i > 0 && k < rows[i][0]) {
+      const [k0, v0] = rows[i - 1], [k1, v1] = rows[i];
+      return v0 + ((v1 - v0) * (k - k0)) / (k1 - k0);
+    }
+  }
+  return null;
+};
+
+// ปุ่มสลับโหมด: ต้องกันคลิกไม่ให้ทะลุไปถึงการ์ด (คลิกการ์ด = copy)
+const ModePill = ({ label, on, onPick }) => (
+  <span
+    onClick={(e) => { e.stopPropagation(); onPick(); }}
+    onDoubleClick={(e) => e.stopPropagation()}
+    style={{
+      fontSize: '11px', fontWeight: '700', padding: '3px 10px', borderRadius: '999px',
+      color: on ? '#fff' : macos.secondary,
+      background: on ? 'rgba(100,210,255,0.35)' : 'rgba(255,255,255,0.12)',
+    }}>
+    {label}
+  </span>
+);
+
+const Chart = ({ data, liveF, mode, hover, dispatch }) => {
+  const ch = data.chart;
+  if (!ch) return null;
+  const W = CHART_W, H = CHART_H, L = 38, R = 38, T = 8, B = 22;
+  const F = data.F;
+  const fNow = liveF != null ? liveF : F;
+  const sig = F && data.iv && data.dte > 0 ? (F * data.iv) / 100 * Math.sqrt(data.dte / 365) : null;
+  const rows = (ch[mode] || []).filter((r) => r[1] + r[2] > 0);
+  const strikes = [...new Set([...ch.id, ...ch.oi].map((r) => r[0]))].sort((a, b) => a - b);
+  if (!strikes.length) return null;
+  // ช่วงแกน x: ±3.5σ รอบ F เหมือนหน้าเว็บ (ไม่เกินช่วงข้อมูลที่มี)
+  let lo = strikes[0], hi = strikes[strikes.length - 1];
+  if (sig && F) { lo = Math.max(lo, F - 3.5 * sig); hi = Math.min(hi, F + 3.5 * sig); }
+  lo -= 5; hi += 5;
+  const x = (v) => L + ((v - lo) / (hi - lo)) * (W - L - R);
+  const vrows = rows.filter((r) => r[0] >= lo && r[0] <= hi);
+  const ymax = Math.max(1, ...vrows.map((r) => Math.max(r[1], r[2]))) * 1.1;
+  const y = (v) => T + (1 - v / ymax) * (H - T - B);
+  const ks = strikes.filter((k) => k >= lo && k <= hi);
+  const stepX = ks.length > 1 ? Math.min(...ks.slice(1).map((k, i) => k - ks[i])) : 5;
+  const bw = Math.max(1.2, (x(lo + stepX) - x(lo)) * 0.36);
+
+  // smile แกนขวา
+  const vs = smooth((ch.vs || []).filter((r) => r[0] >= lo && r[0] <= hi));
+  let yr = null, vlo = 0, vhi = 0;
+  if (vs.length > 2) {
+    vlo = Math.min(...vs.map((r) => r[1])); vhi = Math.max(...vs.map((r) => r[1]));
+    const pad = (vhi - vlo) * 0.15 + 0.5; vlo -= pad; vhi += pad;
+    yr = (v) => T + (1 - (v - vlo) / (vhi - vlo)) * (H - T - B);
+  }
+
+  // hover: ดูดเข้าสไตรค์ใกล้สุด / dispatch เฉพาะตอนสไตรค์เปลี่ยน กัน re-render ถี่เกิน
+  const onMove = (e) => {
+    const bb = e.currentTarget.ownerSVGElement.getBoundingClientRect();
+    const v = lo + (((e.clientX - bb.left) * W) / bb.width - L) / (W - L - R) * (hi - lo);
+    let k = ks[0];
+    for (const s of ks) if (Math.abs(s - v) < Math.abs(k - v)) k = s;
+    if (k !== hover) dispatch({ type: 'HOVER', k });
+  };
+  const idm = new Map(ch.id.map((r) => [r[0], r])), oim = new Map(ch.oi.map((r) => [r[0], r]));
+
+  const xStep = (hi - lo) / 50 > 12 ? 100 : 50;
+  const xt = [];
+  for (let s = Math.ceil(lo / xStep) * xStep; s <= hi; s += xStep) xt.push(s);
+  const bands = sig && F ? [3, 2, 1] : [];
+  const bandFill = { 1: 'rgba(255,255,255,0.10)', 2: 'rgba(255,255,255,0.065)', 3: 'rgba(255,255,255,0.035)' };
+
+  let tip = null;
+  if (hover != null && hover >= lo && hover <= hi) {
+    const X = x(hover), idr = idm.get(hover), oir = oim.get(hover);
+    const vk = interp(ch.vs || [], hover), vks = interp(vs, hover);
+    const dist = sig && fNow ? (hover - fNow) / sig : null;
+    const line = (name, r) => `${name}  P ${r ? fmt(r[1]) : 0}  C ${r ? fmt(r[2]) : 0}  Σ ${r ? fmt(r[1] + r[2]) : 0}`;
+    const lines = mode === 'id'
+      ? [[line('Intraday', idr), true], [line('OI', oir), false]]
+      : [[line('OI', oir), true], [line('Intraday', idr), false]];
+    const bxW = 214, bxH = vk != null ? 74 : 58;
+    const bx = X + 12 + bxW > W - R ? X - 12 - bxW : X + 12;
+    tip = (
+      <g pointerEvents="none">
+        <rect x={X - Math.max(3, bw * 1.3)} y={T} width={Math.max(6, bw * 2.6)} height={H - T - B} fill="rgba(255,255,255,0.10)" />
+        <line x1={X} x2={X} y1={T} y2={H - B} stroke="rgba(255,255,255,0.75)" strokeWidth="1" strokeDasharray="3 3" />
+        {yr && vks != null && <circle cx={X} cy={yr(vks)} r="3.5" fill="#ff6b6b" stroke="#fff" strokeWidth="1.2" />}
+        <rect x={bx} y={T + 18} width={bxW} height={bxH} rx="6" fill="rgba(20,22,28,0.92)" stroke="rgba(255,255,255,0.25)" />
+        <text x={bx + 10} y={T + 36} fontSize="13" fontWeight="700" fill="#fff">
+          {fmt(hover)}
+          {dist != null && <tspan fontSize="10.5" fontWeight="400" fill={macos.tertiary}>{`  ${dist >= 0 ? '+' : ''}${dist.toFixed(2)}σ จาก F`}</tspan>}
+        </text>
+        {lines.map(([t, bold], i) => (
+          <text key={i} x={bx + 10} y={T + 53 + i * 15} fontSize="11" fontWeight={bold ? '700' : '400'}
+            fill={bold ? '#fff' : macos.secondary}>{t}</text>
+        ))}
+        {vk != null && (
+          <text x={bx + 10} y={T + 83} fontSize="11" fill="#ff8a8a">
+            {`${data.iv_settle != null ? 'Vol Settle' : 'IV'} ${vk.toFixed(2)}%`}
+          </text>
+        )}
+        <rect x={X - 22} y={H - B + 3} width="44" height="15" rx="3" fill="#fff" />
+        <text x={X} y={H - B + 14} fontSize="10.5" fontWeight="700" fill="#111" textAnchor="middle">{fmt(hover)}</text>
+      </g>
+    );
+  }
+
+  return (
+    <div style={{ marginTop: '10px', borderTop: `0.5px solid ${macos.divider}`, paddingTop: '8px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '4px' }}>
+        <span style={{ ...secTitle, color: macos.label, marginRight: '4px' }}>Put / Call by Strike</span>
+        <ModePill label="Intraday" on={mode === 'id'} onPick={() => dispatch({ type: 'CHART_MODE', mode: 'id' })} />
+        <ModePill label="OI" on={mode === 'oi'} onPick={() => dispatch({ type: 'CHART_MODE', mode: 'oi' })} />
+        <span style={{ marginLeft: 'auto', fontSize: '11px', color: macos.tertiary }}>
+          <span style={{ color: macos.orange }}>■</span> Put&nbsp;&nbsp;
+          <span style={{ color: macos.blue }}>■</span> Call&nbsp;&nbsp;
+          <span style={{ color: '#ff8a8a' }}>- -</span> {data.iv_settle != null ? 'Vol Settle' : 'IV'}&nbsp;&nbsp;
+          <span style={{ color: '#fff' }}>│</span> Future {liveF != null ? `${fmt(liveF)} live` : fmt(F)}
+        </span>
+      </div>
+      <svg width={W} height={H} style={{ display: 'block' }}>
+        {bands.map((n) => {
+          const a = Math.max(x(F - n * sig), L), b = Math.min(x(F + n * sig), W - R);
+          return <rect key={n} x={a} y={T} width={Math.max(0, b - a)} height={H - T - B} fill={bandFill[n]} />;
+        })}
+        {[0.5, 1].map((f) => (
+          <g key={f}>
+            <line x1={L} x2={W - R} y1={y((ymax / 1.1) * f)} y2={y((ymax / 1.1) * f)} stroke="rgba(255,255,255,0.10)" />
+            <text x={L - 5} y={y((ymax / 1.1) * f) + 3} fontSize="9.5" fill={macos.tertiary} textAnchor="end">
+              {fmt(Math.round((ymax / 1.1) * f))}
+            </text>
+          </g>
+        ))}
+        <line x1={L} x2={W - R} y1={y(0)} y2={y(0)} stroke="rgba(255,255,255,0.25)" />
+        {vrows.map(([s, p, c]) => (
+          <g key={s}>
+            {p > 0 && <rect x={x(s) - bw - 0.4} y={y(p)} width={bw} height={y(0) - y(p)} fill={macos.orange} />}
+            {c > 0 && <rect x={x(s) + 0.4} y={y(c)} width={bw} height={y(0) - y(c)} fill={macos.blue} />}
+          </g>
+        ))}
+        {yr && (
+          <g>
+            <path d={splinePath(vs.map((r) => [x(r[0]), yr(r[1])]))} fill="none" stroke="#ff6b6b"
+              strokeWidth="1.6" strokeDasharray="6 4" />
+            {[vlo, (vlo + vhi) / 2, vhi].map((v, i) => (
+              <text key={i} x={W - R + 5} y={yr(v) + 3} fontSize="9.5" fill={macos.tertiary}>{v.toFixed(1)}</text>
+            ))}
+          </g>
+        )}
+        {liveF != null && F && F > lo && F < hi && (
+          <line x1={x(F)} x2={x(F)} y1={T} y2={H - B} stroke="rgba(255,255,255,0.45)" strokeDasharray="3 4" />
+        )}
+        {fNow && fNow > lo && fNow < hi && (
+          <g>
+            <line x1={x(fNow)} x2={x(fNow)} y1={T} y2={H - B} stroke="#fff" strokeWidth="1.5" />
+            <rect x={x(fNow) + 1} y={T} width="92" height="16" rx="3" fill="#fff" />
+            <text x={x(fNow) + 5} y={T + 12} fontSize="10.5" fontWeight="700" fill="#111">
+              {`Future ${fmt(fNow)}`}
+            </text>
+          </g>
+        )}
+        {xt.map((s) => (
+          <text key={s} x={x(s)} y={H - 6} fontSize="10" fill={macos.tertiary} textAnchor="middle">{fmt(s)}</text>
+        ))}
+        {tip}
+        <rect x={L} y={T} width={W - L - R} height={H - T - B} fill="transparent"
+          onMouseMove={onMove} onMouseLeave={() => dispatch({ type: 'HOVER', k: null })}
+          style={{ cursor: 'crosshair' }} />
+      </svg>
+    </div>
+  );
+};
+
 export const render = (state, dispatch) => {
-  const { output, refreshing } = state || {};
+  const { output, refreshing, chartMode, hover } = state || {};
+  const [cmeTxt, liveTxt] = (output || '').split(LIVE_SEP);
   let data = null;
-  try { data = JSON.parse(output); } catch (e) { data = null; }
+  try { data = JSON.parse(cmeTxt); } catch (e) { data = null; }
+  // ราคาสดใช้ได้เมื่อสัญญาตรงกับ underlying ของ series (GCV6 = GCV26) และไม่เก่าเกิน 3 นาที
+  let liveF = null;
+  try {
+    const g = JSON.parse(liveTxt);
+    const und = data && data.und_sym ? data.und_sym.slice(0, 3) + data.und_sym.slice(-1) : null;
+    if (g.future && g.future.price && g.future.sym === und && Date.now() / 1000 - g.ts < 180) liveF = g.future.price;
+  } catch (e) { liveF = null; }
 
   const container = {
     position: 'fixed', bottom: savedPos().bottom || '25px', left: savedPos().left || '35px', width: '740px',
@@ -214,7 +433,7 @@ export const render = (state, dispatch) => {
     dispatch({ type: 'REFRESH_START' });
     run('/usr/bin/python3 /Users/sorachai/src/my-cronjob/cme_fetcher.py')
       .then(() => run('cat /tmp/cme_putcall_clip.txt | pbcopy'))
-      .then(() => run('cat /tmp/cme_putcall.json'))
+      .then(() => run(CMD))
       .then((out) => dispatch({ type: 'REFRESH_DONE', output: out }))
       .catch(() => dispatch({ type: 'REFRESH_DONE', output: null }));
   };
@@ -328,6 +547,8 @@ export const render = (state, dispatch) => {
           <ChangeRow rows={data.changes && data.changes.oi} since={data.changes && data.changes.since} sc={strikeColor} />
         </div>
       </div>
+
+      <Chart data={data} liveF={liveF} mode={chartMode || 'id'} hover={hover} dispatch={dispatch} />
 
       <div style={{
         borderTop: `0.5px solid ${macos.divider}`,

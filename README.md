@@ -134,6 +134,14 @@ crontab ปัจจุบัน:
 - ⚠️ **www.cmegroup.com (WAF) แบน IP เครื่องนี้จากการ scrape แล้ว — ห้ามยิงตรง**
   (quikstrike.net เป็น infra คนละเจ้า/Bantix ใช้ Referer cmegroup.com ได้ตามเดิม)
 - **cme-putcall.jsx**: สรุป P/C + ratio bar + Top Active + ธงแดงเมื่อ |IV Chg| > 2
+  + **กราฟ Put/Call รายสไตรค์ต่อด้านล่าง** (การ์ด 740×~713 เกือบจัตุรัส) ย่อจากหน้าเว็บ:
+  แท่ง P/C, แถบ SD ±1-3σ, เส้น Vol Settle, เส้น Future สด + เส้นประราคาตอนดึงข้อมูล,
+  ปุ่มสลับ Intraday/OI (กันคลิกทะลุไป copy), hover ดูดเข้าสไตรค์โชว์ P/C ทั้งสองชุด + vol + σ
+  / ข้อมูลรายสไตรค์มาจากคีย์ `chart` ใน cme_putcall.json (fetcher เขียน ช่วง ±4σ) และราคาสด
+  อ่าน `/tmp/gold_data.json` ตรงๆ (widget ไม่ติดข้อจำกัด file://) → command ต่อสองไฟล์ด้วยตัวคั่น
+  `@@LIVE@@` และ refresh ทุก 5 วินาที / การ์ดยึดขอบล่าง (`bottom`) จึงสูงขึ้นไปทางด้านบน
+  / ดูหน้าตาจริงโดยไม่ต้องจับภาพ desktop: เปิด `http://127.0.0.1:41416/1/` (เลข 1 = screen id
+  ที่ widget ผูกอยู่ ดูได้จาก `/state/`) ในเบราว์เซอร์
   **ดับเบิลคลิก widget = เปิดกราฟ Intraday/OI** (`open /tmp/cme_chart.html` ในเบราว์เซอร์หลัก)
   / **คลิก widget = copy clip ลง clipboard** แล้วไปวางในช่อง "Paste P/C Data" ของ
   indicator `oi_block.pine` (โปรเจกต์ `tdw_indi`) / ป้าย "via ..." ขึ้นเมื่อ source

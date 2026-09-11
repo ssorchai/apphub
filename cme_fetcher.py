@@ -90,8 +90,12 @@ QS_EVC_URL = ("https://cmegroup-tools.quikstrike.net/User/QuikStrikeView.aspx"
 # ให้ settle vol + Vol Chg "รายสไตรค์" ของ CME = smile settle จริงแบบยุค Vol2Vol
 QS_SETTLE_URL = ("https://cmegroup-tools.quikstrike.net/User/QuikStrikeView.aspx"
                  "?pid=40&pf=6&viewitemid=IntegratedSettlementSheet")
+# Vol2Vol Expected Range -- แท็บ Intraday โดนถอดข้อมูล แต่แท็บ Open Interest ยังมี
+# smile "Vol Settle" รายสไตรค์ + ATMVol (ลิงก์บน cmegroup.com เป็น iframe ครอบหน้านี้)
+QS_V2V_URL = ("https://cmegroup-tools.quikstrike.net/User/QuikStrikeView.aspx"
+              "?pid=40&pf=6&viewitemid=IntegratedV2VExpectedRange")
 QS_REFERER = "https://www.cmegroup.com/"
-QS_BUDGET = 45          # งบแยกของ QuikStrike -- ตัวเสริม ห้ามกินงบจนกระทบข้อมูลหลัก
+QS_BUDGET = 60          # งบแยกของ QuikStrike (ราว 6 request) -- ห้ามกระทบข้อมูลหลัก
 
 # คอลัมน์ของตาราง #pricing-sheet (ยืนยัน 10 ก.ย. 26 จาก header สองชั้น:
 # Call[Chg,Prior,Settle] | Strike | Put[Settle,Prior,Chg] | Volatility[S,P,C] |
@@ -425,6 +429,12 @@ def snapshot_barchart():
             prices[r.get("symbol")] = float(r["lastPrice"])
     F = prices.get(und_sym)
 
+    # ตัดสไตรค์ที่หลุดโลก: chain ของ barchart มีแถว strike 10,000 (put vol 90) โผล่มา
+    # ขณะที่ F ~4,300 และสไตรค์จริงไกลสุดแค่ 6,000 (หน้าเว็บ barchart ก็โชว์แถวนี้)
+    # สไตรค์จริงอยู่ในช่วงราว 0.7-1.4 เท่าของ F จึงตัดที่ 0.5-1.5 เท่า
+    if F:
+        legs = {s: v for s, v in legs.items() if 0.5 * F <= s <= 1.5 * F}
+
     # Intraday / OI รายสไตรค์
     id_rows, oi_rows = [], []
     for s, v in sorted(legs.items()):
@@ -626,7 +636,7 @@ def _parse_sheet(html):
     # CME ปิดการแสดง settlement ของรอบล่าสุดจนถึงเที่ยงคืน CT (= 12:00 ไทย หน้าร้อน /
     # 13:00 หน้าหนาว) ช่วงเช้าไทยหน้าจึงว่างทั้งหน้า -- ไม่ใช่ความผิดปกติ ใช้ smile สดแทน
     if "settlements are not available for viewing" in html:
-        raise RuntimeError("settle sheet ถูกปิดจนถึง 00:00 CT (12:00 ไทย) -- ใช้ smile สดแทน")
+        raise RuntimeError("settle sheet ถูกปิดจนถึง 00:00 CT (12:00 ไทย) -- ยังไม่มี Vol Chg")
     m = re.search(r'id="pricing-sheet"(.*?)</table>', html, re.S)
     if not m:
         raise RuntimeError("settle sheet: ไม่เจอตาราง #pricing-sheet")
@@ -653,20 +663,21 @@ def _parse_sheet(html):
     return vs, chg
 
 
-def fetch_settle_sheet(expiry):
-    """smile settle ของ CME รายสไตรค์ สำหรับ series ที่หมดอายุวันที่ expiry
-    -> (vs_rows, chg_map, qs_sym)
+def _qs_open_expiry(view_url, expiry, extra_fn=None):
+    """เปิด view ของ QuikStrike แล้วเลือก expiration ที่หมดอายุวันที่ expiry
+    -> (op, url, html หลังเลือก, qs_sym)
 
-    ต้องเลือก expiration ใน selector เองด้วย postback: default ของหน้าคือ series ถัดไป
-    ไม่ใช่ 0DTE / จับคู่จาก attribute title ของ anchor ซึ่งมีข้อมูลครบ (ชื่อสัญลักษณ์
-    อยู่ใน <div> ข้างในอีกที ใช้ text ของ anchor จับไม่ได้):
+    default ของแต่ละ view ไม่แน่ว่าเป็น 0DTE (Settlement Sheet เปิดมาเป็น series ถัดไป)
+    จึงเลือกเองด้วย postback ทุกครั้ง / จับคู่จาก attribute title ของ anchor ซึ่งมีข้อมูล
+    ครบ (ชื่อสัญลักษณ์อยู่ใน <div> ข้างในอีกที ใช้ text ของ anchor จับไม่ได้):
       title="Option Contract:\tSep 2026
              Option Expiration:\t9/10/2026 (0.31 DTE)
              Option Symbol:\t\tG2RU6 ..."
     จับด้วย "วันหมดอายุ" ไม่ใช่ชื่อ -- barchart กับ QuikStrike ใช้คนละระบบรหัส
-    (I0HU26 vs G2RU6) วันหมดอายุเป็นตัวเชื่อมเดียวที่เชื่อได้"""
+    (I0HU26 vs G2RU6) วันหมดอายุเป็นตัวเชื่อมเดียวที่เชื่อได้
+    extra_fn(html) -> dict ของ field เพิ่มที่ส่งไปกับ postback นี้ด้วย"""
     op = _qs_opener()
-    r = op.open(urllib.request.Request(QS_SETTLE_URL, headers={
+    r = op.open(urllib.request.Request(view_url, headers={
         "User-Agent": UA, "Referer": QS_REFERER}), timeout=_budget(35))
     html = r.read().decode()
     url = r.geturl()
@@ -682,14 +693,52 @@ def fetch_settle_sheet(expiry):
             qs_sym = sm.group(1) if sm else None
             break
     if not target:
-        raise RuntimeError("settle sheet: ไม่เจอ expiration {} ใน selector".format(want))
-    # ddlStrikes = -1 คือ "(All)" -- default ของหน้าคือ 25 สไตรค์รอบ ATM ซึ่งแคบกว่ากรอบ
-    # 3σ ที่ใช้เทรด และ ladder นี้ถูกใช้เป็นแกนของ WormHole ฝั่ง Pine ด้วย
-    extra = {n: "-1" for n in _qs_selects(html) if n.endswith("ddlStrikes")}
-    html = _qs_postback(op, url, html, target, extra)
+        raise RuntimeError("ไม่เจอ expiration {} ใน selector".format(want))
+    html = _qs_postback(op, url, html, target, extra_fn(html) if extra_fn else None)
     _qs_check_page(html)
+    return op, url, html, qs_sym
+
+
+def fetch_settle_sheet(expiry):
+    """settle vol + Vol Chg รายสไตรค์จาก Settlement Sheet -> (vs_rows, chg_map, qs_sym)
+    ตอนนี้ใช้หลักๆ เพื่อเอา Vol Chg (Vol2Vol ไม่มีแล้ว) และเป็นสำรองของ smile"""
+    # ddlStrikes = -1 คือ "(All)" -- default ของหน้าคือ 25 สไตรค์รอบ ATM
+    all_strikes = lambda h: {n: "-1" for n in _qs_selects(h) if n.endswith("ddlStrikes")}
+    _, _, html, qs_sym = _qs_open_expiry(QS_SETTLE_URL, expiry, all_strikes)
     vs, chg = _parse_sheet(html)
     return vs, chg, qs_sym
+
+
+def fetch_v2v_smile(expiry):
+    """smile "Vol Settle" จาก Vol2Vol แท็บ Open Interest -> (vs_rows, atm_vol, F, qs_sym)
+
+    แท็บ Intraday ของ Vol2Vol โดนถอดข้อมูลไปแล้ว (ก.ย. 2026) แต่แท็บ OI ยังส่ง chart
+    payload ครบ: series Call/Put/Vol/VolSettle/Ranges + ATMVol, FuturePrice, DTE
+    หน่วย vol เป็นเศษส่วน (0.4499 = 44.99%) / ไม่โดนปิดช่วงเช้าแบบ Settlement Sheet
+    ข้อจำกัด: ladder แคบตามกราฟของ CME (ราว 80 สไตรค์) และไม่มี Vol Chg แล้ว"""
+    op, url, html, qs_sym = _qs_open_expiry(QS_V2V_URL, expiry)
+    tab = re.search(r"__doPostBack\(&#39;([^&]*\$lbOI)&#39;", html)
+    if not tab:
+        raise RuntimeError("Vol2Vol: ไม่เจอแท็บ Open Interest")
+    html = _qs_postback(op, url, html, tab.group(1))
+    _qs_check_page(html)
+    i = html.find("$create(UserControlsV2.QuikOptionsV")
+    if i < 0:
+        raise RuntimeError("Vol2Vol: แท็บ OI ไม่มี chart payload")
+    m = re.search(r'"JSONSettings":"((?:[^"\\]|\\.)*)"', html[i:])
+    d = json.loads(m.group(1).encode().decode("unicode_escape"))
+    if qs_sym and not (d.get("Title") or "").startswith(qs_sym):
+        raise RuntimeError("Vol2Vol: ได้ series {!r} ไม่ใช่ {}".format(d.get("Title"), qs_sym))
+    vs = []
+    for p in (d.get("VolSettle") or {}).get("data") or []:
+        if p.get("x") and p.get("y"):
+            k = float(p["x"])
+            vs.append((int(k) if k == int(k) else k, round(float(p["y"]) * 100, 2)))
+    if not vs:
+        raise RuntimeError("Vol2Vol: series VolSettle ว่าง")
+    atm = d.get("ATMVol")
+    return (sorted(vs), round(atm * 100, 2) if atm else None,
+            d.get("FuturePrice"), qs_sym)
 
 
 def _qs_check_page(html, url=""):
@@ -835,7 +884,7 @@ function render(){
   document.getElementById("bOi").className = mode === "oi" ? "on" : "";
   document.getElementById("upd").textContent = "updated " + D.updated + " · " + D.series +
     (D.qs_sym ? " (" + D.qs_sym + ")" : "") + " on " + D.und + " · DTE " + D.dte +
-    " · P/C barchart delayed 10-15m · vol CME settle+event (QuikStrike)" +
+    " · P/C barchart delayed 10-15m · smile " + (D.smile_src || "-") + " · SD IV " + D.iv_src +
     " · ขีดเส้นใต้ = ตัวที่ใช้คิด SD";
   if (!rows.length) return;
   // โดเมนแกน x: ±3.5σ รอบ F (ไม่งั้นปีก OI ลากกราฟกว้างจนแท่งกลางจมหาย)
@@ -914,6 +963,7 @@ def chart_html(snap, now, ev=None):
         "dte": snap["dte"], "iv": snap["iv"], "iv_src": snap.get("iv_src"),
         "iv_event": snap.get("iv_event"), "iv_settle": snap.get("iv_settle"),
         "iv_settle_chg": snap.get("iv_settle_chg"), "qs_sym": snap.get("qs_sym"),
+        "smile_src": snap.get("smile_src"),
         "updated": "{:%Y-%m-%d %H:%M}".format(now),
         "id": [list(r) for r in snap["id_rows"]],
         "oi": [list(r) for r in snap["oi_rows"]],
@@ -949,41 +999,69 @@ def main():
         print("[{:%Y-%m-%d %H:%M:%S}] eventvol พัง (ข้าม): {}: {}".format(
             now, type(e).__name__, str(e)[:80]), file=sys.stderr)
 
-    iv_settle = iv_settle_chg = None
-    if True:
-        try:
-            vs_settle, chg_map, sheet_sym = fetch_settle_sheet(snap["expiry"])
-            qs_sym = qs_sym or sheet_sym
+    # 2) smile ที่ plot (VS): Vol2Vol แท็บ OI เป็นหลัก -- ตรงกับเส้น "Vol Settle" ที่ CME
+    #    โชว์และใช้ได้ทั้งวัน -> Settlement Sheet เป็นสำรอง -> smile สดจาก bid/ask
+    #    ใช้เส้นเดียวนี้ทั้งโหมด Intraday และ OI ของ indicator
+    # 3) Vol Chg มีที่เดียวคือ Settlement Sheet (ปิดช่วงเช้าจนถึง 12:00 ไทย)
+    iv_settle = iv_settle_chg = atm_v2v = None
+    smile_src = None
+    try:
+        vs_v2v, atm_v2v, _, v2v_sym = fetch_v2v_smile(snap["expiry"])
+        qs_sym = qs_sym or v2v_sym
+        snap["vs_rows"] = vs_v2v
+        # IVS = ATMVol ของ CME เอง (vol ที่ ATM ณ F ตอน settle -- ตัวเลขที่ CME โชว์เป็น
+        # VolSettle) ไม่ใช่อ่านเส้นที่ F ปัจจุบัน: 11 ก.ย. 26 ATMVol 44.99 = เส้นที่ 4,374
+        # (F settle) ส่วนที่ F 4,338 ตอนเช้าได้ 45.29
+        iv_settle = atm_v2v if atm_v2v is not None else iv_at(vs_v2v, snap["F"])
+        iv_settle = round(iv_settle, 2) if iv_settle is not None else None
+        smile_src = "vol2vol"
+        print("[{:%Y-%m-%d %H:%M:%S}] vol2vol {} ok {} strikes {}-{} ATMVol {} -> IVS {}".format(
+            now, v2v_sym, len(vs_v2v), vs_v2v[0][0], vs_v2v[-1][0], atm_v2v, iv_settle),
+            file=sys.stderr)
+    except Exception as e:
+        print("[{:%Y-%m-%d %H:%M:%S}] vol2vol พัง (ข้าม): {}: {}".format(
+            now, type(e).__name__, str(e)[:80]), file=sys.stderr)
+
+    try:
+        vs_settle, chg_map, sheet_sym = fetch_settle_sheet(snap["expiry"])
+        qs_sym = qs_sym or sheet_sym
+        iv_settle_chg = iv_at(sorted(chg_map.items()), snap["F"])
+        iv_settle_chg = round(iv_settle_chg, 2) if iv_settle_chg is not None else None
+        if smile_src is None:
             iv_settle = iv_at(vs_settle, snap["F"])
             iv_settle = round(iv_settle, 2) if iv_settle is not None else None
             # ladder "(All)" ยาวถึง 3000-6000 และปีกไกลมี vol หลักร้อย (ของจริงแต่ทำให้
             # smile ที่ plot เพี้ยนหมด) -- ตัดที่ 2.5x ATM กติกาเดียวกับ smile ที่คำนวณเอง
             if iv_settle:
                 vs_settle = [(s, v) for s, v in vs_settle if v <= iv_settle * 2.5]
-            snap["vs_rows"] = vs_settle          # smile ที่ plot = settle ของ CME
-            snap["iv_src"] = "settle"
-            iv_settle_chg = iv_at(sorted(chg_map.items()), snap["F"])
-            iv_settle_chg = round(iv_settle_chg, 2) if iv_settle_chg is not None else None
-            print("[{:%Y-%m-%d %H:%M:%S}] settle sheet {} ok {} strikes ATM {} chg {}".format(
-                now, sheet_sym, len(vs_settle), iv_settle, iv_settle_chg), file=sys.stderr)
-        except Exception as e:
-            print("[{:%Y-%m-%d %H:%M:%S}] settle sheet พัง (ข้าม): {}: {}".format(
-                now, type(e).__name__, str(e)[:80]), file=sys.stderr)
+            snap["vs_rows"] = vs_settle
+            smile_src = "settle sheet"
+        print("[{:%Y-%m-%d %H:%M:%S}] settle sheet {} ok chg {}".format(
+            now, sheet_sym, iv_settle_chg), file=sys.stderr)
+    except Exception as e:
+        print("[{:%Y-%m-%d %H:%M:%S}] settle sheet พัง (ข้าม): {}: {}".format(
+            now, type(e).__name__, str(e)[:80]), file=sys.stderr)
+    snap["smile_src"] = smile_src or "live"
 
     # IV หลักที่ใช้คิด SD = ช่อง "vol" ของจุด 0DTE (ตัวเลขที่หน้า EVC โชว์)
     # ⚠️ ห้ามใช้ "fwd": forward vol ที่ติดกับจุดไหนคือช่วง "หลัง" expiry นั้นไปถึง expiry
     # ถัดไป ไม่ใช่วันนี้ (11 ก.ย. 26: OG2U6 vol 44.99 แต่ fwd 18.36 = ช่วงข้ามเสาร์-อาทิตย์)
-    # ไล่ fallback: event -> settle -> computed
+    # ไล่ fallback: event -> ATMVol ของ Vol2Vol (ตัวเลขเดียวกันเมื่อยังไม่ re-mark)
+    # -> settle -> computed
     snap["iv_event"] = ev0.get("vol") if ev0 else None
     snap["iv_settle"] = iv_settle
     snap["iv_settle_chg"] = iv_settle_chg
     if snap["iv_event"] is not None:
         snap["iv"], snap["iv_src"] = snap["iv_event"], "event"
+    elif atm_v2v is not None:
+        snap["iv"], snap["iv_src"] = atm_v2v, "vol2vol"
     elif iv_settle is not None:
         snap["iv"], snap["iv_src"] = iv_settle, "settle"
-    # IVCHG ต้องว่างเมื่อ IV เป็น event vol: ฝั่ง Pine คิด vol = IV - IVCHG ซึ่งเป็นสูตร
-    # ของคู่ settle เท่านั้น เอา settle chg ไปลบ event vol จะได้ค่าที่ไม่มีความหมาย
-    snap["iv_chg"] = None if snap["iv_src"] == "event" else iv_settle_chg
+    # IVCHG ใส่ได้เฉพาะเมื่อ IV เป็น settle: ฝั่ง Pine คิด vol = IV - IVCHG ซึ่งเป็นสูตร
+    # ของคู่ settle เท่านั้น เอา settle chg ไปลบ event vol หรือ ATMVol ที่ re-mark แล้ว
+    # จะได้ค่าที่ไม่มีความหมาย
+    snap["iv_chg"] = iv_settle_chg if snap["iv_src"] == "settle" else None
+    snap["qs_sym"] = qs_sym
 
     meta = {"series": snap["series"], "F": snap["F"], "dte": snap["dte"],
             "iv": snap["iv"], "future_chg": snap["future_chg"]}
@@ -1059,6 +1137,7 @@ def main():
         "iv_settle": snap.get("iv_settle"),
         "iv_settle_chg": snap.get("iv_settle_chg"),
         "qs_sym": qs_sym,                # รหัส CME ของ series เดียวกัน เช่น G2RU6
+        "smile_src": snap.get("smile_src"),  # vol2vol / settle sheet / live
         "future_chg": meta["future_chg"],
         "intraday": {
             "put": sum(r[1] for r in id_rows),

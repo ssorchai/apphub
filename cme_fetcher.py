@@ -23,8 +23,8 @@ same-origin` (พิสูจน์ 10 ก.ย.: ไม่ต้องมี coo
 
 QuikStrike ยังใช้ได้ 2 view แบบ anonymous (Referer จาก cmegroup.com เหมือนยุค Vol2Vol
 -- viewitemid หาโดยจำลอง postback กดเมนูให้เซิร์ฟเวอร์เฉลย ชื่อในเมนูใช้ตรงๆ ไม่ได้):
-  - IntegratedEventVolCalculator -> event vol ของ 0DTE = **IV หลักที่ใช้คิด SD**
-    (forward vol ครอบช่วงที่จบวันนี้ วันมี event เช่น FOMC จะกว้างกว่าปกติ)
+  - IntegratedEventVolCalculator -> ช่อง vol ของจุด 0DTE = **IV หลักที่ใช้คิด SD**
+    (ไม่ใช่ forwardVol -- อันนั้นคือช่วงหลัง expiry ไปถึงตัวถัดไป)
     ⚠️ ค่านี้ re-mark ระหว่างวัน ตอนเช้าจะเท่า settle แล้วค่อยขยับตามตลาด
   - IntegratedSettlementSheet -> ตาราง #pricing-sheet: **settle vol + Vol Chg รายสไตรค์**
     ของ CME = smile ที่เอาไป plot (VS) และเป็นคู่เดียวที่ใช้สูตร Vol - Vol Chg ได้
@@ -608,6 +608,10 @@ def _qs_postback(op, url, html, target, extra=None):
 
 def _parse_sheet(html):
     """ตาราง #pricing-sheet -> ([(strike, vol_settle)], {strike: vol_chg})"""
+    # CME ปิดการแสดง settlement ของรอบล่าสุดจนถึงเที่ยงคืน CT (= 12:00 ไทย หน้าร้อน /
+    # 13:00 หน้าหนาว) ช่วงเช้าไทยหน้าจึงว่างทั้งหน้า -- ไม่ใช่ความผิดปกติ ใช้ smile สดแทน
+    if "settlements are not available for viewing" in html:
+        raise RuntimeError("settle sheet ถูกปิดจนถึง 00:00 CT (12:00 ไทย) -- ใช้ smile สดแทน")
     m = re.search(r'id="pricing-sheet"(.*?)</table>', html, re.S)
     if not m:
         raise RuntimeError("settle sheet: ไม่เจอตาราง #pricing-sheet")
@@ -688,7 +692,7 @@ def fetch_eventvol():
     (ตัวเสริม -- QuikStrike ล่ม/เปลี่ยนโครงเมื่อไหร่ก็ข้าม ไม่กระทบข้อมูลหลัก)
     ข้อมูลฝังใน HTML เป็น $create(...EventVol.Calculator.Chart, {"JSONSettings": ...})
     แบบเดียวกับ Vol2Vol ยุคเก่า / vol = ATM vol ของ expiration, fwd = forward vol
-    ของช่วงระหว่าง expiration ก่อนหน้า -> fwd ที่โดดจากเพื่อน = ช่วงนั้นมี event"""
+    ของช่วงจาก expiration นี้ไปถึงตัวถัดไป -> fwd ที่โดดจากเพื่อน = ช่วงนั้นมี event"""
     req = urllib.request.Request(QS_EVC_URL, headers={
         "User-Agent": UA, "Referer": QS_REFERER})
     html = urllib.request.urlopen(req, timeout=_budget(35)).read().decode()
@@ -750,7 +754,7 @@ CHART_TMPL = r"""<!DOCTYPE html>
  <span id="mode">
   <span id="legend"><span class="sw" style="background:#f5a623"></span>Put
    <span class="sw" style="background:#4a80e8"></span>Call
-   <span style="color:#c0392b;margin-left:10px">- - -</span> Vol Settle</span>
+   <span style="color:#c0392b;margin-left:10px">- - -</span> <span id="smlbl">Vol Settle</span></span>
   <button id="bId">Intraday</button><button id="bOi">OI</button>
  </span>
 </div>
@@ -811,6 +815,7 @@ function render(){
   if (D.iv_settle == null && D.iv_event == null)
     s += ' &nbsp;IV (' + D.iv_src + '): <b class="iv">' + (D.iv ?? "--") + '</b>';
   document.getElementById("totals").innerHTML = s;
+  document.getElementById("smlbl").textContent = D.iv_settle != null ? "Vol Settle" : "IV live (bid/ask)";
   document.getElementById("bId").className = mode === "id" ? "on" : "";
   document.getElementById("bOi").className = mode === "oi" ? "on" : "";
   document.getElementById("upd").textContent = "updated " + D.updated + " · " + D.series +
@@ -915,7 +920,7 @@ def main():
     # ---- ส่วนเสริมจาก QuikStrike (งบเวลาแยก / พังก็ข้าม ไม่กระทบข้อมูลหลักและ exit code) ----
     # 1) Event Vol Calculator: เอาเฉพาะ "จุด 0DTE" ตามที่ใช้จริง (จับคู่ด้วยวันหมดอายุ
     #    ไม่ใช่ชื่อ -- QuikStrike ใช้รหัส CME 'G2RU6' ส่วน barchart ใช้ 'I0HU26')
-    #    -> ได้ทั้ง event vol (forward vol ของช่วงที่จบวันนี้) และรหัส CME ของ series
+    #    -> ได้ทั้ง event vol (ช่อง vol ของจุด 0DTE) และรหัส CME ของ series
     # 2) Settlement Sheet: smile settle + Vol Chg รายสไตรค์ของ series เดียวกันนั้น
     _deadline = time.monotonic() + QS_BUDGET
     ev0 = qs_sym = None
@@ -950,9 +955,11 @@ def main():
             print("[{:%Y-%m-%d %H:%M:%S}] settle sheet พัง (ข้าม): {}: {}".format(
                 now, type(e).__name__, str(e)[:80]), file=sys.stderr)
 
-    # IV หลักที่ใช้คิด SD = event vol ของ 0DTE (forward vol ครอบช่วงที่จบวันนี้ -- วันมี
-    # event เช่น FOMC จะกว้างกว่า settle vol เอง) ไล่ fallback: event -> settle -> computed
-    snap["iv_event"] = ev0.get("fwd") if ev0 else None
+    # IV หลักที่ใช้คิด SD = ช่อง "vol" ของจุด 0DTE (ตัวเลขที่หน้า EVC โชว์)
+    # ⚠️ ห้ามใช้ "fwd": forward vol ที่ติดกับจุดไหนคือช่วง "หลัง" expiry นั้นไปถึง expiry
+    # ถัดไป ไม่ใช่วันนี้ (11 ก.ย. 26: OG2U6 vol 44.99 แต่ fwd 18.36 = ช่วงข้ามเสาร์-อาทิตย์)
+    # ไล่ fallback: event -> settle -> computed
+    snap["iv_event"] = ev0.get("vol") if ev0 else None
     snap["iv_settle"] = iv_settle
     snap["iv_settle_chg"] = iv_settle_chg
     if snap["iv_event"] is not None:

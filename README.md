@@ -107,6 +107,12 @@ crontab ปัจจุบัน:
   **คลิก widget = copy clip ลง clipboard** แล้วไปวางในช่อง "Paste P/C Data" ของ
   indicator `oi_block.pine` (โปรเจกต์ `tdw_indi`) / ป้าย "via ..." ขึ้นเมื่อ source
   ไม่ใช่ barchart (แหล่งหลักปัจจุบัน)
+- **clip ส่งเฉพาะสไตรค์ใน F ± 4σ** โดย σ = F × IV × √(DTE ที่เหลือจริง/365) — ไม่ใช่
+  DTE 0.6 (chain ของ barchart กว้างกว่า CME มาก clip เต็มยาว ~4,250 ตัวอักษร paste ลงช่อง
+  text_area ของ TradingView ไม่เข้า เพดานราว 4,096) ช่วงแคบลงเองตามเวลาที่เหลือ (DTE 0.8 → ±365,
+  0.3 → ±223, 0.05 → ±91) มีพื้นต่ำสุด ±25 (1 OI block) กันนาทีท้ายๆ ที่ σ หดจนเกือบไม่เหลือ /
+  ถ้ายังยาวเกิน 4,000 ตัวอักษร (DTE เยอะ เช่น series วันจันทร์ตอนวันเสาร์) จะลดทีละ 0.5σ จน
+  พอดี และบันทึกลง log / **ตัดเฉพาะ clip** — ยอด P/C ใน widget, JSON และกราฟยังคิดทั้ง chain
 - format ของ clip: บรรทัด meta
   `F:...|D:...|S:...|IV:...|IVCHG:...|DTE:...|IVS:...|IVSCHG:...` ตามด้วย
   `ID;strike:put:call;...` และ `OI;strike:put:call;...` (เฉพาะ strike ที่ put+call > 0)

@@ -104,6 +104,13 @@ SHEET_STRIKE, SHEET_VOL, SHEET_VOLCHG, SHEET_NCOL = 3, 7, 9, 20
 YAHOO_URL = "https://query1.finance.yahoo.com/v8/finance/chart/GC=F?interval=1d&range=1d"
 SD_DTE = 0.6
 
+# ช่วงสไตรค์ที่ส่งเข้า clip: F ± CLIP_SD × σ โดย σ ใช้ DTE ที่เหลือจริง
+# CLIP_MIN_HALF กันช่วงนาทีท้ายๆ ก่อนหมดอายุที่ σ หดจนแทบไม่เหลือสไตรค์ (1 OI block)
+CLIP_SD = 4
+CLIP_MIN_HALF = 25
+# ช่อง text_area ของ TradingView รับได้ราว 4096 ตัวอักษร (clip 4253 paste ไม่เข้า) เผื่อไว้
+CLIP_MAX_CHARS = 4000
+
 # ⚠️ Yahoo ต้องใช้ UA "สั้น" ตัวนี้เท่านั้น ห้ามใช้ UA ตัวบน (ที่มี Chrome/126...)
 # — Yahoo ตอบ 429 ให้ UA ตัวนั้นแบบ deterministic ตัวแปรคือ UA string ล้วนๆ ไม่ใช่ TLS
 YAHOO_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
@@ -553,6 +560,14 @@ def sd_levels(open_price, iv, iv_chg):
           for n in (1, 2, 3) for side in ("b", "s")}
     return dict(open=open_price, vol_used=round(vol_used, 2), dte=SD_DTE,
                 sd1=round(sd1, 1), **lv)
+
+
+def clip_window(F, iv, dte, k=CLIP_SD):
+    """(ล่าง, บน) ของช่วงสไตรค์ที่ส่งเข้า clip / None = ไม่มีข้อมูลพอ ส่งทั้ง chain"""
+    if F is None or not iv or dte is None:
+        return None
+    half = max(F * iv / 100.0 * math.sqrt(max(dte, 0) / 365.0) * k, CLIP_MIN_HALF)
+    return F - half, F + half
 
 
 def top_changes(rows_now, prev_map, n=2):
@@ -1006,12 +1021,26 @@ def main():
         snap["iv_settle"] if snap.get("iv_settle") is not None else "",
         snap["iv_settle_chg"] if snap.get("iv_settle_chg") is not None else ""))
     vs_rows = snap["vs_rows"]
-    clip = "\n".join([
-        header,
-        "ID;" + ";".join("{}:{}:{}".format(s, p, c) for s, p, c in id_rows),
-        "OI;" + ";".join("{}:{}:{}".format(s, p, c) for s, p, c in oi_rows),
-        "VS;" + ";".join("{}:{:.2f}".format(s, v) for s, v in vs_rows),
-    ]) + "\n"
+    # clip ตัดให้เหลือ F ± 4σ (DTE ที่เหลือจริง ไม่ใช่ 0.6) -- chain ของ barchart กว้างกว่า
+    # CME มากจน paste ลงช่องของ indicator ไม่พอ / ยอดรวมใน JSON/กราฟยังคิดทั้ง chain
+    # ถ้ายังยาวเกินเพดาน (DTE เยอะ เช่นเช้ามืดหรือ series วันจันทร์ตอนเสาร์) ลดทีละ 0.5σ
+    def build_clip(k):
+        win = clip_window(meta["F"], meta["iv"] or snap.get("iv_settle"), meta["dte"], k)
+        inwin = (lambda s: win[0] <= s <= win[1]) if win else (lambda s: True)
+        return "\n".join([
+            header,
+            "ID;" + ";".join("{}:{}:{}".format(s, p, c) for s, p, c in id_rows if inwin(s)),
+            "OI;" + ";".join("{}:{}:{}".format(s, p, c) for s, p, c in oi_rows if inwin(s)),
+            "VS;" + ";".join("{}:{:.2f}".format(s, v) for s, v in vs_rows if inwin(s)),
+        ]) + "\n"
+    clip_k = CLIP_SD
+    clip = build_clip(clip_k)
+    while len(clip) > CLIP_MAX_CHARS and clip_k > 1:
+        clip_k -= 0.5
+        clip = build_clip(clip_k)
+    if clip_k < CLIP_SD:
+        print("[{:%Y-%m-%d %H:%M:%S}] clip ยาวเกิน {} ตัวอักษร -> ลดช่วงเหลือ ±{}σ".format(
+            now, CLIP_MAX_CHARS, clip_k), file=sys.stderr)
 
     data = {
         "ts": now.timestamp(),

@@ -56,9 +56,20 @@ crontab ปัจจุบัน:
     (weekly อ้าง GC เดือนมาตรฐานตัวใกล้สุดที่ option รายเดือนยังไม่หมด ณ วัน expiry)
   / **semantic เปลี่ยนจากยุค QuikStrike**: IV/smile เป็นค่า "ปัจจุบัน" (delayed)
   ไม่ใช่ settle เมื่อคืน และไม่มี IV Chg (ช่อง IVCHG ใน clip ว่าง — Pine รับได้อยู่แล้ว)
-- **ค่า vol ทั้งหมดมาจาก QuikStrike (anonymous ได้)** — Vol2Vol โดนถอดข้อมูลแล้ว แต่
-  อีก 2 view ยังใช้ได้ด้วย Referer trick เดิม / **viewitemid หาโดยจำลอง postback กดเมนู
-  ให้เซิร์ฟเวอร์เฉลยเอง** (ชื่อในเมนูใช้เป็น viewitemid ตรงๆ ไม่ได้ — เดาแล้วได้ error page ทุกตัว):
+- **ค่า vol ทั้งหมดมาจาก QuikStrike (anonymous ได้)** ด้วย Referer trick เดิม 3 view /
+  **viewitemid หาโดยจำลอง postback กดเมนูให้เซิร์ฟเวอร์เฉลยเอง** (ชื่อในเมนูใช้เป็น
+  viewitemid ตรงๆ ไม่ได้ — เดาแล้วได้ error page ทุกตัว) / ทุก view เลือก expiration
+  ด้วยวันหมดอายุจาก `title` ของ anchor (helper `_qs_open_expiry`):
+  - `IntegratedV2VExpectedRange` (Vol2Vol) → **แท็บ Open Interest ยังมี chart payload ครบ**
+    (แท็บ Intraday ว่าง): series Call/Put/Vol/**VolSettle**/Ranges + `ATMVol`, `FuturePrice`,
+    `DTE` / หน่วย vol เป็นเศษส่วน (0.4499 = 44.99%) → **เส้น smile ที่ plot (`VS;`) ใช้
+    เส้น VolSettle นี้** ทั้งโหมด Intraday และ OI ของ indicator และ **`IVS` = `ATMVol`**
+    (vol ที่ ATM ณ F ตอน settle = ตัวเลขที่ CME โชว์เป็น VolSettle — ไม่ใช่อ่านเส้นที่ F
+    ปัจจุบัน) / **ไม่โดนปิดช่วงเช้า** / ข้อจำกัด: ladder ราว 80 สไตรค์ตามกราฟ CME
+    (11 ก.ย. 26: 4170–4570) ไม่มีตัวเลือกขยาย และไม่มี Vol Chg แล้ว (Subtitle ว่าง)
+    / ⚠️ **OI ของ Vol2Vol ไม่ตรงกับ barchart** (11 ก.ย. เช้า: CME put/call 4,908/3,579
+    vs barchart 6,455/4,929 บนสไตรค์เดียวกัน เช่น 4490C 4 vs 353) — ยังไม่ได้พิสูจน์ว่า
+    ใครใหม่กว่า น่าจะเป็นคนละวันของ OI (fetcher ยังใช้ OI ของ barchart)
   - `IntegratedEventVolCalculator` (เมนู "EventVolCalculator") → **ช่อง `vol` ของจุด
     0DTE = IV หลักที่ใช้คิด SD** (ตัวเลขเดียวกับที่หน้า EVC โชว์ — ยืนยัน 11 ก.ย. 26:
     OG2U6 = 44.99) / ⚠️ **ห้ามใช้ `forwardVol`**: forward vol ที่ติดกับจุดไหนคือช่วง
@@ -66,22 +77,21 @@ crontab ปัจจุบัน:
     G3WU6 16 ก.ย. fwd 44.8 = ช่วง 16→17 ที่มีประกาศ FOMC หลัง G3WU6 หมดอายุ)
     เอาเฉพาะจุด 0DTE พอ / ⚠️ ค่านี้ **re-mark ระหว่างวัน** เช้าเท่า settle แล้วขยับตามตลาด
   - `IntegratedSettlementSheet` (เมนู "Settlement Prices") → ตาราง `#pricing-sheet`
-    ตัวเดียวกับที่ script ของเพื่อนอ่าน: **settle vol + Vol Chg รายสไตรค์ของ CME** →
-    เป็นเส้น smile ที่ plot (`VS;`) นิ่งทั้งวันแบบยุค Vol2Vol / ยืนยันตรงกับที่ CME โชว์
-    (ATM 31.54 vs "VolSettle 31.43" ในภาพจาก Vol2Vol) / ต้องเลือก expiration เองด้วย
-    postback (default เป็น series ถัดไป) — **จับคู่ด้วยวันหมดอายุจาก attribute `title`
-    ของ anchor** เพราะ barchart กับ QuikStrike ใช้คนละระบบรหัส (`I0HU26` vs `G2RU6`)
-    และตั้ง `ddlStrikes=(All)` เพราะ default 25 สไตรค์แคบกว่ากรอบ 3σ (ladder นี้เป็นแกน
-    ของ WormHole ฝั่ง Pine ด้วย) แล้วตัดปีกที่ vol > 2.5×ATM ทิ้ง (ปีกไกลถึง 264%)
+    ตัวเดียวกับที่ script ของเพื่อนอ่าน: settle vol + **Vol Chg** รายสไตรค์ของ CME →
+    ตอนนี้เป็น**ที่มาเดียวของ `IVSCHG`** และเป็นสำรองของ smile เมื่อ Vol2Vol ล่ม
+    (ตั้ง `ddlStrikes=(All)` แล้วตัดปีกที่ vol > 2.5×ATM ทิ้ง — ปีกไกลถึง 264%)
     / ⚠️ **ช่วงเช้าไทยตารางถูกปิด**: หน้าขึ้น "Today's settlements are not available
-    for viewing until after 12:00am CT" → ได้ settle smile ตั้งแต่ **12:00 ไทย** (หน้าหนาว
-    13:00) เป็นต้นไป ก่อนหน้านั้น VS ใช้ smile สดจาก bid/ask แทน (กราฟเปลี่ยนป้ายเส้นเป็น
-    "IV live" และ `IVS`/`IVSCHG` ว่าง) — event vol ไม่โดนปิด ใช้ได้ตลอด
+    for viewing until after 12:00am CT" → ได้ Vol Chg ตั้งแต่ **12:00 ไทย** (หน้าหนาว 13:00)
+  - ลำดับ smile: Vol2Vol → Settlement Sheet → smile สดจาก bid/ask (JSON `smile_src`,
+    กราฟเปลี่ยนป้ายเส้นเป็น "IV live" เมื่อไม่มี settle) / event vol กับ Vol2Vol ไม่โดนปิด
 - **IV สำรองเมื่อ QuikStrike ล่ม**: barchart คืน `optImpliedVolatility=0` ทั้ง chain
   "ในวันหมดอายุของ series นั้นเอง" (หน้าเว็บจริงก็ว่าง = ทุกวันสำหรับ 0DTE) → fetcher
   **คำนวณเองแบบ Black-76** (bisection, r=0, t=dte/365 day-count เดียวกับสูตร SD) จาก
   **mid ของ bid/ask** ฝั่ง OTM — mid เป็น quote สด ต่างจาก lastPrice ที่ค้างได้ทั้งวัน /
-  JSON มี `iv_src`: **event** (ปกติ) / settle / computed / inherit(clip วันเดียวกัน)
+  JSON มี `iv_src`: **event** (ปกติ) / vol2vol (ATMVol) / settle / computed / inherit
+- **ตัดสไตรค์หลุดโลก**: chain ของ barchart มีแถว strike 10,000 (put vol 90) ทั้งที่
+  สไตรค์จริงไกลสุด 6,000 (หน้าเว็บ barchart ก็โชว์) → fetcher ทิ้งสไตรค์นอกช่วง
+  0.5–1.5 เท่าของ F ทั้งใน clip, ยอดรวม และกราฟ
 - ⚠️ **PricingSheet บน cmegroup-sso.quikstrike.net เข้าไม่ได้** (บังคับ SAML login ผ่าน
   auth.cmegroup.com, ban เป็นระดับบัญชี) — แต่ไม่ต้องใช้แล้วเพราะ Settlement Sheet
   ให้ข้อมูลชุดเดียวกันแบบ anonymous

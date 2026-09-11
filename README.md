@@ -89,6 +89,18 @@ crontab ปัจจุบัน:
   **คำนวณเองแบบ Black-76** (bisection, r=0, t=dte/365 day-count เดียวกับสูตร SD) จาก
   **mid ของ bid/ask** ฝั่ง OTM — mid เป็น quote สด ต่างจาก lastPrice ที่ค้างได้ทั้งวัน /
   JSON มี `iv_src`: **event** (ปกติ) / vol2vol (ATMVol) / settle / computed / inherit
+- ⚠️ **Intraday ของ barchart ต้องกรองตาม session**: ช่อง `volume` คือ volume ของ session
+  ล่าสุดที่ leg นั้นมีการเทรด — สไตรค์ที่ยังไม่มีใครเทรดตั้งแต่เปิด session วันนี้ barchart
+  ยังโชว์ volume ของเมื่อวานค้างไว้ (tradeTime ประทับเป็นวันที่ของ session ก่อน) พบ 11 ก.ย. 26
+  09:50 ไทย: 3,821 จาก 4,553 สัญญาเป็นของเมื่อวาน → fetcher นับเฉพาะ leg ที่ `tradeTime` ≥
+  เวลาเปิด session Globex ล่าสุด (17:00 CT อาทิตย์-พฤหัส = 05:00 ไทย / หน้าหนาว 06:00,
+  ช่วงพัก 16:00-17:00 CT และเสาร์-อาทิตย์ได้ session ที่เพิ่งปิด) = พฤติกรรมเดียวกับแท็บ
+  Intraday ของ CME เดิมที่เริ่มนับ 0 ทุก session / OI ไม่เกี่ยว (เป็นยอด EOD)
+- DTE และการตัด series ที่หมดอายุคิดเป็น UTC: option ทองหมดอายุ 12:30 CT = 13:30 ET
+  (00:30 ไทยหน้าร้อน / **01:30 หน้าหนาว** — ตัวเก่าตายตัวที่ 00:30)
+- **Android (Termux)**: `~/src/claude_code/cme_scraping/termux/` — `cme_gold_termux.py`
+  ใช้แหล่งและ format เดียวกับ fetcher นี้ (Barchart + QuikStrike, กรอง session, ±4σ)
+  ติดตั้งด้วย `setup_cme_termux.sh` ไฟล์เดียว (ฝังตัวโปรแกรมไว้ข้างใน) คู่มือ `INSTALL_TH.txt`
 - **ตัดสไตรค์หลุดโลก**: chain ของ barchart มีแถว strike 10,000 (put vol 90) ทั้งที่
   สไตรค์จริงไกลสุด 6,000 (หน้าเว็บ barchart ก็โชว์) → fetcher ทิ้งสไตรค์นอกช่วง
   0.5–1.5 เท่าของ F ทั้งใน clip, ยอดรวม และกราฟ

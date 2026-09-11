@@ -152,7 +152,8 @@ crontab ปัจจุบัน:
   — ล้มเหลวแล้ว**ไม่เขียนทับไฟล์เดิม** widget ขึ้น STALE เองหลัง 2 ชม. และกด ↻ เองได้
 - ⚠️ **www.cmegroup.com (WAF) แบน IP เครื่องนี้จากการ scrape แล้ว — ห้ามยิงตรง**
   (quikstrike.net เป็น infra คนละเจ้า/Bantix ใช้ Referer cmegroup.com ได้ตามเดิม)
-- **cme-putcall.jsx**: สรุป P/C + ratio bar + Top Active + ธงแดงเมื่อ |IV Chg| > 2
+- **cme-putcall.jsx**: สรุป P/C + ratio bar + Top Active + ช่อง IV โชว์ **event IV อย่างเดียว**
+  (ขึ้น -- เมื่อดึงไม่ได้ เช่นช่วงตัวเบรกพัก; settle vol/Vol Chg ยังอยู่ใน clip คีย์ IVS/IVSCHG)
   + **กราฟ Put/Call รายสไตรค์ต่อด้านล่าง** (การ์ด 740×~713 เกือบจัตุรัส) ย่อจากหน้าเว็บ:
   แท่ง P/C, แถบ SD ±1-3σ, เส้น Vol Settle, เส้น Future สด + เส้นประราคาตอนดึงข้อมูล,
   ปุ่มสลับ Intraday/OI (กันคลิกทะลุไป copy), hover ดูดเข้าสไตรค์โชว์ P/C ทั้งสองชุด + vol + σ

@@ -500,6 +500,12 @@ export const render = (state, dispatch) => {
             <span style={{ color: macos.orange, marginLeft: '8px', fontWeight: '600' }}>via {data.source}</span>
           )}
           {stale && <span style={{ color: macos.orange, marginLeft: '8px' }}>● STALE</span>}
+          {data.qs && data.qs.paused_until && (
+            <span style={{ color: macos.orange, marginLeft: '8px', fontWeight: '600' }}
+              title={`ตัวเบรก: หยุดยิง QuikStrike ชั่วคราว (${data.qs.reason || ''}) ระหว่างนี้ใช้ค่า vol ที่ cache ไว้`}>
+              ⏸ QS paused → {new Date(data.qs.paused_until * 1000).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}
+            </span>
+          )}
         </span>
         <span style={{ fontSize: '10px', color: macos.tertiary, fontWeight: '600' }}>
           DTE {data.dte != null ? data.dte.toFixed(2) : '--'}

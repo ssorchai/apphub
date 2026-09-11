@@ -95,7 +95,13 @@ QS_SETTLE_URL = ("https://cmegroup-tools.quikstrike.net/User/QuikStrikeView.aspx
 QS_V2V_URL = ("https://cmegroup-tools.quikstrike.net/User/QuikStrikeView.aspx"
               "?pid=40&pf=6&viewitemid=IntegratedV2VExpectedRange")
 QS_REFERER = "https://www.cmegroup.com/"
-QS_BUDGET = 60          # งบแยกของ QuikStrike (ราว 6 request) -- ห้ามกระทบข้อมูลหลัก
+QS_BUDGET = 60          # งบแยกของ QuikStrike -- ห้ามกระทบข้อมูลหลัก
+# สถานะที่ต้องรอดข้าม restart (macOS ล้าง /tmp ตอนบูต): cache ค่ารายวันของ QuikStrike
+# + สถานะตัวเบรก
+QS_STATE = os.path.expanduser("~/Library/Caches/cme-fetcher/qs_state.json")
+QS_CACHE_MAX_AGE = 4 * 3600   # Vol2Vol/Settlement ดึงใหม่เมื่อข้ามวัน CME หรือ cache เก่าเกินนี้
+QS_PAUSE_BLOCK = 12 * 3600    # สัญญาณโดนบล็อก (403/429/หน้า login/captcha)
+QS_PAUSE_OUTAGE = 2 * 3600    # หน้า error ของเขาเอง / ต่อไม่ได้ 2 รอบติด
 
 # คอลัมน์ของตาราง #pricing-sheet (ยืนยัน 10 ก.ย. 26 จาก header สองชั้น:
 # Call[Chg,Prior,Settle] | Strike | Put[Settle,Prior,Chg] | Volatility[S,P,C] |
@@ -629,6 +635,49 @@ def top_changes(rows_now, prev_map, n=2):
     return changes[:n]
 
 
+class QSBlocked(Exception):
+    """สัญญาณว่า QuikStrike ไม่อยากให้เข้า (หรือล่มอยู่) -> ตัวเบรกหยุดยิงไป pause วินาที"""
+    def __init__(self, msg, pause):
+        super().__init__(msg)
+        self.pause = pause
+
+
+class SettleEmbargo(RuntimeError):
+    """Settlement Sheet ปิดให้ดูจนถึง 00:00 CT -- ไม่ใช่ความผิดปกติ"""
+
+
+# ข้อผิดพลาดที่ต้องหยุด QuikStrike ทั้งรอบ (ไม่ใช่แค่ข้ามหน้านั้น)
+QS_NETFAIL = (socket.timeout, urllib.error.URLError, ConnectionError, SourceDown)
+QS_ESCALATE = (QSBlocked,) + QS_NETFAIL
+BLOCK_MARKERS = ("captcha", "access denied", "request rejected", "request unsuccessful",
+                 "awswaf", "just a moment", "unusual traffic")
+
+
+def qs_state_load():
+    try:
+        return json.load(open(QS_STATE))
+    except Exception:
+        return {}
+
+
+def qs_state_save(st):
+    os.makedirs(os.path.dirname(QS_STATE), exist_ok=True)
+    tmp = QS_STATE + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(st, f)
+    os.replace(tmp, QS_STATE)
+
+
+def ct_day(now_utc):
+    """วันที่ตามเวลา Chicago -- QuikStrike เปลี่ยนชุด settlement ตามวันของ CME"""
+    return (now_utc - timedelta(hours=5 if us_dst(now_utc.date()) else 6)).date()
+
+
+def next_ct_midnight(now_utc):
+    d = ct_day(now_utc) + timedelta(days=1)
+    return datetime(d.year, d.month, d.day, 5 if us_dst(d) else 6, tzinfo=timezone.utc)
+
+
 def _qs_opener():
     jar = http.cookiejar.CookieJar()
     op = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
@@ -666,12 +715,56 @@ def _qs_postback(op, url, html, target, extra=None):
     return op.open(req, timeout=_budget(35)).read().decode()
 
 
+class QSClient:
+    """session เดียวต่อรอบ: หน้าแรก QuikStrike จะ redirect เติม insid/qsid (instance ของ
+    session) ให้ แล้วหน้าถัดไปแนบค่าเดิมไปด้วยแบบเดียวกับกดเมนูใน browser -- ไม่สร้าง
+    session ใหม่ทุกหน้า และหน้าที่ 2 เป็นต้นไปไม่ต้องเสีย request ให้ redirect"""
+
+    def __init__(self):
+        self.op = _qs_opener()
+        self.inst = None
+        self.ref = QS_REFERER
+
+    def _open(self, req):
+        try:
+            return self.op.open(req, timeout=_budget(35))
+        except urllib.error.HTTPError as e:
+            if e.code in (403, 429):
+                raise QSBlocked("HTTP {}".format(e.code), QS_PAUSE_BLOCK)
+            if e.code >= 500:
+                raise QSBlocked("HTTP {}".format(e.code), QS_PAUSE_OUTAGE)
+            raise
+
+    def get(self, view_url):
+        url = view_url + ("&" + self.inst if self.inst else "")
+        r = self._open(urllib.request.Request(url, headers={"User-Agent": UA, "Referer": self.ref}))
+        html, final = r.read().decode(), r.geturl()
+        _qs_check_page(html, final)
+        m = re.search(r"insid=\d+&qsid=[0-9a-f-]+", final)
+        if m:
+            self.inst = m.group(0)
+        self.ref = final
+        return final, html
+
+    def postback(self, url, html, target, extra=None):
+        try:
+            body = _qs_postback(self.op, url, html, target, extra)
+        except urllib.error.HTTPError as e:
+            if e.code in (403, 429):
+                raise QSBlocked("HTTP {}".format(e.code), QS_PAUSE_BLOCK)
+            if e.code >= 500:
+                raise QSBlocked("HTTP {}".format(e.code), QS_PAUSE_OUTAGE)
+            raise
+        _qs_check_page(body)
+        return body
+
+
 def _parse_sheet(html):
     """ตาราง #pricing-sheet -> ([(strike, vol_settle)], {strike: vol_chg})"""
     # CME ปิดการแสดง settlement ของรอบล่าสุดจนถึงเที่ยงคืน CT (= 12:00 ไทย หน้าร้อน /
     # 13:00 หน้าหนาว) ช่วงเช้าไทยหน้าจึงว่างทั้งหน้า -- ไม่ใช่ความผิดปกติ ใช้ smile สดแทน
     if "settlements are not available for viewing" in html:
-        raise RuntimeError("settle sheet ถูกปิดจนถึง 00:00 CT (12:00 ไทย) -- ยังไม่มี Vol Chg")
+        raise SettleEmbargo("settle sheet ถูกปิดจนถึง 00:00 CT (12:00 ไทย) -- ยังไม่มี Vol Chg")
     m = re.search(r'id="pricing-sheet"(.*?)</table>', html, re.S)
     if not m:
         raise RuntimeError("settle sheet: ไม่เจอตาราง #pricing-sheet")
@@ -698,7 +791,7 @@ def _parse_sheet(html):
     return vs, chg
 
 
-def _qs_open_expiry(view_url, expiry, extra_fn=None):
+def _qs_open_expiry(view_url, expiry, extra_fn=None, qs=None):
     """เปิด view ของ QuikStrike แล้วเลือก expiration ที่หมดอายุวันที่ expiry
     -> (op, url, html หลังเลือก, qs_sym)
 
@@ -710,13 +803,10 @@ def _qs_open_expiry(view_url, expiry, extra_fn=None):
              Option Symbol:\t\tG2RU6 ..."
     จับด้วย "วันหมดอายุ" ไม่ใช่ชื่อ -- barchart กับ QuikStrike ใช้คนละระบบรหัส
     (I0HU26 vs G2RU6) วันหมดอายุเป็นตัวเชื่อมเดียวที่เชื่อได้
-    extra_fn(html) -> dict ของ field เพิ่มที่ส่งไปกับ postback นี้ด้วย"""
-    op = _qs_opener()
-    r = op.open(urllib.request.Request(view_url, headers={
-        "User-Agent": UA, "Referer": QS_REFERER}), timeout=_budget(35))
-    html = r.read().decode()
-    url = r.geturl()
-    _qs_check_page(html, url)
+    extra_fn(html) -> dict ของ field เพิ่มที่ส่งไปกับ postback นี้ด้วย
+    qs = QSClient ของรอบนี้ (ไม่ส่งมา = เปิด session ใหม่)"""
+    qs = qs or QSClient()
+    url, html = qs.get(view_url)
     want = "{}/{}/{}".format(expiry.month, expiry.day, expiry.year)
     target = qs_sym = None
     for m in re.finditer(r'title="([^"]*Option Expiration:[^"]*)"[^>]*?'
@@ -729,34 +819,33 @@ def _qs_open_expiry(view_url, expiry, extra_fn=None):
             break
     if not target:
         raise RuntimeError("ไม่เจอ expiration {} ใน selector".format(want))
-    html = _qs_postback(op, url, html, target, extra_fn(html) if extra_fn else None)
-    _qs_check_page(html)
-    return op, url, html, qs_sym
+    html = qs.postback(url, html, target, extra_fn(html) if extra_fn else None)
+    return qs.op, url, html, qs_sym
 
 
-def fetch_settle_sheet(expiry):
+def fetch_settle_sheet(expiry, qs=None):
     """settle vol + Vol Chg รายสไตรค์จาก Settlement Sheet -> (vs_rows, chg_map, qs_sym)
     ตอนนี้ใช้หลักๆ เพื่อเอา Vol Chg (Vol2Vol ไม่มีแล้ว) และเป็นสำรองของ smile"""
     # ddlStrikes = -1 คือ "(All)" -- default ของหน้าคือ 25 สไตรค์รอบ ATM
     all_strikes = lambda h: {n: "-1" for n in _qs_selects(h) if n.endswith("ddlStrikes")}
-    _, _, html, qs_sym = _qs_open_expiry(QS_SETTLE_URL, expiry, all_strikes)
+    _, _, html, qs_sym = _qs_open_expiry(QS_SETTLE_URL, expiry, all_strikes, qs)
     vs, chg = _parse_sheet(html)
     return vs, chg, qs_sym
 
 
-def fetch_v2v_smile(expiry):
+def fetch_v2v_smile(expiry, qs=None):
     """smile "Vol Settle" จาก Vol2Vol แท็บ Open Interest -> (vs_rows, atm_vol, F, qs_sym)
 
     แท็บ Intraday ของ Vol2Vol โดนถอดข้อมูลไปแล้ว (ก.ย. 2026) แต่แท็บ OI ยังส่ง chart
     payload ครบ: series Call/Put/Vol/VolSettle/Ranges + ATMVol, FuturePrice, DTE
     หน่วย vol เป็นเศษส่วน (0.4499 = 44.99%) / ไม่โดนปิดช่วงเช้าแบบ Settlement Sheet
     ข้อจำกัด: ladder แคบตามกราฟของ CME (ราว 80 สไตรค์) และไม่มี Vol Chg แล้ว"""
-    op, url, html, qs_sym = _qs_open_expiry(QS_V2V_URL, expiry)
+    qs = qs or QSClient()
+    _, url, html, qs_sym = _qs_open_expiry(QS_V2V_URL, expiry, qs=qs)
     tab = re.search(r"__doPostBack\(&#39;([^&]*\$lbOI)&#39;", html)
     if not tab:
         raise RuntimeError("Vol2Vol: ไม่เจอแท็บ Open Interest")
-    html = _qs_postback(op, url, html, tab.group(1))
-    _qs_check_page(html)
+    html = qs.postback(url, html, tab.group(1))
     i = html.find("$create(UserControlsV2.QuikOptionsV")
     if i < 0:
         raise RuntimeError("Vol2Vol: แท็บ OI ไม่มี chart payload")
@@ -777,24 +866,28 @@ def fetch_v2v_smile(expiry):
 
 
 def _qs_check_page(html, url=""):
-    """จับหน้า error/login ของ QuikStrike (ทั้งคู่ตอบ HTTP 200 -- ดู status ไม่พอ)"""
+    """จับหน้า error/login ของ QuikStrike (ตอบ HTTP 200 ทั้งคู่ -- ดู status ไม่พอ)
+    แยกสามแบบ: โดนบล็อก (เบรก 12 ชม.) / ระบบเขาล่ม (เบรก 2 ชม.) / บั๊กฝั่งเรา (แค่ข้าม)"""
+    if "/Account/Login.aspx" in url:
+        raise QSBlocked("เด้งไปหน้า login", QS_PAUSE_BLOCK)
+    head = html[:5000].lower()
+    if any(k in head for k in BLOCK_MARKERS) and "pricing-sheet" not in head:
+        raise QSBlocked("หน้าตรวจบอท/ปฏิเสธ", QS_PAUSE_BLOCK)
     if "/Error/ErrorPage.aspx" in url or "QuikStrike Error" in html[:3000]:
         m = re.search(r"MSG=([^&]*)", url)
         msg = urllib.parse.unquote_plus(m.group(1)).strip()[:80] if m else "ไม่ทราบสาเหตุ"
-        raise RuntimeError("QuikStrike error page: " + msg)
-    if "/Account/Login.aspx" in url:
-        raise RuntimeError("QuikStrike เด้งไปหน้า login (โดน bot detection?)")
+        if "unknown view" in msg:
+            raise RuntimeError("QuikStrike error page: " + msg)
+        raise QSBlocked("error page: " + msg, QS_PAUSE_OUTAGE)
 
 
-def fetch_eventvol():
+def fetch_eventvol(qs=None):
     """[{sym, expires, dte, vol, fwd}] จาก QuikStrike Event Volatility Calculator
     (ตัวเสริม -- QuikStrike ล่ม/เปลี่ยนโครงเมื่อไหร่ก็ข้าม ไม่กระทบข้อมูลหลัก)
     ข้อมูลฝังใน HTML เป็น $create(...EventVol.Calculator.Chart, {"JSONSettings": ...})
     แบบเดียวกับ Vol2Vol ยุคเก่า / vol = ATM vol ของ expiration, fwd = forward vol
     ของช่วงจาก expiration นี้ไปถึงตัวถัดไป -> fwd ที่โดดจากเพื่อน = ช่วงนั้นมี event"""
-    req = urllib.request.Request(QS_EVC_URL, headers={
-        "User-Agent": UA, "Referer": QS_REFERER})
-    html = urllib.request.urlopen(req, timeout=_budget(35)).read().decode()
+    _, html = (qs or QSClient()).get(QS_EVC_URL)
     i = html.find("EventVol.Calculator.Chart")
     if i < 0:
         raise RuntimeError("EventVol: ไม่เจอ chart payload (โดน error/login page?)")
@@ -1164,64 +1257,118 @@ def main():
     snap = inherit_same_day(snap)
 
     # ---- ส่วนเสริมจาก QuikStrike (งบเวลาแยก / พังก็ข้าม ไม่กระทบข้อมูลหลักและ exit code) ----
-    # 1) Event Vol Calculator: เอาเฉพาะ "จุด 0DTE" ตามที่ใช้จริง (จับคู่ด้วยวันหมดอายุ
-    #    ไม่ใช่ชื่อ -- QuikStrike ใช้รหัส CME 'G2RU6' ส่วน barchart ใช้ 'I0HU26')
-    #    -> ได้ทั้ง event vol (ช่อง vol ของจุด 0DTE) และรหัส CME ของ series
-    # 2) Settlement Sheet: smile settle + Vol Chg รายสไตรค์ของ series เดียวกันนั้น
+    # ลดความเสี่ยงโดน block (11 ก.ย. 26):
+    #  - Event Vol re-mark ระหว่างวัน -> ดึงทุกรอบ / จับจุด 0DTE ด้วยวันหมดอายุ
+    #  - Vol2Vol (VolSettle + ATMVol) กับ Settlement Sheet (Vol Chg) เป็นค่า settle นิ่งทั้งวัน
+    #    -> ดึงครั้งเดียวต่อ series ต่อ "วันของ CME" (QuikStrike เปลี่ยนชุดที่ 00:00 CT)
+    #    cache อยู่ใน ~/Library/Caches ให้รอดข้าม restart และตัดสินจากสถานะ ไม่ใช่เวลาตายตัว
+    #    (เครื่องปิดไปช่วงไหน รอบแรกหลังเปิดก็เติมส่วนที่ขาดเอง)
+    #  - ทุกหน้าใช้ session เดียวกัน (QSClient)
+    #  - ตัวเบรก: เจอสัญญาณโดนบล็อก -> หยุดยิง QuikStrike ชั่วคราว ระหว่างนั้นใช้ cache
     _deadline = time.monotonic() + QS_BUDGET
-    ev0 = qs_sym = None
-    try:
-        for p in fetch_eventvol():
-            if datetime.strptime(p["expires"], "%m/%d/%Y").date() == snap["expiry"]:
-                ev0, qs_sym = p, p["sym"]
-                break
-        print("[{:%Y-%m-%d %H:%M:%S}] eventvol 0DTE {}".format(now, ev0), file=sys.stderr)
-    except Exception as e:
-        print("[{:%Y-%m-%d %H:%M:%S}] eventvol พัง (ข้าม): {}: {}".format(
-            now, type(e).__name__, str(e)[:80]), file=sys.stderr)
+    now_utc = datetime.now(timezone.utc)
+    now_ts = now_utc.timestamp()
+    st = qs_state_load()
+    cache = st.get("cache") or {}
+    if cache.get("expiry") != snap["expiry"].isoformat():
+        cache = {"expiry": snap["expiry"].isoformat()}
+    day = ct_day(now_utc).isoformat()
+    # cache ใช้ได้ถ้ายังเป็นวัน CME เดียวกันและอายุไม่เกิน 4 ชม. -- 11 ก.ย. 12:05 ไทย
+    # Vol2Vol ยังโชว์ OI/EOD ของวันก่อนอยู่ (ไม่ได้เปลี่ยนตรง 00:00 CT) จึงต้องมีเพดานอายุด้วย
+    fresh = lambda e: bool(e) and e.get("ct_day") == day and now_ts - e.get("ts", 0) < QS_CACHE_MAX_AGE
+    ev0 = None
+    qs_sym = cache.get("qs_sym")
 
-    # 2) smile ที่ plot (VS): Vol2Vol แท็บ OI เป็นหลัก -- ตรงกับเส้น "Vol Settle" ที่ CME
-    #    โชว์และใช้ได้ทั้งวัน -> Settlement Sheet เป็นสำรอง -> smile สดจาก bid/ask
-    #    ใช้เส้นเดียวนี้ทั้งโหมด Intraday และ OI ของ indicator
-    # 3) Vol Chg มีที่เดียวคือ Settlement Sheet (ปิดช่วงเช้าจนถึง 12:00 ไทย)
+    def qlog(msg):
+        print("[{:%Y-%m-%d %H:%M:%S}] {}".format(now, msg), file=sys.stderr)
+
+    if now_ts < st.get("paused_until", 0):
+        qlog("QuikStrike paused ถึง {:%d %b %H:%M} ({}) -- ใช้ cache".format(
+            datetime.fromtimestamp(st["paused_until"]), st.get("pause_reason")))
+    else:
+        qs = QSClient()
+        try:
+            try:
+                for p in fetch_eventvol(qs):
+                    if datetime.strptime(p["expires"], "%m/%d/%Y").date() == snap["expiry"]:
+                        ev0, qs_sym = p, p["sym"]
+                        break
+                qlog("eventvol 0DTE {}".format(ev0))
+            except QS_ESCALATE:
+                raise
+            except Exception as e:
+                qlog("eventvol พัง (ข้าม): {}: {}".format(type(e).__name__, str(e)[:80]))
+
+            if not fresh(cache.get("v2v")):
+                try:
+                    vs_v2v, atm, _, sym = fetch_v2v_smile(snap["expiry"], qs)
+                    cache["v2v"] = {"ct_day": day, "ts": now_ts, "vs": vs_v2v, "atm": atm}
+                    qs_sym = qs_sym or sym
+                    qlog("vol2vol {} ok {} strikes ATMVol {} (cache 4 ชม.)".format(
+                        sym, len(vs_v2v), atm))
+                except QS_ESCALATE:
+                    raise
+                except Exception as e:
+                    qlog("vol2vol พัง (ข้าม): {}: {}".format(type(e).__name__, str(e)[:80]))
+
+            if not fresh(cache.get("settle")) and now_ts >= cache.get("settle_next_try", 0):
+                try:
+                    vs_settle, chg_map, sym = fetch_settle_sheet(snap["expiry"], qs)
+                    cache["settle"] = {"ct_day": day, "ts": now_ts, "vs": vs_settle,
+                                       "chg": sorted(chg_map.items())}
+                    qs_sym = qs_sym or sym
+                    qlog("settle sheet {} ok (cache 4 ชม.)".format(sym))
+                except SettleEmbargo as e:
+                    # ปิดให้ดูจนถึง 00:00 CT -- ไม่ต้องลองทุกชั่วโมง รอรอบหลังเที่ยงคืน CT ทีเดียว
+                    cache["settle_next_try"] = next_ct_midnight(now_utc).timestamp()
+                    qlog("{} -- ลองใหม่หลัง {:%H:%M}".format(e, datetime.fromtimestamp(cache["settle_next_try"])))
+                except QS_ESCALATE:
+                    raise
+                except Exception as e:
+                    qlog("settle sheet พัง (ข้าม): {}: {}".format(type(e).__name__, str(e)[:80]))
+            st["net_fail"] = 0
+        except QSBlocked as e:
+            st["paused_until"], st["pause_reason"] = now_ts + e.pause, str(e)
+            qlog("⚠️ QuikStrike {} -> หยุดยิง {} ชม.".format(e, e.pause // 3600))
+        except QS_NETFAIL as e:
+            # barchart ในรอบเดียวกันผ่านแล้ว = เน็ตเราปกติ แต่ไป QuikStrike ไม่ได้ -- นับสะสม
+            # 2 รอบติดค่อยเบรก (รอบเดียวอาจเป็นแค่เน็ตสะดุด)
+            st["net_fail"] = st.get("net_fail", 0) + 1
+            qlog("QuikStrike ต่อไม่ได้ ({}: {}) ครั้งที่ {}".format(type(e).__name__, str(e)[:60], st["net_fail"]))
+            if st["net_fail"] >= 2:
+                st["paused_until"] = now_ts + QS_PAUSE_OUTAGE
+                st["pause_reason"] = "ต่อไม่ได้ {} รอบติด".format(st["net_fail"])
+                qlog("⚠️ หยุดยิง QuikStrike {} ชม.".format(QS_PAUSE_OUTAGE // 3600))
+    if qs_sym:
+        cache["qs_sym"] = qs_sym
+    st["cache"] = cache
+    qs_state_save(st)
+    qs_paused = now_ts < st.get("paused_until", 0)
+
+    # ค่าที่ใช้ มาจาก cache เสมอ (รอบนี้เพิ่งดึง หรือของเดิมของ series เดียวกัน)
     iv_settle = iv_settle_chg = atm_v2v = None
     smile_src = None
-    try:
-        vs_v2v, atm_v2v, _, v2v_sym = fetch_v2v_smile(snap["expiry"])
-        qs_sym = qs_sym or v2v_sym
-        snap["vs_rows"] = vs_v2v
+    if cache.get("v2v"):
+        snap["vs_rows"] = [tuple(r) for r in cache["v2v"]["vs"]]
+        atm_v2v = cache["v2v"]["atm"]
         # IVS = ATMVol ของ CME เอง (vol ที่ ATM ณ F ตอน settle -- ตัวเลขที่ CME โชว์เป็น
         # VolSettle) ไม่ใช่อ่านเส้นที่ F ปัจจุบัน: 11 ก.ย. 26 ATMVol 44.99 = เส้นที่ 4,374
         # (F settle) ส่วนที่ F 4,338 ตอนเช้าได้ 45.29
-        iv_settle = atm_v2v if atm_v2v is not None else iv_at(vs_v2v, snap["F"])
-        iv_settle = round(iv_settle, 2) if iv_settle is not None else None
+        iv_settle = atm_v2v if atm_v2v is not None else iv_at(snap["vs_rows"], snap["F"])
         smile_src = "vol2vol"
-        print("[{:%Y-%m-%d %H:%M:%S}] vol2vol {} ok {} strikes {}-{} ATMVol {} -> IVS {}".format(
-            now, v2v_sym, len(vs_v2v), vs_v2v[0][0], vs_v2v[-1][0], atm_v2v, iv_settle),
-            file=sys.stderr)
-    except Exception as e:
-        print("[{:%Y-%m-%d %H:%M:%S}] vol2vol พัง (ข้าม): {}: {}".format(
-            now, type(e).__name__, str(e)[:80]), file=sys.stderr)
-
-    try:
-        vs_settle, chg_map, sheet_sym = fetch_settle_sheet(snap["expiry"])
-        qs_sym = qs_sym or sheet_sym
-        iv_settle_chg = iv_at(sorted(chg_map.items()), snap["F"])
-        iv_settle_chg = round(iv_settle_chg, 2) if iv_settle_chg is not None else None
+    if cache.get("settle"):
+        iv_settle_chg = iv_at([tuple(r) for r in cache["settle"]["chg"]], snap["F"])
         if smile_src is None:
+            vs_settle = [tuple(r) for r in cache["settle"]["vs"]]
             iv_settle = iv_at(vs_settle, snap["F"])
-            iv_settle = round(iv_settle, 2) if iv_settle is not None else None
             # ladder "(All)" ยาวถึง 3000-6000 และปีกไกลมี vol หลักร้อย (ของจริงแต่ทำให้
             # smile ที่ plot เพี้ยนหมด) -- ตัดที่ 2.5x ATM กติกาเดียวกับ smile ที่คำนวณเอง
             if iv_settle:
-                vs_settle = [(s, v) for s, v in vs_settle if v <= iv_settle * 2.5]
+                vs_settle = [(k, v) for k, v in vs_settle if v <= iv_settle * 2.5]
             snap["vs_rows"] = vs_settle
             smile_src = "settle sheet"
-        print("[{:%Y-%m-%d %H:%M:%S}] settle sheet {} ok chg {}".format(
-            now, sheet_sym, iv_settle_chg), file=sys.stderr)
-    except Exception as e:
-        print("[{:%Y-%m-%d %H:%M:%S}] settle sheet พัง (ข้าม): {}: {}".format(
-            now, type(e).__name__, str(e)[:80]), file=sys.stderr)
+    iv_settle = round(iv_settle, 2) if iv_settle is not None else None
+    iv_settle_chg = round(iv_settle_chg, 2) if iv_settle_chg is not None else None
     snap["smile_src"] = smile_src or "live"
 
     # IV หลักที่ใช้คิด SD = ช่อง "vol" ของจุด 0DTE (ตัวเลขที่หน้า EVC โชว์)
@@ -1319,6 +1466,9 @@ def main():
         "iv_settle_chg": snap.get("iv_settle_chg"),
         "qs_sym": qs_sym,                # รหัส CME ของ series เดียวกัน เช่น G2RU6
         "smile_src": snap.get("smile_src"),  # vol2vol / settle sheet / live
+        # ตัวเบรก QuikStrike: paused_until = epoch ที่จะกลับมายิงอีก (None = ปกติ)
+        "qs": {"paused_until": st.get("paused_until") if qs_paused else None,
+               "reason": st.get("pause_reason") if qs_paused else None},
         "future_chg": meta["future_chg"],
         "intraday": {
             "put": sum(r[1] for r in id_rows),

@@ -84,6 +84,25 @@ crontab ปัจจุบัน:
     for viewing until after 12:00am CT" → ได้ Vol Chg ตั้งแต่ **12:00 ไทย** (หน้าหนาว 13:00)
   - ลำดับ smile: Vol2Vol → Settlement Sheet → smile สดจาก bid/ask (JSON `smile_src`,
     กราฟเปลี่ยนป้ายเส้นเป็น "IV live" เมื่อไม่มี settle) / event vol กับ Vol2Vol ไม่โดนปิด
+- **ลดความเสี่ยงโดน QuikStrike block** (11 ก.ย. 26):
+  - **session เดียวต่อรอบ** (`QSClient`): หน้าแรกของ session ใหม่ QuikStrike redirect 3 ทอด
+    (1 หน้า = 4 request) หน้าถัดไปแนบ `insid/qsid` เดิมไปเหมือนกดเมนูใน browser = 1 request
+    / ตัวเก่าเปิด session ใหม่ทุกหน้า ~15 request/รอบ (~360/วัน, 72 session/วัน)
+  - **cache ค่าที่นิ่งทั้งวัน**: Vol2Vol (VolSettle + ATMVol) และ Settlement Sheet (Vol Chg)
+    ดึงใหม่เมื่อข้ามวัน CME (00:00 CT) **หรือ** cache เก่าเกิน 4 ชม. — ต้องมีเพดานอายุเพราะ
+    12:05 ไทยวันที่ 11 Vol2Vol ยังโชว์ OI/EOD ของวันก่อน (ไม่ได้เปลี่ยนตรงเที่ยงคืน CT) /
+    Settlement Sheet ที่ติดช่วงปิดจะนัดลองใหม่หลังเที่ยงคืน CT ทีเดียว ไม่ลองทุกชั่วโมง /
+    Event Vol ยังดึงทุกรอบเพราะ re-mark ระหว่างวัน → รอบปกติ 4 request รอบเติม cache 9
+  - cache อยู่ที่ `~/Library/Caches/cme-fetcher/qs_state.json` (**ไม่ใช่ /tmp** ซึ่ง macOS
+    ล้างตอนบูต) และตัดสินจากสถานะ ไม่ใช่เวลาตายตัว → เครื่องปิด/restart ช่วงไหน รอบแรก
+    หลังเปิดก็เติมส่วนที่ขาดเอง
+  - **ตัวเบรก**: 403/429/เด้งหน้า login/หน้าตรวจบอท → หยุดยิง QuikStrike **12 ชม.** /
+    error page ของเขา, HTTP 5xx หรือต่อไม่ได้ 2 รอบติด (ทั้งที่ barchart รอบเดียวกันผ่าน) →
+    **2 ชม.** / สถานะอยู่ในไฟล์เดียวกัน รอดข้าม restart / ระหว่างพัก clip ยังออกครบ (IV ใช้
+    ATMVol จาก cache) และ widget ขึ้น "⏸ QS paused → เวลา" / อยากปลดเองก่อนเวลา:
+    `rm ~/Library/Caches/cme-fetcher/qs_state.json` (cache หายด้วย รอบถัดไปดึงใหม่ครบ)
+  - มือถือ (Termux) ใช้กลไกเดียวกัน cache อยู่ที่ `~/cme-gold/qs_state.json` แต่ไม่นับเน็ต
+    หลุดเป็นสัญญาณ (เน็ตมือถือหลุดบ่อยเป็นปกติ)
 - **IV สำรองเมื่อ QuikStrike ล่ม**: barchart คืน `optImpliedVolatility=0` ทั้ง chain
   "ในวันหมดอายุของ series นั้นเอง" (หน้าเว็บจริงก็ว่าง = ทุกวันสำหรับ 0DTE) → fetcher
   **คำนวณเองแบบ Black-76** (bisection, r=0, t=dte/365 day-count เดียวกับสูตร SD) จาก

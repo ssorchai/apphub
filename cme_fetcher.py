@@ -67,7 +67,7 @@ import time
 import urllib.parse
 import urllib.request
 import http.cookiejar
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
@@ -128,7 +128,7 @@ PREV_STATE = "/tmp/cme_putcall_prev.json"
 
 BC_BASE = "https://www.barchart.com"
 BC_CHAIN_FIELDS = ("optionType,strikePrice,lastPrice,bidPrice,askPrice,"
-                   "volume,openInterest,optImpliedVolatility,symbolName")
+                   "volume,openInterest,optImpliedVolatility,tradeTime,symbolName")
 # เดือนของ gold futures มาตรฐาน (G J M Q V Z) ใช้หา underlying + curve
 GC_MONTHS = [2, 4, 6, 8, 10, 12]
 CURVE_N = 3
@@ -173,6 +173,27 @@ def _nth_weekday(year, month, weekday, n):
     d = date(year, month, 1)
     off = (weekday - d.weekday()) % 7
     return d + timedelta(days=off + (n - 1) * 7)
+
+
+def us_dst(d):
+    """daylight saving ของ US: อาทิตย์ที่ 2 ของ มี.ค. ถึงอาทิตย์แรกของ พ.ย."""
+    return _nth_weekday(d.year, 3, 6, 2) <= d < _nth_weekday(d.year, 11, 6, 1)
+
+
+def expiry_utc(d):
+    """option ทองหมดอายุ 12:30 CT = 13:30 ET -> UTC (00:30 ไทยหน้าร้อน / 01:30 หน้าหนาว)"""
+    return datetime(d.year, d.month, d.day, 17 if us_dst(d) else 18, 30, tzinfo=timezone.utc)
+
+
+def session_open_utc(now_utc):
+    """เวลาเปิด session Globex ล่าสุด: ทองเปิด 17:00 CT วันอาทิตย์-พฤหัส (= trade date
+    ของวันถัดไป) ช่วงพัก 16:00-17:00 CT และเสาร์-อาทิตย์จะได้ session ที่เพิ่งปิด"""
+    for k in range(8):
+        d = now_utc.date() - timedelta(days=k)
+        t = datetime(d.year, d.month, d.day, 22 if us_dst(d) else 23, tzinfo=timezone.utc)
+        if t <= now_utc and d.weekday() in (6, 0, 1, 2, 3):
+            return t
+    return now_utc - timedelta(days=1)
 
 
 def futures_expiry(sym):
@@ -244,13 +265,14 @@ def gc_front_months(n=CURVE_N):
     return out
 
 
-def weekly_candidates(today, horizon=8):
-    """[(expiry_date, series_code)] ของวันทำการวันนี้ + horizon วันข้างหน้า
-    เรียงใกล้->ไกล (เสาร์-อาทิตย์/วันหยุดจะไหลไป series ถัดไปเอง)"""
+def weekly_candidates(now_utc, horizon=9):
+    """[(expiry_date, series_code)] ของ series ที่ยังไม่หมดอายุ เรียงใกล้->ไกล
+    (เริ่มจากเมื่อวานตามเวลา UTC: ช่วง 00:00-00:30 ไทย series ของ "เมื่อวาน" ยังเทรดอยู่)"""
     out = []
+    start = now_utc.date() - timedelta(days=1)
     for k in range(horizon):
-        d = today + timedelta(days=k)
-        if d.weekday() >= 5:
+        d = start + timedelta(days=k)
+        if d.weekday() >= 5 or expiry_utc(d) <= now_utc:
             continue
         n = (d.day - 1) // 7 + 1
         code = WEEK_CODES[d.weekday()](n)
@@ -385,12 +407,13 @@ def series_name_expiry(legs):
 def snapshot_barchart():
     """ดึงทุกอย่างจาก barchart ผ่าน core-api ล้วน (ห้ามโหลดหน้า HTML -- โดน WAF)"""
     today = date.today()
+    now_utc = datetime.now(timezone.utc)
 
     # ไล่ probe จาก series ใกล้หมดอายุสุด: chain ว่าง = หมดอายุ/ยังไม่เปิด ข้ามไปตัวถัดไป
     series = expiry = None
     legs = {}
     tried = []
-    for exp_guess, sym in weekly_candidates(today)[:5]:
+    for exp_guess, sym in weekly_candidates(now_utc)[:5]:
         tried.append(sym)
         try:
             chain = bc_api("quotes/get?symbol={}&list=futures.options&fields={}"
@@ -405,17 +428,14 @@ def snapshot_barchart():
             continue
         named = series_name_expiry(got)
         exp = named[0] if named else exp_guess  # ชื่อจริงชนะรหัสเดา
-        if exp < today:
+        if expiry_utc(exp) <= now_utc:
             continue
         series, expiry, legs = sym, exp, got
         break
     if series is None:
         raise SourceDown("barchart: ทุก candidate ว่าง ({})".format(",".join(tried)))
 
-    # DTE: หมดอายุ 13:30 NY = 00:30 ไทยของวันถัดไป (หน้าร้อน; หน้าหนาว 01:30 --
-    # คลาดครึ่งชั่วโมงยอมรับได้)
-    end = datetime(expiry.year, expiry.month, expiry.day) + timedelta(days=1, minutes=30)
-    dte = round(max((end - datetime.now()).total_seconds(), 0) / 86400, 3)
+    dte = round(max((expiry_utc(expiry) - now_utc).total_seconds(), 0) / 86400, 3)
 
     # underlying ตามกติกา monthly-option-expiry + ราคา futures/curve ในคอลเดียว
     und_sym = underlying_for(expiry) or gc_front_months(1)[0]
@@ -436,10 +456,15 @@ def snapshot_barchart():
         legs = {s: v for s, v in legs.items() if 0.5 * F <= s <= 1.5 * F}
 
     # Intraday / OI รายสไตรค์
+    # Intraday = volume ของ session นี้เท่านั้น: สไตรค์ที่ยังไม่มีใครเทรดตั้งแต่เปิด session
+    # barchart ยังโชว์ volume ของ session ก่อนค้างไว้ (11 ก.ย. 26 ตอน 09:50 ไทย 3,821 จาก
+    # 4,553 สัญญาเป็นของเมื่อวาน) -> นับเฉพาะ leg ที่ last trade >= เวลาเปิด session
+    sess = session_open_utc(now_utc).timestamp()
+    vol = lambda r: int(r.get("volume") or 0) if (r.get("tradeTime") or 0) >= sess else 0
     id_rows, oi_rows = [], []
     for s, v in sorted(legs.items()):
-        pv = int(v["Put"].get("volume") or 0)
-        cv = int(v["Call"].get("volume") or 0)
+        pv = vol(v["Put"])
+        cv = vol(v["Call"])
         po = int(v["Put"].get("openInterest") or 0)
         co = int(v["Call"].get("openInterest") or 0)
         if pv + cv > 0:

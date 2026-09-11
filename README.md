@@ -118,6 +118,12 @@ crontab ปัจจุบัน:
   + กล่องโชว์ Put/Call/Σ ทั้ง Intraday และ OI ของสไตรค์นั้น, Vol Settle ที่สไตรค์ และห่าง F
   กี่ σ — ใช้ pointer events ลากนิ้วบนมือถือได้) self-contained เปิด
   `open /tmp/cme_chart.html` ค้างไว้ได้ หน้า reload ตัวเองทุก 5 นาที
+  / **ราคา Future สด**: gold_fetcher.py เขียน `/tmp/gold_live.js` (`window.GOLD_LIVE`)
+  ทุกรอบที่เขียน gold_data.json (~5 วินาที) หน้ากราฟโหลดซ้ำผ่าน `<script src>` ทุก 5 วินาที
+  (หน้า file:// ใช้ fetch อ่าน JSON ไม่ได้ แต่โหลด script ได้) → หัวกราฟโชว์ราคา + เปลี่ยนจาก
+  open และเส้น Future หลักขยับตามราคาสด เส้นประจางคือราคาตอนดึงข้อมูล P/C / ใช้ราคาสด
+  เฉพาะเมื่อ `sym` ตรงกับ underlying ของ series (GCV6 = GCV26) และไฟล์ไม่เก่าเกิน 3 นาที
+  ไม่อย่างนั้นกลับไปใช้ F ของข้อมูล / ระยะ σ ใน cursor วัดจากราคาสด
   + `/tmp/cme_eventvol.json` — จุด event vol ของ **0DTE เท่านั้น** (vol + forward vol)
   / หัวกราฟโชว์ `VolSettle 31.54 (+3.69)` คู่กับ `EventVol 0DTE 44.99` โดย**ขีดเส้นใต้
   ตัวที่ใช้คิด SD จริง** / ส่วนเสริมจาก QuikStrike ใช้งบเวลาแยก (`QS_BUDGET` 45s)

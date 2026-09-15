@@ -143,7 +143,9 @@ MONTH_CODE = {"F": 1, "G": 2, "H": 3, "J": 4, "K": 5, "M": 6,
 
 # รหัส weekly series ต่อวันในสัปดาห์ (n = สัปดาห์ที่ของเดือน 1-5)
 # ยืนยันกับ API 10 ก.ย. 26: IY3U26="Monday Week 3", IY8U26="Wednesday Week 3",
-# I0HU26="Thursday Week 2", IG2U26="Friday Week 2" / I0B (Tue w2) หมดอายุแล้ว=ว่าง
+# I0HU26="Thursday Week 2", IG2U26="Friday Week 2"
+# ตารางนี้เป็นแค่ตัวเดาแรก: 15 ก.ย. 26 อังคาร Week 3 จริงคือ I0DU26 (ไม่ใช่ I0C) ขณะที่
+# ต.ค. Week 1 = I0AV26 -> series_codes ลองสัปดาห์ ±1 และยืนยันจากชื่อ series ทุกครั้ง
 WEEK_CODES = {
     0: lambda n: "IY{}".format(n),          # จันทร์  IY1-IY5
     1: lambda n: "I0" + chr(64 + n),        # อังคาร  I0A-I0E
@@ -280,11 +282,18 @@ def weekly_candidates(now_utc, horizon=9):
         d = start + timedelta(days=k)
         if d.weekday() >= 5 or expiry_utc(d) <= now_utc:
             continue
-        n = (d.day - 1) // 7 + 1
-        code = WEEK_CODES[d.weekday()](n)
-        mc = [c for c, mm in MONTH_CODE.items() if mm == d.month][0]
-        out.append((d, "{}{}{}".format(code, mc, str(d.year)[-2:])))
+        out.append((d, series_codes(d)))
     return out
+
+
+def series_codes(d):
+    """รหัส barchart ที่เป็นไปได้ของ series หมดอายุวัน d: ตัวเดาตามตารางก่อน แล้วสัปดาห์ ±1
+    (ตารางไม่ตายตัว: ก.ย. 26 อังคารเลื่อนไปหนึ่งตัว Week 3 = I0DU26 แต่ ต.ค. Week 1 = I0AV26
+    -> ตัวไหนใช่ต้องยืนยันจากชื่อ series เสมอ)"""
+    n = (d.day - 1) // 7 + 1
+    mc = [c for c, mm in MONTH_CODE.items() if mm == d.month][0]
+    return ["{}{}{}".format(WEEK_CODES[d.weekday()](k), mc, str(d.year)[-2:])
+            for k in (n, n + 1, n - 1) if 1 <= k <= 6]
 
 
 # --------------------------------------------------------------------------- #
@@ -393,20 +402,41 @@ def parse_chain(chain):
     return legs
 
 
+def _name_expiry(name):
+    """'Gold Thursday Week 2 Options Sep '26 ...' -> (expiry_date, label) / None"""
+    m = re.match(r"Gold (Monday|Tuesday|Wednesday|Thursday|Friday) "
+                 r"Week (\d) Options ([A-Z][a-z]{2}) '(\d\d)", name or "")
+    if not m:
+        return None
+    wd = WD_NAMES.index(m.group(1))
+    month = datetime.strptime(m.group(3), "%b").month
+    return _nth_weekday(2000 + int(m.group(4)), month, wd, int(m.group(2))), m.group(0)
+
+
 def series_name_expiry(legs):
-    """อ่าน 'Gold Thursday Week 2 Options Sep '26 ...' จาก symbolName ของ leg แรก
-    -> (expiry_date, label) / None ถ้า parse ไม่ได้ (เช่นไปโดน monthly series)"""
+    """อ่านชื่อ series จาก symbolName ของ leg แรก -> (expiry_date, label)
+    / None ถ้า parse ไม่ได้ (เช่นไปโดน monthly series)"""
     for v in legs.values():
         for side in ("Call", "Put"):
-            m = re.match(r"Gold (Monday|Tuesday|Wednesday|Thursday|Friday) "
-                         r"Week (\d) Options ([A-Z][a-z]{2}) '(\d\d)",
-                         v[side].get("symbolName") or "")
-            if m:
-                wd = WD_NAMES.index(m.group(1))
-                n = int(m.group(2))
-                month = datetime.strptime(m.group(3), "%b").month
-                year = 2000 + int(m.group(4))
-                return _nth_weekday(year, month, wd, n), m.group(0)
+            got = _name_expiry(v[side].get("symbolName"))
+            if got:
+                return got
+    return None
+
+
+def probe_series_expiry(sym):
+    """ยิงเบาๆ (1 leg) เอาแค่ชื่อ series -> expiry_date / None ถ้าว่าง/ไม่ใช่ weekly ทอง"""
+    try:
+        d = bc_api("quotes/get?symbol={}&list=futures.options&fields=symbolName"
+                   "&limit=1&raw=1".format(sym))
+    except SourceDown:
+        raise
+    except Exception:
+        return None
+    for row in d.get("data") or []:
+        got = _name_expiry(row.get("raw", row).get("symbolName"))
+        if got:
+            return got[0]
     return None
 
 
@@ -415,29 +445,37 @@ def snapshot_barchart():
     today = date.today()
     now_utc = datetime.now(timezone.utc)
 
-    # ไล่ probe จาก series ใกล้หมดอายุสุด: chain ว่าง = หมดอายุ/ยังไม่เปิด ข้ามไปตัวถัดไป
-    series = expiry = None
-    legs = {}
-    tried = []
-    for exp_guess, sym in weekly_candidates(now_utc)[:5]:
-        tried.append(sym)
+    def fetch_chain(sym):
         try:
-            chain = bc_api("quotes/get?symbol={}&list=futures.options&fields={}"
-                           "&groupBy=strikePrice&orderBy=strikePrice&orderDir=asc"
-                           "&raw=1".format(sym, BC_CHAIN_FIELDS))
+            return parse_chain(bc_api("quotes/get?symbol={}&list=futures.options&fields={}"
+                                      "&groupBy=strikePrice&orderBy=strikePrice&orderDir=asc"
+                                      "&raw=1".format(sym, BC_CHAIN_FIELDS)))
         except SourceDown:
             raise
         except Exception:
-            continue
-        got = parse_chain(chain)
-        if not got:
-            continue
-        named = series_name_expiry(got)
-        exp = named[0] if named else exp_guess  # ชื่อจริงชนะรหัสเดา
-        if expiry_utc(exp) <= now_utc:
-            continue
-        series, expiry, legs = sym, exp, got
-        break
+            return {}
+
+    # ไล่จาก series ใกล้หมดอายุสุด: ต้องได้ series ที่ "ชื่อ" บอกวันหมดอายุตรงกับวันนั้น
+    # รหัสเดาผิดได้ (ได้ series ว่าง หรือได้ของสัปดาห์อื่น) -> ลองรหัสสัปดาห์ ±1 แบบยิงเบา
+    # ถ้าไม่ครบทุกรหัส วันนั้นไม่มี series (วันหยุด) ข้ามไปวันถัดไป
+    series = expiry = None
+    legs = {}
+    tried = []
+    for exp_guess, syms in weekly_candidates(now_utc)[:5]:
+        tried.append(syms[0])
+        got = fetch_chain(syms[0])
+        named = series_name_expiry(got) if got else None
+        if got and (named is None or named[0] == exp_guess):
+            series, expiry, legs = syms[0], exp_guess, got
+            break
+        for alt in syms[1:]:
+            if probe_series_expiry(alt) == exp_guess:
+                got = fetch_chain(alt)
+                if got:
+                    series, expiry, legs = alt, exp_guess, got
+                break
+        if series:
+            break
     if series is None:
         raise SourceDown("barchart: ทุก candidate ว่าง ({})".format(",".join(tried)))
 

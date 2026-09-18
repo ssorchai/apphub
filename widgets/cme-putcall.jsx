@@ -378,11 +378,10 @@ const Chart = ({ data, liveF, mode, sdMode, dMode, hover, dispatch }) => {
         <span style={{ ...secTitle, marginLeft: '10px' }}>SD</span>
         <ModePill label="Open 0.6" on={!!useOpen} onPick={() => { savePref('sdMode', 'open'); dispatch({ type: 'SD_MODE', mode: 'open' }); }} />
         <ModePill label="CME" on={!useOpen} onPick={() => { savePref('sdMode', 'cme'); dispatch({ type: 'SD_MODE', mode: 'cme' }); }} />
-        <span style={{ ...secTitle, marginLeft: '10px' }}>Δ</span>
-        {[['off', 'ปิด'], ['all', 'เปิด']].map(([m, lbl]) => (
-          <ModePill key={m} label={lbl} on={(dMode === 'off' ? 'off' : 'all') === m}
-            onPick={() => { savePref('dMode', m); dispatch({ type: 'DELTA_MODE', mode: m }); }} />
-        ))}
+        <ModePill label="Δ" on={dMode !== 'off'} onPick={() => {
+          const m = dMode === 'off' ? 'all' : 'off';
+          savePref('dMode', m); dispatch({ type: 'DELTA_MODE', mode: m });
+        }} />
         <span style={{ marginLeft: 'auto', fontSize: '11px', color: macos.tertiary }}>
           <span style={{ color: macos.orange }}>■</span> Put&nbsp;&nbsp;
           <span style={{ color: macos.blue }}>■</span> Call&nbsp;&nbsp;

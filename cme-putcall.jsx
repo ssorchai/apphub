@@ -27,8 +27,6 @@ const savePref = (k, v) => {
 export const initialState = {
   output: null, refreshing: false, hover: null,
   chartMode: pref('chartMode', 'id'), sdMode: pref('sdMode', 'open'), dMode: pref('dMode', 'off'),
-  // wMode: แท่งเป็นจำนวนสัญญาดิบ หรือถ่วงด้วย delta / gMode: แถบ gamma x OI ใต้กราฟ
-  wMode: pref('wMode', false), gMode: pref('gMode', false),
 };
 export const updateState = (event, prev) => {
   switch (event.type) {
@@ -38,8 +36,6 @@ export const updateState = (event, prev) => {
     case 'CHART_MODE': return { ...prev, chartMode: event.mode };
     case 'SD_MODE': return { ...prev, sdMode: event.mode };
     case 'DELTA_MODE': return { ...prev, dMode: event.mode };
-    case 'WT_MODE': return { ...prev, wMode: event.on };
-    case 'GAMMA_MODE': return { ...prev, gMode: event.on };
     case 'HOVER': return { ...prev, hover: event.k };
     default: return prev;
   }
@@ -259,7 +255,7 @@ const ModePill = ({ label, on, onPick }) => (
   </span>
 );
 
-const Chart = ({ data, liveF, mode, sdMode, dMode, wMode, gMode, hover, dispatch }) => {
+const Chart = ({ data, liveF, mode, sdMode, dMode, hover, dispatch }) => {
   const ch = data.chart;
   if (!ch) return null;
   const W = CHART_W, H = CHART_H, L = 38, R = 38, T = 8, B = 22;
@@ -268,12 +264,7 @@ const Chart = ({ data, liveF, mode, sdMode, dMode, wMode, gMode, hover, dispatch
   const sig = F && data.iv && data.dte > 0 ? (F * data.iv) / 100 * Math.sqrt(data.dte / 365) : null;
   // greeks ต่อสไตรค์จาก fetcher: [strike, call delta, gamma] -- ใช้ถ่วงน้ำหนักและทำแถบ gamma
   const gk = new Map((ch.gk || []).map((r) => [r[0], { cd: r[1], g: r[2] }]));
-  const wRow = (r) => {
-    if (!wMode) return r;
-    const g = gk.get(r[0]);
-    return g ? [r[0], r[1] * (1 - g.cd), r[2] * g.cd] : [r[0], 0, 0];
-  };
-  const rows = (ch[mode] || []).filter((r) => r[1] + r[2] > 0).map(wRow);
+  const rows = (ch[mode] || []).filter((r) => r[1] + r[2] > 0);
   const strikes = [...new Set([...ch.id, ...ch.oi].map((r) => r[0]))].sort((a, b) => a - b);
   if (!strikes.length) return null;
   // ช่วงแกน x: ±3.5σ รอบ F เหมือนหน้าเว็บ (ไม่เกินช่วงข้อมูลที่มี)
@@ -293,17 +284,6 @@ const Chart = ({ data, liveF, mode, sdMode, dMode, wMode, gMode, hover, dispatch
   const x = (v) => L + ((v - lo) / (hi - lo)) * (W - L - R);
   const vrows = rows.filter((r) => r[0] >= lo && r[0] <= hi);
   const ymax = Math.max(1, ...vrows.map((r) => Math.max(r[1], r[2]))) * 1.1;
-  // แถบ gamma x OI: จุดที่คนเฮดจ์ต้องเทรด futures หนักสุดถ้าราคาวิ่งมาถึง (ใช้ OI เสมอ)
-  const oiRaw = new Map((ch.oi || []).map((r) => [r[0], r]));
-  const gRows = gMode
-    ? vrows.map((r) => r[0]).map((k) => {
-        const g = gk.get(k), o = oiRaw.get(k);
-        return [k, g && o ? g.g * (o[1] + o[2]) : 0];
-      }).filter((r) => r[1] > 0)
-    : [];
-  const gMax = Math.max(0, ...gRows.map((r) => r[1]));
-  const gH = 46;
-  const gY = (v) => (H - B) - (v / gMax) * gH;
   const y = (v) => T + (1 - v / ymax) * (H - T - B);
   const ks = strikes.filter((k) => k >= lo && k <= hi);
   const stepX = ks.length > 1 ? Math.min(...ks.slice(1).map((k, i) => k - ks[i])) : 5;
@@ -358,9 +338,6 @@ const Chart = ({ data, liveF, mode, sdMode, dMode, wMode, gMode, hover, dispatch
       ? [[line('Intraday', idr), true], [line('OI', oir), false]]
       : [[line('OI', oir), true], [line('Intraday', idr), false]];
     const hd = deltaAt(hover);
-    const hg = gk.get(hover);
-    const hrow = mode === 'id' ? idm.get(hover) : oim.get(hover);
-    const hdw = hg && hrow ? `${Math.round(hrow[1] * (1 - hg.cd))} / ${Math.round(hrow[2] * hg.cd)}` : null;
     const bxW = 214, bxH = (vk != null ? 74 : 58) + (hd != null ? 15 : 0);
     const bx = X + 12 + bxW > W - R ? X - 12 - bxW : X + 12;
     tip = (
@@ -384,7 +361,7 @@ const Chart = ({ data, liveF, mode, sdMode, dMode, wMode, gMode, hover, dispatch
         )}
         {hd != null && (
           <text x={bx + 10} y={T + (vk != null ? 98 : 83)} fontSize="11" fill={macos.secondary}>
-            {`Δ ${hd.toFixed(2)}${hover >= (fNow || F) ? 'C' : 'P'}${hdw ? `  ·  Δw P/C ${hdw}` : ''}`}
+            {`Δ ${hd.toFixed(2)}${hover >= (fNow || F) ? 'C' : 'P'}`}
           </text>
         )}
         <rect x={X - 22} y={H - B + 3} width="44" height="15" rx="3" fill="#fff" />
@@ -396,18 +373,12 @@ const Chart = ({ data, liveF, mode, sdMode, dMode, wMode, gMode, hover, dispatch
   return (
     <div style={{ marginTop: '10px', borderTop: `0.5px solid ${macos.divider}`, paddingTop: '8px' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '4px' }}>
-        <span style={{ ...secTitle, color: macos.label, marginRight: '4px' }}>
-          {wMode ? 'Put / Call × Δ' : 'Put / Call by Strike'}
-        </span>
+        <span style={{ ...secTitle, color: macos.label, marginRight: '4px' }}>Put / Call by Strike</span>
         <ModePill label="Intraday" on={mode === 'id'} onPick={() => { savePref('chartMode', 'id'); dispatch({ type: 'CHART_MODE', mode: 'id' }); }} />
         <ModePill label="OI" on={mode === 'oi'} onPick={() => { savePref('chartMode', 'oi'); dispatch({ type: 'CHART_MODE', mode: 'oi' }); }} />
         <span style={{ ...secTitle, marginLeft: '10px' }}>SD</span>
         <ModePill label="Open 0.6" on={!!useOpen} onPick={() => { savePref('sdMode', 'open'); dispatch({ type: 'SD_MODE', mode: 'open' }); }} />
         <ModePill label="CME" on={!useOpen} onPick={() => { savePref('sdMode', 'cme'); dispatch({ type: 'SD_MODE', mode: 'cme' }); }} />
-        <ModePill label="Δw" on={!!wMode}
-          onPick={() => { savePref('wMode', !wMode); dispatch({ type: 'WT_MODE', on: !wMode }); }} />
-        <ModePill label="γ" on={!!gMode}
-          onPick={() => { savePref('gMode', !gMode); dispatch({ type: 'GAMMA_MODE', on: !gMode }); }} />
         <span style={{ ...secTitle, marginLeft: '10px' }}>Δ</span>
         {[['off', 'ปิด'], ['25', '25Δ'], ['all', 'ครบ']].map(([m, lbl]) => (
           <ModePill key={m} label={lbl} on={(dMode || 'off') === m}
@@ -440,19 +411,10 @@ const Chart = ({ data, liveF, mode, sdMode, dMode, wMode, gMode, hover, dispatch
         {fNow && fNow > lo && fNow < hi && (
           <line x1={x(fNow)} x2={x(fNow)} y1={T + 16} y2={H - B} stroke="rgba(255,255,255,0.45)" strokeWidth="0.8" />
         )}
-        {gRows.length > 1 && gMax > 0 && (
-          <g>
-            <path d={`M${x(gRows[0][0]).toFixed(1)},${H - B}L` +
-              splinePath(gRows.map((r) => [x(r[0]), gY(r[1])])).slice(1) +
-              `L${x(gRows[gRows.length - 1][0]).toFixed(1)},${H - B}Z`}
-              fill="rgba(191,144,255,0.22)" stroke="#bf90ff" strokeWidth="1" />
-            <text x={L + 3} y={H - B - gH - 3} fontSize="9" fill="#bf90ff">γ × OI</text>
-          </g>
-        )}
         {vrows.map(([s, p, c]) => (
           <g key={s}>
-            {p > 0.05 && <rect x={x(s) - bw - 0.4} y={y(p)} width={bw} height={y(0) - y(p)} fill={macos.orange} />}
-            {c > 0.05 && <rect x={x(s) + 0.4} y={y(c)} width={bw} height={y(0) - y(c)} fill={macos.blue} />}
+            {p > 0 && <rect x={x(s) - bw - 0.4} y={y(p)} width={bw} height={y(0) - y(p)} fill={macos.orange} />}
+            {c > 0 && <rect x={x(s) + 0.4} y={y(c)} width={bw} height={y(0) - y(c)} fill={macos.blue} />}
           </g>
         ))}
         {dLines.map((d) => (
@@ -502,7 +464,7 @@ const Chart = ({ data, liveF, mode, sdMode, dMode, wMode, gMode, hover, dispatch
 };
 
 export const render = (state, dispatch) => {
-  const { output, refreshing, chartMode, sdMode, dMode, wMode, gMode, hover } = state || {};
+  const { output, refreshing, chartMode, sdMode, dMode, hover } = state || {};
   const [cmeTxt, liveTxt] = (output || '').split(LIVE_SEP);
   let data = null;
   try { data = JSON.parse(cmeTxt); } catch (e) { data = null; }
@@ -661,7 +623,7 @@ export const render = (state, dispatch) => {
       </div>
 
       <Chart data={data} liveF={liveF} mode={chartMode || 'id'} sdMode={sdMode || 'open'}
-        dMode={dMode || 'off'} wMode={!!wMode} gMode={!!gMode} hover={hover} dispatch={dispatch} />
+        dMode={dMode || 'off'} hover={hover} dispatch={dispatch} />
 
       <div style={{
         borderTop: `0.5px solid ${macos.divider}`,

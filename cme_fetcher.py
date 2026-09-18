@@ -367,6 +367,25 @@ DELTA_MIN_DTE = 0.02          # ใกล้หมดอายุกว่าน
 DELTA_MIN_ROWS = 8            # smile ที่ขาดเกินนี้ (bid/ask หาย) ซ่อนเส้นดีกว่าวาดผิด
 
 
+def greeks_rows(iv_rows, F, dte, strikes):
+    """[[strike, call_delta, gamma]] ต่อสไตรค์จาก smile เดียวกับเส้น delta
+    ใช้ถ่วงน้ำหนัก OI/volume ในกราฟ: delta-weighted = |delta| x จำนวนสัญญา
+    (= futures เทียบเท่า) / gamma-weighted = gamma x OI (จุดที่คนเฮดจ์ต้องเทรดหนักถ้าราคามา)"""
+    if not iv_rows or not F or not dte or dte < DELTA_MIN_DTE or len(iv_rows) < DELTA_MIN_ROWS:
+        return []
+    t = dte / 365.0
+    out = []
+    for K in strikes:
+        v = iv_at(iv_rows, K)
+        if not v or v <= 0:
+            continue
+        sd = v / 100.0 * math.sqrt(t)
+        d1 = (math.log(F / K) + 0.5 * sd * sd) / sd
+        gamma = math.exp(-d1 * d1 / 2) / math.sqrt(2 * math.pi) / (F * sd)
+        out.append([K, round(_ncdf(d1), 4), round(gamma, 8)])
+    return out
+
+
 def delta_levels(legs, F, dte, targets=DELTA_TARGETS):
     """ราคาที่ delta ของออปชัน OTM เท่ากับเป้า -> [{"d", "side", "k"}] (เส้นแบบ 25ΔP/25ΔC
     ของ CME) คิดเองด้วย Black-76: F สด + DTE จริง + IV รายสไตรค์จาก mid ของ bid/ask
@@ -605,6 +624,7 @@ def snapshot_barchart():
         "iv_chg": None, "future_chg": None, "iv_src": iv_src,
         "id_rows": id_rows, "oi_rows": oi_rows, "vs_rows": vs_rows, "curve": curve,
         "delta": delta_levels(legs, F, dte),
+        "iv_live_rows": computed_iv_rows(legs, F, dte),
     }
 
 
@@ -701,10 +721,14 @@ def clip_window(F, iv, dte, k=CLIP_SD):
 def chart_rows(meta, snap, id_rows, oi_rows):
     win = clip_window(meta["F"], meta["iv"] or snap.get("iv_settle"), meta["dte"])
     inwin = (lambda s: win[0] <= s <= win[1]) if win else (lambda s: True)
+    ks = sorted({s for s, _, _ in id_rows} | {s for s, _, _ in oi_rows})
     return {
         "id": [[s, p, c] for s, p, c in id_rows if inwin(s)],
         "oi": [[s, p, c] for s, p, c in oi_rows if inwin(s)],
         "vs": [[s, v] for s, v in snap["vs_rows"] if inwin(s)],
+        # greeks ต่อสไตรค์ให้กราฟถ่วงน้ำหนักเอง (delta-weighted / gamma-weighted)
+        "gk": greeks_rows(snap.get("iv_live_rows") or [], meta["F"], meta["dte"],
+                          [s for s in ks if inwin(s)]),
     }
 
 
@@ -1048,6 +1072,8 @@ CHART_TMPL = r"""<!DOCTYPE html>
    <span style="color:#c0392b;margin-left:10px">- - -</span> <span id="smlbl">Vol Settle</span></span>
   <button id="bId">Intraday</button><button id="bOi">OI</button>
   <button id="bDelta" title="เส้น 5/15/25/35/45 delta (คิดจาก bid/ask ของ barchart)">&#916;</button>
+  <button id="bWt" title="นับสัญญาดิบ &lt;-&gt; ถ่วงด้วย delta (= futures เทียบเท่า)">&#916;w</button>
+  <button id="bGam" title="แถบ gamma x OI ใต้กราฟ -- จุดที่คนเฮดจ์ต้องเทรดหนักถ้าราคามาถึง">&#947;</button>
  </span>
 </div>
 <div id="wrap"><svg id="c" width="960" height="600"></svg><div id="tip"></div></div>
@@ -1056,8 +1082,21 @@ CHART_TMPL = r"""<!DOCTYPE html>
 const D = __DATA__;
 let mode = "id";
 // เส้น delta: ปิดไว้ก่อน กดเปิดเอง (จำค่าที่เลือกไว้ข้ามการ refresh ทุก 5 นาที)
-let dOn = false;
-try { dOn = localStorage.getItem("cme.delta") === "1"; } catch (e) {}
+let dOn = false, wOn = false, gOn = false;
+try {
+  dOn = localStorage.getItem("cme.delta") === "1";
+  wOn = localStorage.getItem("cme.wt") === "1";
+  gOn = localStorage.getItem("cme.gam") === "1";
+} catch (e) {}
+// greeks ต่อสไตรค์จาก fetcher: [strike, call delta, gamma]
+const GK = new Map((D.gk || []).map(r => [r[0], {cd: r[1], g: r[2]}]));
+// ถ่วง delta: put ใช้ |delta| = 1 - call delta / ไม่มี greeks ของสไตรค์นั้นก็คืนค่าดิบ
+function wRow(r){
+  if (!wOn) return r;
+  const g = GK.get(r[0]);
+  if (!g) return [r[0], 0, 0];
+  return [r[0], r[1] * (1 - g.cd), r[2] * g.cd];
+}
 const NS = "http://www.w3.org/2000/svg";
 function el(tag, attrs, parent, tip){
   const e = document.createElementNS(NS, tag);
@@ -1095,9 +1134,11 @@ function splinePath(p){                    // Catmull-Rom -> cubic bezier
 function render(){
   const svg = document.getElementById("c"); svg.innerHTML = "";
   const W = 960, H = 600, L = 52, R = 58, T = 16, B = 34;
-  const rows = D[mode].filter(r => r[1] + r[2] > 0);
-  document.getElementById("title").textContent = D.series + (mode === "id" ? " Intraday Volume" : " Open Interest");
-  const tp = rows.reduce((a, r) => a + r[1], 0), tc = rows.reduce((a, r) => a + r[2], 0);
+  const raw = D[mode].filter(r => r[1] + r[2] > 0);
+  const rows = raw.map(wRow);
+  document.getElementById("title").textContent = D.series + (mode === "id" ? " Intraday Volume" : " Open Interest")
+    + (wOn ? " (delta-weighted)" : "");
+  const tp = raw.reduce((a, r) => a + r[1], 0), tc = raw.reduce((a, r) => a + r[2], 0);
   // แถวตัวเลข: VolSettle (+Chg) แบบ CME + Event Vol ของ 0DTE / ตัวที่ขีดเส้นใต้คือตัวที่คิด SD
   const un = k => D.iv_src === k ? "border-bottom:2px solid currentColor" : "";
   let s = 'Put: <b class="put">' + fmt(tp) + '</b> &nbsp;Call: <b class="call">' + fmt(tc) + '</b>';
@@ -1114,6 +1155,8 @@ function render(){
   document.getElementById("bId").className = mode === "id" ? "on" : "";
   document.getElementById("bOi").className = mode === "oi" ? "on" : "";
   document.getElementById("bDelta").className = dOn ? "on" : "";
+  document.getElementById("bWt").className = wOn ? "on" : "";
+  document.getElementById("bGam").className = gOn ? "on" : "";
   document.getElementById("upd").textContent = "updated " + D.updated + " · " + D.series +
     (D.qs_sym ? " (" + D.qs_sym + ")" : "") + " on " + D.und + " · DTE " + D.dte +
     " · P/C barchart delayed 10-15m · smile " + (D.smile_src || "-") +
@@ -1127,7 +1170,7 @@ function render(){
   lo -= 5; hi += 5;
   const x = v => L + (v - lo) / (hi - lo) * (W - L - R);
   const vrows = rows.filter(r => r[0] >= lo && r[0] <= hi);
-  const ymax = Math.max(...vrows.map(r => Math.max(r[1], r[2]))) * 1.08;
+  const ymax = Math.max(...vrows.map(r => Math.max(r[1], r[2]))) * 1.08 || 1;
   const y = v => T + (1 - v / ymax) * (H - T - B);
   // แถบ SD band รอบ F (ในเข้มออกอ่อน แบบ expected range ของ CME)
   if (sig && D.F){
@@ -1142,13 +1185,34 @@ function render(){
   const step = Math.pow(10, Math.floor(Math.log10(ymax))) * (ymax / Math.pow(10, Math.floor(Math.log10(ymax))) > 5 ? 1 : 0.5) || 1;
   for (let v = 0; v <= ymax; v += step){
     el("line", {x1: L, x2: W - R, y1: y(v), y2: y(v), stroke: "#ddd", "stroke-width": 1}, svg);
-    el("text", {x: L - 6, y: y(v) + 4, "text-anchor": "end", "font-size": 11, fill: "#888"}, svg).textContent = fmt(v);
+    el("text", {x: L - 6, y: y(v) + 4, "text-anchor": "end", "font-size": 11, fill: "#888"}, svg)
+      .textContent = fmt(Math.round(v));
+  }
+  // แถบ gamma x OI ใต้กราฟ: จุดที่คนเฮดจ์ต้องซื้อขาย futures หนักสุดถ้าราคาวิ่งมาถึง
+  // (gamma ของ 0DTE พุ่งแคบมาก -- ยอดสูงมักเป็นจุดที่ราคาถูกตรึงช่วงท้ายวัน)
+  if (gOn && GK.size){
+    const oim0 = new Map(D.oi.map(r => [r[0], r]));
+    const gs = vrows.map(r => r[0]).map(k => {
+      const g = GK.get(k), o = oim0.get(k);
+      return [k, g && o ? g.g * (o[1] + o[2]) : 0];
+    }).filter(r => r[1] > 0);
+    const gmax = Math.max(...gs.map(r => r[1]), 0);
+    if (gmax > 0){
+      const gh = 54, base = H - B;
+      const gy = v => base - (v / gmax) * gh;
+      const pts = gs.map(r => [x(r[0]), gy(r[1])]);
+      el("path", {d: "M" + pts[0][0].toFixed(1) + "," + base + "L" + splinePath(pts).slice(1) +
+                     "L" + pts[pts.length - 1][0].toFixed(1) + "," + base + "Z",
+                  fill: "rgba(123,82,192,0.20)", stroke: "#7b52c0", "stroke-width": 1.1}, svg);
+      el("text", {x: L + 4, y: base - gh - 3, "font-size": 10, fill: "#7b52c0"}, svg).textContent = "γ × OI";
+    }
   }
   // แท่ง Put(ส้ม)/Call(น้ำเงิน) เคียงกันต่อ strike
   const stepX = vrows.length > 1 ? Math.min(...vrows.slice(1).map((r, i) => r[0] - vrows[i][0])) : 5;
   const bw = Math.max(1.5, (x(lo + stepX) - x(lo)) * 0.36);
   for (const [s, p, c] of vrows){
-    const tip = s + "  Put " + fmt(p) + "  Call " + fmt(c) + "  Total " + fmt(p + c);
+    const tip = s + "  Put " + fmt(Math.round(p)) + "  Call " + fmt(Math.round(c)) +
+                "  Total " + fmt(Math.round(p + c)) + (wOn ? " (delta-weighted)" : "");
     if (p) el("rect", {x: x(s) - bw - 0.5, y: y(p), width: bw, height: y(0) - y(p), fill: "#f5a623"}, svg, tip);
     if (c) el("rect", {x: x(s) + 0.5, y: y(c), width: bw, height: y(0) - y(c), fill: "#4a80e8"}, svg, tip);
   }
@@ -1264,12 +1328,16 @@ function cursor(svg, g){
       ? row("Intraday", idm.get(k), true) + row("OI", oim.get(k), false)
       : row("OI", oim.get(k), true) + row("Intraday", idm.get(k), false);
     const dl = deltaAt(k);
+    const gk = GK.get(k);
+    const dwRow = r => gk && r ? Math.round(r[1] * (1 - gk.cd)) + " / " + Math.round(r[2] * gk.cd) : null;
+    const dwTxt = gk ? (mode === "id" ? dwRow(idm.get(k)) : dwRow(oim.get(k))) : null;
     tip.innerHTML = '<div class="k">' + fmt(k) +
       (dist != null ? ' <span class="d">' + (dist >= 0 ? "+" : "") + dist.toFixed(2) + 'σ จาก F</span>' : '') +
       '</div><table>' + rows + '</table>' +
       (vraw != null ? '<div class="v">' + (D.iv_settle != null ? "Vol Settle " : "IV ") +
                       vraw.toFixed(2) + '%</div>' : '') +
-      (dl != null ? '<div class="d">&#916; ' + dl.toFixed(2) + (k >= fNow ? 'C' : 'P') + '</div>' : '');
+      (dl != null ? '<div class="d">&#916; ' + dl.toFixed(2) + (k >= fNow ? 'C' : 'P') +
+                    (dwTxt ? ' &nbsp;· delta-weighted P/C ' + dwTxt : '') + '</div>' : '');
     tip.style.display = "block";
     const sx = bb.width / g.W, sy = bb.height / g.H;
     let left = X * sx + 14;
@@ -1284,11 +1352,14 @@ function cursor(svg, g){
 }
 document.getElementById("bId").onclick = () => { mode = "id"; render(); };
 document.getElementById("bOi").onclick = () => { mode = "oi"; render(); };
-document.getElementById("bDelta").onclick = () => {
-  dOn = !dOn;
-  try { localStorage.setItem("cme.delta", dOn ? "1" : "0"); } catch (e) {}
+const toggle = (id, key, get, set) => document.getElementById(id).onclick = () => {
+  set(!get());
+  try { localStorage.setItem(key, get() ? "1" : "0"); } catch (e) {}
   render();
 };
+toggle("bDelta", "cme.delta", () => dOn, v => dOn = v);
+toggle("bWt", "cme.wt", () => wOn, v => wOn = v);
+toggle("bGam", "cme.gam", () => gOn, v => gOn = v);
 // ---- ราคา Future สด: gold_fetcher.py เขียน /tmp/gold_live.js ทุก ~5 วินาที ----
 // หน้านี้เปิดแบบ file:// จึง fetch JSON ไม่ได้ ต้องโหลดซ้ำผ่าน <script src> แทน
 // ใช้เฉพาะเมื่อสัญญาตรงกับ underlying ของ series (GCV6 = GCV26) และไฟล์ไม่เก่าเกิน 3 นาที
@@ -1365,6 +1436,8 @@ def chart_html(snap, now, ev=None):
         "id": [list(r) for r in snap["id_rows"]],
         "oi": [list(r) for r in snap["oi_rows"]],
         "vs": [list(r) for r in snap["vs_rows"]],
+        "gk": greeks_rows(snap.get("iv_live_rows") or [], snap["F"], snap["dte"],
+                          sorted({r[0] for r in snap["id_rows"]} | {r[0] for r in snap["oi_rows"]})),
         "ev": ev or [],
     }
     return CHART_TMPL.replace("__DATA__", json.dumps(payload))

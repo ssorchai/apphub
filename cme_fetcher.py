@@ -1072,8 +1072,6 @@ CHART_TMPL = r"""<!DOCTYPE html>
    <span style="color:#c0392b;margin-left:10px">- - -</span> <span id="smlbl">Vol Settle</span></span>
   <button id="bId">Intraday</button><button id="bOi">OI</button>
   <button id="bDelta" title="เส้น 5/15/25/35/45 delta (คิดจาก bid/ask ของ barchart)">&#916;</button>
-  <button id="bWt" title="นับสัญญาดิบ &lt;-&gt; ถ่วงด้วย delta (= futures เทียบเท่า)">&#916;w</button>
-  <button id="bGam" title="แถบ gamma x OI ใต้กราฟ -- จุดที่คนเฮดจ์ต้องเทรดหนักถ้าราคามาถึง">&#947;</button>
  </span>
 </div>
 <div id="wrap"><svg id="c" width="960" height="600"></svg><div id="tip"></div></div>
@@ -1082,21 +1080,10 @@ CHART_TMPL = r"""<!DOCTYPE html>
 const D = __DATA__;
 let mode = "id";
 // เส้น delta: ปิดไว้ก่อน กดเปิดเอง (จำค่าที่เลือกไว้ข้ามการ refresh ทุก 5 นาที)
-let dOn = false, wOn = false, gOn = false;
-try {
-  dOn = localStorage.getItem("cme.delta") === "1";
-  wOn = localStorage.getItem("cme.wt") === "1";
-  gOn = localStorage.getItem("cme.gam") === "1";
-} catch (e) {}
+let dOn = false;
+try { dOn = localStorage.getItem("cme.delta") === "1"; } catch (e) {}
 // greeks ต่อสไตรค์จาก fetcher: [strike, call delta, gamma]
 const GK = new Map((D.gk || []).map(r => [r[0], {cd: r[1], g: r[2]}]));
-// ถ่วง delta: put ใช้ |delta| = 1 - call delta / ไม่มี greeks ของสไตรค์นั้นก็คืนค่าดิบ
-function wRow(r){
-  if (!wOn) return r;
-  const g = GK.get(r[0]);
-  if (!g) return [r[0], 0, 0];
-  return [r[0], r[1] * (1 - g.cd), r[2] * g.cd];
-}
 const NS = "http://www.w3.org/2000/svg";
 function el(tag, attrs, parent, tip){
   const e = document.createElementNS(NS, tag);
@@ -1134,11 +1121,9 @@ function splinePath(p){                    // Catmull-Rom -> cubic bezier
 function render(){
   const svg = document.getElementById("c"); svg.innerHTML = "";
   const W = 960, H = 600, L = 52, R = 58, T = 16, B = 34;
-  const raw = D[mode].filter(r => r[1] + r[2] > 0);
-  const rows = raw.map(wRow);
-  document.getElementById("title").textContent = D.series + (mode === "id" ? " Intraday Volume" : " Open Interest")
-    + (wOn ? " (delta-weighted)" : "");
-  const tp = raw.reduce((a, r) => a + r[1], 0), tc = raw.reduce((a, r) => a + r[2], 0);
+  const rows = D[mode].filter(r => r[1] + r[2] > 0);
+  document.getElementById("title").textContent = D.series + (mode === "id" ? " Intraday Volume" : " Open Interest");
+  const tp = rows.reduce((a, r) => a + r[1], 0), tc = rows.reduce((a, r) => a + r[2], 0);
   // แถวตัวเลข: VolSettle (+Chg) แบบ CME + Event Vol ของ 0DTE / ตัวที่ขีดเส้นใต้คือตัวที่คิด SD
   const un = k => D.iv_src === k ? "border-bottom:2px solid currentColor" : "";
   let s = 'Put: <b class="put">' + fmt(tp) + '</b> &nbsp;Call: <b class="call">' + fmt(tc) + '</b>';
@@ -1155,8 +1140,6 @@ function render(){
   document.getElementById("bId").className = mode === "id" ? "on" : "";
   document.getElementById("bOi").className = mode === "oi" ? "on" : "";
   document.getElementById("bDelta").className = dOn ? "on" : "";
-  document.getElementById("bWt").className = wOn ? "on" : "";
-  document.getElementById("bGam").className = gOn ? "on" : "";
   document.getElementById("upd").textContent = "updated " + D.updated + " · " + D.series +
     (D.qs_sym ? " (" + D.qs_sym + ")" : "") + " on " + D.und + " · DTE " + D.dte +
     " · P/C barchart delayed 10-15m · smile " + (D.smile_src || "-") +
@@ -1188,31 +1171,11 @@ function render(){
     el("text", {x: L - 6, y: y(v) + 4, "text-anchor": "end", "font-size": 11, fill: "#888"}, svg)
       .textContent = fmt(Math.round(v));
   }
-  // แถบ gamma x OI ใต้กราฟ: จุดที่คนเฮดจ์ต้องซื้อขาย futures หนักสุดถ้าราคาวิ่งมาถึง
-  // (gamma ของ 0DTE พุ่งแคบมาก -- ยอดสูงมักเป็นจุดที่ราคาถูกตรึงช่วงท้ายวัน)
-  if (gOn && GK.size){
-    const oim0 = new Map(D.oi.map(r => [r[0], r]));
-    const gs = vrows.map(r => r[0]).map(k => {
-      const g = GK.get(k), o = oim0.get(k);
-      return [k, g && o ? g.g * (o[1] + o[2]) : 0];
-    }).filter(r => r[1] > 0);
-    const gmax = Math.max(...gs.map(r => r[1]), 0);
-    if (gmax > 0){
-      const gh = 54, base = H - B;
-      const gy = v => base - (v / gmax) * gh;
-      const pts = gs.map(r => [x(r[0]), gy(r[1])]);
-      el("path", {d: "M" + pts[0][0].toFixed(1) + "," + base + "L" + splinePath(pts).slice(1) +
-                     "L" + pts[pts.length - 1][0].toFixed(1) + "," + base + "Z",
-                  fill: "rgba(123,82,192,0.20)", stroke: "#7b52c0", "stroke-width": 1.1}, svg);
-      el("text", {x: L + 4, y: base - gh - 3, "font-size": 10, fill: "#7b52c0"}, svg).textContent = "γ × OI";
-    }
-  }
   // แท่ง Put(ส้ม)/Call(น้ำเงิน) เคียงกันต่อ strike
   const stepX = vrows.length > 1 ? Math.min(...vrows.slice(1).map((r, i) => r[0] - vrows[i][0])) : 5;
   const bw = Math.max(1.5, (x(lo + stepX) - x(lo)) * 0.36);
   for (const [s, p, c] of vrows){
-    const tip = s + "  Put " + fmt(Math.round(p)) + "  Call " + fmt(Math.round(c)) +
-                "  Total " + fmt(Math.round(p + c)) + (wOn ? " (delta-weighted)" : "");
+    const tip = s + "  Put " + fmt(p) + "  Call " + fmt(c) + "  Total " + fmt(p + c);
     if (p) el("rect", {x: x(s) - bw - 0.5, y: y(p), width: bw, height: y(0) - y(p), fill: "#f5a623"}, svg, tip);
     if (c) el("rect", {x: x(s) + 0.5, y: y(c), width: bw, height: y(0) - y(c), fill: "#4a80e8"}, svg, tip);
   }
@@ -1328,16 +1291,12 @@ function cursor(svg, g){
       ? row("Intraday", idm.get(k), true) + row("OI", oim.get(k), false)
       : row("OI", oim.get(k), true) + row("Intraday", idm.get(k), false);
     const dl = deltaAt(k);
-    const gk = GK.get(k);
-    const dwRow = r => gk && r ? Math.round(r[1] * (1 - gk.cd)) + " / " + Math.round(r[2] * gk.cd) : null;
-    const dwTxt = gk ? (mode === "id" ? dwRow(idm.get(k)) : dwRow(oim.get(k))) : null;
     tip.innerHTML = '<div class="k">' + fmt(k) +
       (dist != null ? ' <span class="d">' + (dist >= 0 ? "+" : "") + dist.toFixed(2) + 'σ จาก F</span>' : '') +
       '</div><table>' + rows + '</table>' +
       (vraw != null ? '<div class="v">' + (D.iv_settle != null ? "Vol Settle " : "IV ") +
                       vraw.toFixed(2) + '%</div>' : '') +
-      (dl != null ? '<div class="d">&#916; ' + dl.toFixed(2) + (k >= fNow ? 'C' : 'P') +
-                    (dwTxt ? ' &nbsp;· delta-weighted P/C ' + dwTxt : '') + '</div>' : '');
+      (dl != null ? '<div class="d">&#916; ' + dl.toFixed(2) + (k >= fNow ? 'C' : 'P') + '</div>' : '');
     tip.style.display = "block";
     const sx = bb.width / g.W, sy = bb.height / g.H;
     let left = X * sx + 14;
@@ -1352,14 +1311,11 @@ function cursor(svg, g){
 }
 document.getElementById("bId").onclick = () => { mode = "id"; render(); };
 document.getElementById("bOi").onclick = () => { mode = "oi"; render(); };
-const toggle = (id, key, get, set) => document.getElementById(id).onclick = () => {
-  set(!get());
-  try { localStorage.setItem(key, get() ? "1" : "0"); } catch (e) {}
+document.getElementById("bDelta").onclick = () => {
+  dOn = !dOn;
+  try { localStorage.setItem("cme.delta", dOn ? "1" : "0"); } catch (e) {}
   render();
 };
-toggle("bDelta", "cme.delta", () => dOn, v => dOn = v);
-toggle("bWt", "cme.wt", () => wOn, v => wOn = v);
-toggle("bGam", "cme.gam", () => gOn, v => gOn = v);
 // ---- ราคา Future สด: gold_fetcher.py เขียน /tmp/gold_live.js ทุก ~5 วินาที ----
 // หน้านี้เปิดแบบ file:// จึง fetch JSON ไม่ได้ ต้องโหลดซ้ำผ่าน <script src> แทน
 // ใช้เฉพาะเมื่อสัญญาตรงกับ underlying ของ series (GCV6 = GCV26) และไฟล์ไม่เก่าเกิน 3 นาที

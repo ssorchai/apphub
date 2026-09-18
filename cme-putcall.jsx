@@ -23,9 +23,10 @@ const savePref = (k, v) => {
   } catch (e) { /* localStorage ใช้ไม่ได้ก็แค่ไม่จำ */ }
 };
 // sdMode: 'open' = anchor ราคาเปิด + DTE 0.6 (ตรงกับกล่อง SD Range) / 'cme' = รอบ F + DTE ที่เหลือจริง
+// dMode: เส้น delta แบบ CME -- 'off' (ค่าเริ่มต้น) / '25' = 25Δ สองเส้น / 'all' = 5-45Δ สิบเส้น
 export const initialState = {
   output: null, refreshing: false, hover: null,
-  chartMode: pref('chartMode', 'id'), sdMode: pref('sdMode', 'open'),
+  chartMode: pref('chartMode', 'id'), sdMode: pref('sdMode', 'open'), dMode: pref('dMode', 'off'),
 };
 export const updateState = (event, prev) => {
   switch (event.type) {
@@ -34,6 +35,7 @@ export const updateState = (event, prev) => {
     case 'REFRESH_DONE': return { ...prev, refreshing: false, output: event.output || prev.output };
     case 'CHART_MODE': return { ...prev, chartMode: event.mode };
     case 'SD_MODE': return { ...prev, sdMode: event.mode };
+    case 'DELTA_MODE': return { ...prev, dMode: event.mode };
     case 'HOVER': return { ...prev, hover: event.k };
     default: return prev;
   }
@@ -253,7 +255,7 @@ const ModePill = ({ label, on, onPick }) => (
   </span>
 );
 
-const Chart = ({ data, liveF, mode, sdMode, hover, dispatch }) => {
+const Chart = ({ data, liveF, mode, sdMode, dMode, hover, dispatch }) => {
   const ch = data.chart;
   if (!ch) return null;
   const W = CHART_W, H = CHART_H, L = 38, R = 38, T = 8, B = 22;
@@ -304,6 +306,19 @@ const Chart = ({ data, liveF, mode, sdMode, hover, dispatch }) => {
   };
   const idm = new Map(ch.id.map((r) => [r[0], r])), oim = new Map(ch.oi.map((r) => [r[0], r]));
 
+  // เส้น delta (fetcher คำนวณจาก bid/ask ของ barchart ให้แล้ว) -- 25Δ อย่างเดียวหรือครบชุด
+  // เส้นคิดไว้ตอน fetcher ดึงข้อมูล (F ตอนนั้น) -- เลื่อนทั้งชุดตาม F สด ให้ยังเป็น delta เดิม
+  const dAll = (data.delta || []).map((d) => ({ ...d, k: d.k + (fNow && F ? fNow - F : 0) }));
+  const dLines = dMode === 'off' ? []
+    : (dMode === '25' ? dAll.filter((d) => d.d === 0.25) : dAll).filter((d) => d.k > lo && d.k < hi);
+  // delta ณ สไตรค์ใดๆ: แปลงฝั่ง put เป็น delta ของ call (put -0.25 = call 0.75) แล้ว interpolate
+  const dCurve = dAll.map((d) => [d.k, d.side === 'P' ? 1 - d.d : d.d]);
+  const deltaAt = (k) => {
+    if (dCurve.length < 2) return null;
+    const cd = interp(dCurve, k);
+    return cd == null ? null : (k >= (fNow || F) ? cd : 1 - cd);
+  };
+
   const xStep = (hi - lo) / 50 > 12 ? 100 : 50;
   const xt = [];
   for (let s = Math.ceil(lo / xStep) * xStep; s <= hi; s += xStep) xt.push(s);
@@ -320,7 +335,8 @@ const Chart = ({ data, liveF, mode, sdMode, hover, dispatch }) => {
     const lines = mode === 'id'
       ? [[line('Intraday', idr), true], [line('OI', oir), false]]
       : [[line('OI', oir), true], [line('Intraday', idr), false]];
-    const bxW = 214, bxH = vk != null ? 74 : 58;
+    const hd = deltaAt(hover);
+    const bxW = 214, bxH = (vk != null ? 74 : 58) + (hd != null ? 15 : 0);
     const bx = X + 12 + bxW > W - R ? X - 12 - bxW : X + 12;
     tip = (
       <g pointerEvents="none">
@@ -341,6 +357,11 @@ const Chart = ({ data, liveF, mode, sdMode, hover, dispatch }) => {
             {`${data.iv_settle != null ? 'Vol Settle' : 'IV'} ${vk.toFixed(2)}%`}
           </text>
         )}
+        {hd != null && (
+          <text x={bx + 10} y={T + (vk != null ? 98 : 83)} fontSize="11" fill={macos.secondary}>
+            {`Δ ${hd.toFixed(2)}${hover >= (fNow || F) ? 'C' : 'P'}`}
+          </text>
+        )}
         <rect x={X - 22} y={H - B + 3} width="44" height="15" rx="3" fill="#fff" />
         <text x={X} y={H - B + 14} fontSize="10.5" fontWeight="700" fill="#111" textAnchor="middle">{fmt(hover)}</text>
       </g>
@@ -356,6 +377,11 @@ const Chart = ({ data, liveF, mode, sdMode, hover, dispatch }) => {
         <span style={{ ...secTitle, marginLeft: '10px' }}>SD</span>
         <ModePill label="Open 0.6" on={!!useOpen} onPick={() => { savePref('sdMode', 'open'); dispatch({ type: 'SD_MODE', mode: 'open' }); }} />
         <ModePill label="CME" on={!useOpen} onPick={() => { savePref('sdMode', 'cme'); dispatch({ type: 'SD_MODE', mode: 'cme' }); }} />
+        <span style={{ ...secTitle, marginLeft: '10px' }}>Δ</span>
+        {[['off', 'ปิด'], ['25', '25Δ'], ['all', 'ครบ']].map(([m, lbl]) => (
+          <ModePill key={m} label={lbl} on={(dMode || 'off') === m}
+            onPick={() => { savePref('dMode', m); dispatch({ type: 'DELTA_MODE', mode: m }); }} />
+        ))}
         <span style={{ marginLeft: 'auto', fontSize: '11px', color: macos.tertiary }}>
           <span style={{ color: macos.orange }}>■</span> Put&nbsp;&nbsp;
           <span style={{ color: macos.blue }}>■</span> Call&nbsp;&nbsp;
@@ -387,6 +413,16 @@ const Chart = ({ data, liveF, mode, sdMode, hover, dispatch }) => {
           <g key={s}>
             {p > 0 && <rect x={x(s) - bw - 0.4} y={y(p)} width={bw} height={y(0) - y(p)} fill={macos.orange} />}
             {c > 0 && <rect x={x(s) + 0.4} y={y(c)} width={bw} height={y(0) - y(c)} fill={macos.blue} />}
+          </g>
+        ))}
+        {dLines.map((d) => (
+          <g key={d.side + d.d}>
+            <line x1={x(d.k)} x2={x(d.k)} y1={T} y2={H - B} stroke="rgba(255,255,255,0.30)"
+              strokeWidth="0.8" strokeDasharray="4 4" />
+            <text x={x(d.k) - 3} y={T + 20} fontSize="9" fill={macos.tertiary}
+              transform={`rotate(-90 ${x(d.k) - 3} ${T + 20})`} textAnchor="end">
+              {`${Math.round(d.d * 100)}Δ${d.side}`}
+            </text>
           </g>
         ))}
         {yr && (
@@ -426,7 +462,7 @@ const Chart = ({ data, liveF, mode, sdMode, hover, dispatch }) => {
 };
 
 export const render = (state, dispatch) => {
-  const { output, refreshing, chartMode, sdMode, hover } = state || {};
+  const { output, refreshing, chartMode, sdMode, dMode, hover } = state || {};
   const [cmeTxt, liveTxt] = (output || '').split(LIVE_SEP);
   let data = null;
   try { data = JSON.parse(cmeTxt); } catch (e) { data = null; }
@@ -584,7 +620,8 @@ export const render = (state, dispatch) => {
         </div>
       </div>
 
-      <Chart data={data} liveF={liveF} mode={chartMode || 'id'} sdMode={sdMode || 'open'} hover={hover} dispatch={dispatch} />
+      <Chart data={data} liveF={liveF} mode={chartMode || 'id'} sdMode={sdMode || 'open'}
+        dMode={dMode || 'off'} hover={hover} dispatch={dispatch} />
 
       <div style={{
         borderTop: `0.5px solid ${macos.divider}`,

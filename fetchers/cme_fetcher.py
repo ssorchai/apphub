@@ -99,7 +99,10 @@ QS_BUDGET = 60          # งบแยกของ QuikStrike -- ห้ามก
 # สถานะที่ต้องรอดข้าม restart (macOS ล้าง /tmp ตอนบูต): cache ค่ารายวันของ QuikStrike
 # + สถานะตัวเบรก
 QS_STATE = os.path.expanduser("~/Library/Caches/cme-fetcher/qs_state.json")
-QS_CACHE_MAX_AGE = 4 * 3600   # Vol2Vol/Settlement ดึงใหม่เมื่อข้ามวัน CME หรือ cache เก่าเกินนี้
+QS_CACHE_MAX_AGE = 2 * 3600   # Vol2Vol/Settlement ดึงใหม่เมื่อข้ามวัน CME หรือ cache เก่าเกินนี้
+# smile ที่ cache ไว้ "เสีย" ถ้าเส้นที่ราคา settle ไม่ตรงกับ ATMVol ของก้อนเดียวกันเกินค่านี้
+# (18 ก.ย. 26 06:07: ATMVol 25.2 แต่เส้นทั้งเส้น 39-42 = ได้ payload คนละรอบมาปนกัน)
+QS_SMILE_TOL = 3.0
 QS_PAUSE_BLOCK = 12 * 3600    # สัญญาณโดนบล็อก (403/429/หน้า login/captcha)
 QS_PAUSE_OUTAGE = 2 * 3600    # หน้า error ของเขาเอง / ต่อไม่ได้ 2 รอบติด
 
@@ -359,6 +362,51 @@ def computed_iv_rows(legs, F, dte):
     return rows
 
 
+DELTA_TARGETS = (0.05, 0.15, 0.25, 0.35, 0.45)
+DELTA_MIN_DTE = 0.02          # ใกล้หมดอายุกว่านี้ delta พลิกเร็วจนเส้นไม่มีความหมาย
+DELTA_MIN_ROWS = 8            # smile ที่ขาดเกินนี้ (bid/ask หาย) ซ่อนเส้นดีกว่าวาดผิด
+
+
+def delta_levels(legs, F, dte, targets=DELTA_TARGETS):
+    """ราคาที่ delta ของออปชัน OTM เท่ากับเป้า -> [{"d", "side", "k"}] (เส้นแบบ 25ΔP/25ΔC
+    ของ CME) คิดเองด้วย Black-76: F สด + DTE จริง + IV รายสไตรค์จาก mid ของ bid/ask
+    (ใช้ smile จริงจึงสะท้อนความเบ้ ไม่ใช่ IV ตัวเดียวทั้งกราฟ)
+    หมายเหตุ: delta ขึ้นกับ v*sqrt(t) -- ค่าของ TradingView จึงตรงกับของเราแม้ IV ไม่ตรง"""
+    if not F or not dte or dte < DELTA_MIN_DTE:
+        return []
+    rows = computed_iv_rows(legs, F, dte)
+    if len(rows) < DELTA_MIN_ROWS:
+        return []
+    t = dte / 365.0
+
+    def delta_at(K, call):
+        v = iv_at(rows, K)
+        if not v or v <= 0:
+            return None
+        sd = v / 100.0 * math.sqrt(t)
+        d1 = (math.log(F / K) + 0.5 * sd * sd) / sd
+        return _ncdf(d1) if call else _ncdf(d1) - 1.0
+
+    out = []
+    for target in targets:
+        for call in (False, True):
+            # |delta| ลดลงเมื่อ strike ห่าง F ออกไป -> bisection บนระยะห่าง
+            lo, hi = (F * 1.0005, F * 2.0) if call else (F * 0.5, F * 0.9995)
+            f = lambda K: (abs(delta_at(K, call) or 0) - target)
+            if f(lo if call else hi) < 0 or f(hi if call else lo) > 0:
+                continue                     # เป้าอยู่นอกช่วงที่ smile ครอบคลุม
+            for _ in range(60):
+                mid = (lo + hi) / 2
+                near = f(mid) > 0            # ยังใกล้เงินเกินไป
+                if call:
+                    lo, hi = (mid, hi) if near else (lo, mid)
+                else:
+                    lo, hi = (lo, mid) if near else (mid, hi)
+            out.append({"d": target, "side": "C" if call else "P",
+                        "k": round((lo + hi) / 2, 1)})
+    return sorted(out, key=lambda r: r["k"])
+
+
 def iv_at(vs_rows, x):
     """interpolate IV smile ณ ราคา x (ใช้หา ATM IV)"""
     if not vs_rows:
@@ -556,6 +604,7 @@ def snapshot_barchart():
         "F": F, "dte": dte, "iv": round(iv, 2) if iv is not None else None,
         "iv_chg": None, "future_chg": None, "iv_src": iv_src,
         "id_rows": id_rows, "oi_rows": oi_rows, "vs_rows": vs_rows, "curve": curve,
+        "delta": delta_levels(legs, F, dte),
     }
 
 
@@ -998,6 +1047,7 @@ CHART_TMPL = r"""<!DOCTYPE html>
    <span class="sw" style="background:#4a80e8"></span>Call
    <span style="color:#c0392b;margin-left:10px">- - -</span> <span id="smlbl">Vol Settle</span></span>
   <button id="bId">Intraday</button><button id="bOi">OI</button>
+  <button id="bDelta" title="เส้น 5/15/25/35/45 delta (คิดจาก bid/ask ของ barchart)">&#916;</button>
  </span>
 </div>
 <div id="wrap"><svg id="c" width="960" height="600"></svg><div id="tip"></div></div>
@@ -1005,6 +1055,9 @@ CHART_TMPL = r"""<!DOCTYPE html>
 <script>
 const D = __DATA__;
 let mode = "id";
+// เส้น delta: ปิดไว้ก่อน กดเปิดเอง (จำค่าที่เลือกไว้ข้ามการ refresh ทุก 5 นาที)
+let dOn = false;
+try { dOn = localStorage.getItem("cme.delta") === "1"; } catch (e) {}
 const NS = "http://www.w3.org/2000/svg";
 function el(tag, attrs, parent, tip){
   const e = document.createElementNS(NS, tag);
@@ -1060,9 +1113,11 @@ function render(){
   document.getElementById("smlbl").textContent = D.iv_settle != null ? "Vol Settle" : "IV live (bid/ask)";
   document.getElementById("bId").className = mode === "id" ? "on" : "";
   document.getElementById("bOi").className = mode === "oi" ? "on" : "";
+  document.getElementById("bDelta").className = dOn ? "on" : "";
   document.getElementById("upd").textContent = "updated " + D.updated + " · " + D.series +
     (D.qs_sym ? " (" + D.qs_sym + ")" : "") + " on " + D.und + " · DTE " + D.dte +
-    " · P/C barchart delayed 10-15m · smile " + (D.smile_src || "-") + " · SD IV " + D.iv_src +
+    " · P/C barchart delayed 10-15m · smile " + (D.smile_src || "-") +
+    (D.smile_ts ? " " + D.smile_ts : "") + " · SD IV " + D.iv_src +
     " · ขีดเส้นใต้ = ตัวที่ใช้คิด SD";
   if (!rows.length) return;
   // โดเมนแกน x: ±3.5σ รอบ F (ไม่งั้นปีก OI ลากกราฟกว้างจนแท่งกลางจมหาย)
@@ -1096,6 +1151,18 @@ function render(){
     const tip = s + "  Put " + fmt(p) + "  Call " + fmt(c) + "  Total " + fmt(p + c);
     if (p) el("rect", {x: x(s) - bw - 0.5, y: y(p), width: bw, height: y(0) - y(p), fill: "#f5a623"}, svg, tip);
     if (c) el("rect", {x: x(s) + 0.5, y: y(c), width: bw, height: y(0) - y(c), fill: "#4a80e8"}, svg, tip);
+  }
+  // เส้น delta แบบ CME: 5/15/25/35/45Δ ทั้งสองฝั่ง ป้ายตั้งที่หัวเส้น (วาดทับแท่งแบบจางๆ)
+  // เส้นคิดไว้ตอน fetcher ดึงข้อมูล (F ตอนนั้น) -- เลื่อนทั้งชุดตาม F สด ให้ยังเป็น delta เดิม
+  const dShift = (liveF() != null && D.F) ? liveF() - D.F : 0;
+  if (dOn) for (const d0 of (D.delta || [])){
+    const d = {d: d0.d, side: d0.side, k: d0.k + dShift};
+    if (d.k < lo || d.k > hi) continue;
+    const px = x(d.k), lbl = Math.round(d.d * 100) + "Δ" + d.side;
+    el("line", {x1: px, x2: px, y1: T, y2: H - B, stroke: "#8a8a8a", "stroke-width": 1,
+                "stroke-dasharray": "5 4", opacity: 0.55}, svg, lbl + " = " + d.k.toFixed(1));
+    el("text", {x: px - 4, y: T + 6, "font-size": 11, fill: "#9a9a9a", "text-anchor": "end",
+                transform: "rotate(-90 " + (px - 4) + " " + (T + 6) + ")"}, svg).textContent = lbl;
   }
   // smile IV แกนขวา (เส้นประแดง) -- ค่า computed มี noise จาก bid/ask spread
   // เลย smooth ตอน render: median-3 กัน outlier + moving average ถ่วงน้ำหนัก
@@ -1139,6 +1206,16 @@ function interp(rows, k){
       return v0 + (v1 - v0) * (k - k0) / (k1 - k0);
     }
   return null;
+}
+// delta ณ สไตรค์ใดๆ: interpolate จากเส้น delta ที่ fetcher คำนวณมา (แปลงฝั่ง put เป็น
+// delta ของ call ก่อน: put -0.25 = call 0.75) แล้วคืนค่าเป็น |delta| ของฝั่ง OTM
+function deltaAt(k){
+  const sh = (liveF() != null && D.F) ? liveF() - D.F : 0;
+  const lv = (D.delta || []).map(d => [d.k + sh, d.side === "P" ? 1 - d.d : d.d]);
+  if (lv.length < 2) return null;
+  const cd = interp(lv, k);
+  if (cd == null) return null;
+  return k >= (liveF() ?? D.F) ? cd : 1 - cd;
 }
 function cursor(svg, g){
   const tip = document.getElementById("tip");
@@ -1186,11 +1263,13 @@ function cursor(svg, g){
     const rows = mode === "id"
       ? row("Intraday", idm.get(k), true) + row("OI", oim.get(k), false)
       : row("OI", oim.get(k), true) + row("Intraday", idm.get(k), false);
+    const dl = deltaAt(k);
     tip.innerHTML = '<div class="k">' + fmt(k) +
       (dist != null ? ' <span class="d">' + (dist >= 0 ? "+" : "") + dist.toFixed(2) + 'σ จาก F</span>' : '') +
       '</div><table>' + rows + '</table>' +
       (vraw != null ? '<div class="v">' + (D.iv_settle != null ? "Vol Settle " : "IV ") +
-                      vraw.toFixed(2) + '%</div>' : '');
+                      vraw.toFixed(2) + '%</div>' : '') +
+      (dl != null ? '<div class="d">&#916; ' + dl.toFixed(2) + (k >= fNow ? 'C' : 'P') + '</div>' : '');
     tip.style.display = "block";
     const sx = bb.width / g.W, sy = bb.height / g.H;
     let left = X * sx + 14;
@@ -1205,6 +1284,11 @@ function cursor(svg, g){
 }
 document.getElementById("bId").onclick = () => { mode = "id"; render(); };
 document.getElementById("bOi").onclick = () => { mode = "oi"; render(); };
+document.getElementById("bDelta").onclick = () => {
+  dOn = !dOn;
+  try { localStorage.setItem("cme.delta", dOn ? "1" : "0"); } catch (e) {}
+  render();
+};
 // ---- ราคา Future สด: gold_fetcher.py เขียน /tmp/gold_live.js ทุก ~5 วินาที ----
 // หน้านี้เปิดแบบ file:// จึง fetch JSON ไม่ได้ ต้องโหลดซ้ำผ่าน <script src> แทน
 // ใช้เฉพาะเมื่อสัญญาตรงกับ underlying ของ series (GCV6 = GCV26) และไฟล์ไม่เก่าเกิน 3 นาที
@@ -1275,7 +1359,8 @@ def chart_html(snap, now, ev=None):
         "dte": snap["dte"], "iv": snap["iv"], "iv_src": snap.get("iv_src"),
         "iv_event": snap.get("iv_event"), "iv_settle": snap.get("iv_settle"),
         "iv_settle_chg": snap.get("iv_settle_chg"), "qs_sym": snap.get("qs_sym"),
-        "smile_src": snap.get("smile_src"),
+        "smile_src": snap.get("smile_src"), "smile_ts": snap.get("smile_ts"),
+        "delta": snap.get("delta") or [],
         "updated": "{:%Y-%m-%d %H:%M}".format(now),
         "id": [list(r) for r in snap["id_rows"]],
         "oi": [list(r) for r in snap["oi_rows"]],
@@ -1314,6 +1399,13 @@ def main():
     # cache ใช้ได้ถ้ายังเป็นวัน CME เดียวกันและอายุไม่เกิน 4 ชม. -- 11 ก.ย. 12:05 ไทย
     # Vol2Vol ยังโชว์ OI/EOD ของวันก่อนอยู่ (ไม่ได้เปลี่ยนตรง 00:00 CT) จึงต้องมีเพดานอายุด้วย
     fresh = lambda e: bool(e) and e.get("ct_day") == day and now_ts - e.get("ts", 0) < QS_CACHE_MAX_AGE
+
+    def smile_ok(e):
+        """smile กับ ATMVol ต้องมาจาก settle รอบเดียวกัน: จุดต่ำสุดของเส้น (รูปตัว U)
+        ต้องอยู่ใกล้ ATMVol ถ้าห่างมาก = payload คนละรอบ ใช้ไม่ได้"""
+        if not e or not e.get("vs") or e.get("atm") is None:
+            return True                      # ไม่มีของให้ตรวจ -> ปล่อยผ่าน
+        return abs(min(v for _, v in e["vs"]) - e["atm"]) <= QS_SMILE_TOL
     ev0 = None
     qs_sym = cache.get("qs_sym")
 
@@ -1337,13 +1429,20 @@ def main():
             except Exception as e:
                 qlog("eventvol พัง (ข้าม): {}: {}".format(type(e).__name__, str(e)[:80]))
 
-            if not fresh(cache.get("v2v")):
+            stale_smile = not smile_ok(cache.get("v2v")) and now_ts >= cache.get("v2v_next_try", 0)
+            if stale_smile:
+                qlog("vol2vol cache ไม่สอดคล้อง (ATMVol {} vs เส้นต่ำสุด {}) -- ดึงใหม่".format(
+                    cache["v2v"].get("atm"), min(v for _, v in cache["v2v"]["vs"])))
+            if not fresh(cache.get("v2v")) or stale_smile:
                 try:
                     vs_v2v, atm, _, sym = fetch_v2v_smile(snap["expiry"], qs)
                     cache["v2v"] = {"ct_day": day, "ts": now_ts, "vs": vs_v2v, "atm": atm}
                     qs_sym = qs_sym or sym
-                    qlog("vol2vol {} ok {} strikes ATMVol {} (cache 4 ชม.)".format(
-                        sym, len(vs_v2v), atm))
+                    if not smile_ok(cache["v2v"]):
+                        # CME เสิร์ฟของไม่สอดคล้องเอง -- อย่าวนดึงทุกรอบ รอชั่วโมงหน้า
+                        cache["v2v_next_try"] = now_ts + 3600
+                    qlog("vol2vol {} ok {} strikes ATMVol {} (cache {} ชม.)".format(
+                        sym, len(vs_v2v), atm, QS_CACHE_MAX_AGE // 3600))
                 except QS_ESCALATE:
                     raise
                 except Exception as e:
@@ -1355,7 +1454,7 @@ def main():
                     cache["settle"] = {"ct_day": day, "ts": now_ts, "vs": vs_settle,
                                        "chg": sorted(chg_map.items())}
                     qs_sym = qs_sym or sym
-                    qlog("settle sheet {} ok (cache 4 ชม.)".format(sym))
+                    qlog("settle sheet {} ok (cache {} ชม.)".format(sym, QS_CACHE_MAX_AGE // 3600))
                 except SettleEmbargo as e:
                     # ปิดให้ดูจนถึง 00:00 CT -- ไม่ต้องลองทุกชั่วโมง รอรอบหลังเที่ยงคืน CT ทีเดียว
                     cache["settle_next_try"] = next_ct_midnight(now_utc).timestamp()
@@ -1408,6 +1507,8 @@ def main():
     iv_settle = round(iv_settle, 2) if iv_settle is not None else None
     iv_settle_chg = round(iv_settle_chg, 2) if iv_settle_chg is not None else None
     snap["smile_src"] = smile_src or "live"
+    smile_at = (cache.get("v2v") if smile_src == "vol2vol" else cache.get("settle")) or {}
+    snap["smile_ts"] = "{:%H:%M}".format(datetime.fromtimestamp(smile_at["ts"])) if smile_at.get("ts") else None
 
     # IV หลักที่ใช้คิด SD = ช่อง "vol" ของจุด 0DTE (ตัวเลขที่หน้า EVC โชว์)
     # ⚠️ ห้ามใช้ "fwd": forward vol ที่ติดกับจุดไหนคือช่วง "หลัง" expiry นั้นไปถึง expiry
@@ -1504,6 +1605,9 @@ def main():
         "iv_settle_chg": snap.get("iv_settle_chg"),
         "qs_sym": qs_sym,                # รหัส CME ของ series เดียวกัน เช่น G2RU6
         "smile_src": snap.get("smile_src"),  # vol2vol / settle sheet / live
+        "smile_ts": snap.get("smile_ts"),    # เวลาที่ดึง smile ของ CME มา (cache ได้ถึง 2 ชม.)
+        # เส้น delta แบบ CME (5/15/25/35/45Δ) คิดเองจาก bid/ask -- ไม่ได้ยิงใครเพิ่ม
+        "delta": snap.get("delta") or [],
         # ตัวเบรก QuikStrike: paused_until = epoch ที่จะกลับมายิงอีก (None = ปกติ)
         "qs": {"paused_until": st.get("paused_until") if qs_paused else None,
                "reason": st.get("pause_reason") if qs_paused else None},

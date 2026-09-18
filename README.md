@@ -84,12 +84,17 @@ crontab ปัจจุบัน:
     for viewing until after 12:00am CT" → ได้ Vol Chg ตั้งแต่ **12:00 ไทย** (หน้าหนาว 13:00)
   - ลำดับ smile: Vol2Vol → Settlement Sheet → smile สดจาก bid/ask (JSON `smile_src`,
     กราฟเปลี่ยนป้ายเส้นเป็น "IV live" เมื่อไม่มี settle) / event vol กับ Vol2Vol ไม่โดนปิด
+  - **ตรวจ smile ก่อนใช้ cache** (18 ก.ย. 26): QuikStrike เสิร์ฟ payload คนละรอบปนกันได้ —
+    06:07 ไทยได้ ATMVol 25.2 แต่เส้นทั้งเส้น 39–42 (settle วัน FOMC ค้าง) กราฟจึงไม่ตรง CME
+    → ถ้า |จุดต่ำสุดของเส้น − ATMVol| > `QS_SMILE_TOL` (3 จุด) ถือว่าเสีย ดึงใหม่ทันที
+    (ถ้าของใหม่ยังไม่สอดคล้องอีก รอชั่วโมงหน้าค่อยลอง กันวนดึงทุกรอบ) / JSON มี `smile_ts`
+    และหน้ากราฟโชว์ `smile vol2vol 09:58` ให้เห็นว่าค่าที่วาดดึงมาเมื่อไหร่
 - **ลดความเสี่ยงโดน QuikStrike block** (11 ก.ย. 26):
   - **session เดียวต่อรอบ** (`QSClient`): หน้าแรกของ session ใหม่ QuikStrike redirect 3 ทอด
     (1 หน้า = 4 request) หน้าถัดไปแนบ `insid/qsid` เดิมไปเหมือนกดเมนูใน browser = 1 request
     / ตัวเก่าเปิด session ใหม่ทุกหน้า ~15 request/รอบ (~360/วัน, 72 session/วัน)
   - **cache ค่าที่นิ่งทั้งวัน**: Vol2Vol (VolSettle + ATMVol) และ Settlement Sheet (Vol Chg)
-    ดึงใหม่เมื่อข้ามวัน CME (00:00 CT) **หรือ** cache เก่าเกิน 4 ชม. — ต้องมีเพดานอายุเพราะ
+    ดึงใหม่เมื่อข้ามวัน CME (00:00 CT) **หรือ** cache เก่าเกิน 2 ชม. — ต้องมีเพดานอายุเพราะ
     12:05 ไทยวันที่ 11 Vol2Vol ยังโชว์ OI/EOD ของวันก่อน (ไม่ได้เปลี่ยนตรงเที่ยงคืน CT) /
     Settlement Sheet ที่ติดช่วงปิดจะนัดลองใหม่หลังเที่ยงคืน CT ทีเดียว ไม่ลองทุกชั่วโมง /
     Event Vol ยังดึงทุกรอบเพราะ re-mark ระหว่างวัน → รอบปกติ 4 request รอบเติม cache 9
@@ -134,8 +139,9 @@ crontab ปัจจุบัน:
   รายสไตรค์ สลับ Intraday/OI ได้, smile IV เส้นประแดงแกนขวา — smooth ตอน render
   ด้วย median-3 + weighted MA + Catmull-Rom โดยข้อมูลดิบใน clip ไม่ถูกแตะ,
   เส้น Future, SD band ±1-3σ วงในเข้มสุด, **cursor แบบ CME**: เส้นตั้งดูดเข้าสไตรค์ใกล้สุด
-  + กล่องโชว์ Put/Call/Σ ทั้ง Intraday และ OI ของสไตรค์นั้น, Vol Settle ที่สไตรค์ และห่าง F
-  กี่ σ — ใช้ pointer events ลากนิ้วบนมือถือได้) self-contained เปิด
+  + กล่องโชว์ Put/Call/Σ ทั้ง Intraday และ OI ของสไตรค์นั้น, Vol Settle ที่สไตรค์, delta
+  และห่าง F กี่ σ — ใช้ pointer events ลากนิ้วบนมือถือได้, **ปุ่ม Δ** เปิดเส้น 5/15/25/35/45Δ
+  แบบ CME ปิดไว้เป็นค่าเริ่มต้น จำค่าใน localStorage `cme.delta`) self-contained เปิด
   `open /tmp/cme_chart.html` ค้างไว้ได้ หน้า reload ตัวเองทุก 5 นาที
   / **ราคา Future สด**: gold_fetcher.py เขียน `/tmp/gold_live.js` (`window.GOLD_LIVE`)
   ทุกรอบที่เขียน gold_data.json (~5 วินาที) หน้ากราฟโหลดซ้ำผ่าน `<script src>` ทุก 5 วินาที
@@ -152,6 +158,17 @@ crontab ปัจจุบัน:
   — ล้มเหลวแล้ว**ไม่เขียนทับไฟล์เดิม** widget ขึ้น STALE เองหลัง 2 ชม. และกด ↻ เองได้
 - ⚠️ **www.cmegroup.com (WAF) แบน IP เครื่องนี้จากการ scrape แล้ว — ห้ามยิงตรง**
   (quikstrike.net เป็น infra คนละเจ้า/Bantix ใช้ Referer cmegroup.com ได้ตามเดิม)
+- **เส้น delta (18 ก.ย. 26)** — `delta_levels()` ใน fetcher: ราคาที่ |delta| = 5/15/25/35/45%
+  ทั้งฝั่ง put/call **คิดเองด้วย Black-76** จาก F สด + DTE จริง + IV รายสไตรค์จาก mid ของ
+  bid/ask (`computed_iv_rows` ตัวเดียวกับ smile สำรอง → สะท้อนความเบ้จริง) **ไม่ยิงใครเพิ่ม**
+  / bisection บนระยะห่างจาก F, ลง JSON คีย์ `delta` = `[{d, side, k}]`
+  / หน้าเว็บ+widget เลื่อนเส้นทั้งชุดตาม F สด (`k + (liveF − F)`) เพราะ fetcher คิดไว้ตอนดึง
+  / ซ่อนเส้นเมื่อ DTE < 0.02 หรือ smile เหลือน้อยกว่า 8 จุด (bid/ask หาย)
+  / **delta ของ TradingView ใช้ยืนยันได้** (`scanner.tradingview.com/options/scan2`,
+  root = รหัส CME เช่น `OG3` + `underlying_symbol: COMEX:GCV2026`): delta/gamma ขึ้นกับ
+  v·√t จึงตรงกับของเราแม้ **ค่า `iv` ของ TradingView ใช้ไม่ได้** — มันนับหมดอายุที่ ~16:00 CT
+  (ปิด session) ไม่ใช่ 12:30 CT ทำให้ IV ต่ำกว่าจริง ~17% ที่ DTE 0.3 (ยิ่งใกล้ยิ่งเพี้ยน)
+  ถ้าจะใช้ต้อง back out ใหม่จาก `theoPrice` ด้วยเวลาที่ถูก
 - **cme-putcall.jsx**: สรุป P/C + ratio bar + Top Active + ช่อง IV โชว์ **event IV อย่างเดียว**
   (ขึ้น -- เมื่อดึงไม่ได้ เช่นช่วงตัวเบรกพัก; settle vol/Vol Chg ยังอยู่ใน clip คีย์ IVS/IVSCHG)
   + **กราฟ Put/Call รายสไตรค์ต่อด้านล่าง** (การ์ด 740×~713 เกือบจัตุรัส) ย่อจากหน้าเว็บ:
@@ -159,7 +176,9 @@ crontab ปัจจุบัน:
   ปุ่มสลับ Intraday/OI (กันคลิกทะลุไป copy), hover ดูดเข้าสไตรค์โชว์ P/C ทั้งสองชุด + vol + σ
   / **ปุ่มสลับแถบ SD**: `Open 0.6` (ค่าเริ่มต้น) = จุดกลางราคาเปิด + DTE 0.6 ใช้ค่าเดียวกับกล่อง
   SD Range / `CME` = จุดกลาง F ตอนดึงข้อมูล + DTE ที่เหลือจริง (แบบ Expected Range ของ CME)
-  มุมซ้ายบนบอกว่ากรอบคิดจากอะไร ระยะ σ ใน hover ใช้กรอบเดียวกัน / ค่าที่เลือก (ID/OI, SD)
+  มุมซ้ายบนบอกว่ากรอบคิดจากอะไร ระยะ σ ใน hover ใช้กรอบเดียวกัน
+  / **ปุ่ม Δ**: `ปิด` (ค่าเริ่มต้น) / `25Δ` (2 เส้น) / `ครบ` (5-45Δ 10 เส้น) + hover โชว์ delta
+  ของสไตรค์นั้น / ค่าที่เลือก (ID/OI, SD, Δ)
   จำใน localStorage คีย์ `cme-putcall.prefs` ไม่รีเซ็ตเมื่อ Übersicht โหลด widget ใหม่
   / ข้อมูลรายสไตรค์มาจากคีย์ `chart` ใน cme_putcall.json (fetcher เขียน ช่วง ±4σ) และราคาสด
   อ่าน `/tmp/gold_data.json` ตรงๆ (widget ไม่ติดข้อจำกัด file://) → command ต่อสองไฟล์ด้วยตัวคั่น

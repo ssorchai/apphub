@@ -23,7 +23,7 @@ const savePref = (k, v) => {
   } catch (e) { /* localStorage ใช้ไม่ได้ก็แค่ไม่จำ */ }
 };
 // sdMode: 'open' = anchor ราคาเปิด + DTE 0.6 (ตรงกับกล่อง SD Range) / 'cme' = รอบ F + DTE ที่เหลือจริง
-// dMode: เส้น delta แบบ CME -- 'off' (ค่าเริ่มต้น) / '25' = 25Δ สองเส้น / 'all' = 5-45Δ สิบเส้น
+// dMode: เส้น delta แบบ CME -- 'off' (ค่าเริ่มต้น) / 'all' = 5-45Δ ครบสิบเส้น
 export const initialState = {
   output: null, refreshing: false, hover: null,
   chartMode: pref('chartMode', 'id'), sdMode: pref('sdMode', 'open'), dMode: pref('dMode', 'off'),
@@ -311,8 +311,7 @@ const Chart = ({ data, liveF, mode, sdMode, dMode, hover, dispatch }) => {
   // เส้น delta (fetcher คำนวณจาก bid/ask ของ barchart ให้แล้ว) -- 25Δ อย่างเดียวหรือครบชุด
   // เส้นคิดไว้ตอน fetcher ดึงข้อมูล (F ตอนนั้น) -- เลื่อนทั้งชุดตาม F สด ให้ยังเป็น delta เดิม
   const dAll = (data.delta || []).map((d) => ({ ...d, k: d.k + (fNow && F ? fNow - F : 0) }));
-  const dLines = dMode === 'off' ? []
-    : (dMode === '25' ? dAll.filter((d) => d.d === 0.25) : dAll).filter((d) => d.k > lo && d.k < hi);
+  const dLines = dMode === 'off' ? [] : dAll.filter((d) => d.k > lo && d.k < hi);
   // delta ณ สไตรค์ใดๆ: แปลงฝั่ง put เป็น delta ของ call (put -0.25 = call 0.75) แล้ว interpolate
   const dCurve = dAll.map((d) => [d.k, d.side === 'P' ? 1 - d.d : d.d]);
   const deltaAt = (k) => {
@@ -380,8 +379,8 @@ const Chart = ({ data, liveF, mode, sdMode, dMode, hover, dispatch }) => {
         <ModePill label="Open 0.6" on={!!useOpen} onPick={() => { savePref('sdMode', 'open'); dispatch({ type: 'SD_MODE', mode: 'open' }); }} />
         <ModePill label="CME" on={!useOpen} onPick={() => { savePref('sdMode', 'cme'); dispatch({ type: 'SD_MODE', mode: 'cme' }); }} />
         <span style={{ ...secTitle, marginLeft: '10px' }}>Δ</span>
-        {[['off', 'ปิด'], ['25', '25Δ'], ['all', 'ครบ']].map(([m, lbl]) => (
-          <ModePill key={m} label={lbl} on={(dMode || 'off') === m}
+        {[['off', 'ปิด'], ['all', 'เปิด']].map(([m, lbl]) => (
+          <ModePill key={m} label={lbl} on={(dMode === 'off' ? 'off' : 'all') === m}
             onPick={() => { savePref('dMode', m); dispatch({ type: 'DELTA_MODE', mode: m }); }} />
         ))}
         <span style={{ marginLeft: 'auto', fontSize: '11px', color: macos.tertiary }}>

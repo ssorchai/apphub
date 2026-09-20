@@ -196,5 +196,21 @@ tail -f ~/Library/Logs/apphub/goldhub.log
 ถ้า `/tmp/ct.new` หายไปแล้ว (reboot) ให้แก้ด้วย `crontab -e` เอง: ใส่ `#` หน้าบรรทัด
 `7 * * * * ... cme_fetcher.py`
 
+### ขั้นสองของเฟส 1 — ย้าย gold_fetcher (นัดไว้ 21 ก.ย. 2026)
+
+ปล่อยให้ cme เดินหนึ่งวันก่อน เพื่อแยกให้ออกว่าถ้ามีปัญหาเกิดจากตัวไหน
+**เช็คก่อนย้าย gold:**
+- รอบ :07 มาตรงทุกชั่วโมง (ดู `~/Library/Logs/apphub/goldhub.log`)
+- เครื่อง sleep แล้วตื่น งานกลับมาเดินเอง
+- reboot/logout-login แล้ว `RunAtLoad` ทำงาน
+- `kill <pid>` แล้ว KeepAlive ปลุกใหม่ภายใน 30 วินาที
+
+**ตอนย้าย gold ต้องระวัง**
+- loop ของ gold_fetcher ออกแบบมาให้จบที่ 290 วินาทีแล้วให้ cron ปลุกใหม่ — ใน daemon
+  ต้องเป็น loop ต่อเนื่อง (ผลพลอยได้: `gold_live.js` จะไม่ขาดช่วงทุก 5 นาทีอีก)
+- `curl_cffi` + path ของ brew curl ใต้ environment ของ launchd ไม่เหมือน cron ต้องทดสอบ
+- ย้าย anchor รายวันที่ gold_fetcher ยิง QuikStrike เอง มาใช้ `underlying_for()` ของ
+  cme_fetcher แทน = ตัดการพึ่ง CME ออกอีกจุด และเข้ามาอยู่ใต้ตัวเบรกเดียวกัน
+
 **ตรวจว่าเฟส 1 ผ่าน:** หลังติดตั้งแล้วรอถึงนาทีที่ :07 ของชั่วโมงถัดไป แล้วดู log ว่ามีบรรทัด
 `ok [barchart]` และ `/tmp/cme_putcall.json` มี timestamp ใหม่ / widget บน desktop ยังขึ้นปกติ

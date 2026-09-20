@@ -9,7 +9,7 @@
 
 ---
 
-## เฟส 0 — จับ baseline ไว้เทียบ (ครึ่งชั่วโมง)
+## เฟส 0 — จับ baseline ไว้เทียบ ✅ เสร็จ 20 ก.ย. 2026
 
 ถ้าไม่มีตัวเทียบ จะไม่รู้ว่าเฟสถัดไปทำให้ค่าเพี้ยนไหม
 
@@ -18,12 +18,12 @@
 - จดค่าที่ต้องตรงกันหลังย้าย: `series`, `F`, `dte`, `iv_event`, ยอด intraday/OI,
   ความยาว clip, จำนวน strike ใน chart
 
-**เสร็จเมื่อ** มีไฟล์ baseline ครบและจดค่าไว้แล้ว
-**ถอยกลับ** ไม่มีอะไรให้ถอย ยังไม่แตะระบบ
+**ผลจริง** เก็บไว้ที่ `_archive/baseline-20260920/` (output ของรอบ cron 10:07 + crontab เดิม
++ `BASELINE.json` ที่สรุปค่าสำคัญ)
 
 ---
 
-## เฟส 1 — daemon ตัวเดียวแทน cron (ยังเขียน /tmp เหมือนเดิม)
+## เฟส 1 — daemon ตัวเดียวแทน cron ⏳ โค้ดเสร็จ รอติดตั้ง
 
 เป้าหมายคือ **เปลี่ยนตัวขับเคลื่อน ไม่เปลี่ยนพฤติกรรม** output ต้องเหมือนเดิมทุกไบต์
 (ยกเว้น timestamp) ยังไม่มี API ยังไม่เพิ่มฟีเจอร์ ยังไม่เปลี่ยนคาบ
@@ -51,7 +51,15 @@
 
 **เสร็จเมื่อ** ค่าตรง baseline, launchd ปลุกเองได้, cron ฝั่ง cme ปิดถาวร
 (gold_fetcher ยังรันผ่าน cron ไปก่อน ค่อยย้ายเข้ามาเมื่อผ่านข้อ 2)
-**ถอยกลับ** `launchctl unload` แล้ว uncomment cron สองบรรทัด — กลับสภาพเดิมใน 1 นาที
+**ถอยกลับ** `bash goldhub/deploy/install.sh uninstall` แล้ว uncomment cron — 1 นาที
+
+**ผลทดสอบ 20 ก.ย. 11:00** รัน daemon แบบ foreground หนึ่งรอบ เทียบกับ baseline:
+ตรงกันทุกค่า (series IY3U26, F 4390.7, iv_event 14.93, intraday 1190/1371, OI 2625/3246,
+chart rows 67/69/52, clip 2020 ตัวอักษร) ต่างแค่ DTE กับ timestamp ตามเวลาที่เดินไป
+รอบใช้เวลา 8.3 วินาที / health เขียนลง store ถูกต้อง / นัดรอบถัดไป 11:07 ตรงกับนาทีของ cron เดิม
+
+**เหลือสองคำสั่งที่ต้องรันเอง** (sandbox ของ session แก้ crontab และสั่ง launchctl ไม่ได้)
+ดูท้ายไฟล์นี้
 
 ---
 
@@ -167,3 +175,26 @@
    ไม่งั้นใครยิงถี่ๆ = เราไปถล่ม CME/Barchart แทน (อันตรายกว่าข้อมูลรั่ว)
 2. **QuikStrike ต้องอยู่ใต้ตัวเบรกและ cache เดิมเสมอ** ไม่ว่าจะเพิ่มฟีเจอร์อะไร
 3. **ห้ามยิง www.cmegroup.com** (WAF แบน IP เครื่องนี้ไว้แล้ว ใช้ได้แค่เป็น Referer)
+
+
+---
+
+## คำสั่งที่ต้องรันเองเพื่อจบเฟส 1
+
+sandbox ของ session แก้ crontab ไม่ได้ (คำสั่งค้างรอ permission) และไม่ควรสั่ง launchctl
+แทนเจ้าของเครื่อง — สองคำสั่งนี้รันเองครั้งเดียว
+
+```bash
+# 1) ปิดบรรทัด cme ใน crontab (ไฟล์เตรียมไว้แล้ว มี comment บอกวิธีถอยกลับ)
+crontab /tmp/ct.new && crontab -l
+
+# 2) ติดตั้ง LaunchAgent แล้วดูว่า start จริง
+bash /Users/sorachai/src/claude_code/apphub/goldhub/deploy/install.sh
+tail -f ~/Library/Logs/apphub/goldhub.log
+```
+
+ถ้า `/tmp/ct.new` หายไปแล้ว (reboot) ให้แก้ด้วย `crontab -e` เอง: ใส่ `#` หน้าบรรทัด
+`7 * * * * ... cme_fetcher.py`
+
+**ตรวจว่าเฟส 1 ผ่าน:** หลังติดตั้งแล้วรอถึงนาทีที่ :07 ของชั่วโมงถัดไป แล้วดู log ว่ามีบรรทัด
+`ok [barchart]` และ `/tmp/cme_putcall.json` มี timestamp ใหม่ / widget บน desktop ยังขึ้นปกติ

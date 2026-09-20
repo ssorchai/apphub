@@ -18,7 +18,8 @@ sys.path.insert(0, HERE)                                   # cme_fetcher.py อ�
 sys.path.insert(0, os.path.dirname(os.path.dirname(HERE)))  # apphub/ -> common.hub
 
 import cme_fetcher  # noqa: E402
-from common.hub import Health, Job, Scheduler, Store, err, log  # noqa: E402
+from common.hub import (Health, Job, Scheduler, Store, err, holder_pid,  # noqa: E402
+                        log, single_instance)
 
 SERVICE = "goldhub"
 CME_INTERVAL = 3600
@@ -64,6 +65,12 @@ def job_housekeeping():
 
 
 def main():
+    # กันรันซ้อน: ถ้ามีตัวอื่นถืออยู่ให้ออกเงียบๆ (launchd จะไม่ restart รัวเพราะ exit 0)
+    lockfile = store.path("state", "goldhub.lock")
+    lock = single_instance(lockfile)
+    if lock is None:
+        err("มี goldhub ตัวอื่นรันอยู่แล้ว (pid {}) — ออก", holder_pid(lockfile))
+        sys.exit(0)
     log("goldhub start (pid {}) data={}", os.getpid(), store.root)
     Scheduler(health).add(
         Job("cme", job_cme, CME_INTERVAL, timeout=CME_TIMEOUT, at_minute=CME_AT_MINUTE),

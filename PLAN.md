@@ -212,5 +212,21 @@ tail -f ~/Library/Logs/apphub/goldhub.log
 - ย้าย anchor รายวันที่ gold_fetcher ยิง QuikStrike เอง มาใช้ `underlying_for()` ของ
   cme_fetcher แทน = ตัดการพึ่ง CME ออกอีกจุด และเข้ามาอยู่ใต้ตัวเบรกเดียวกัน
 
+### บันทึกเหตุการณ์ 20 ก.ย. 17:15 — รันซ้อนสามตัว
+
+ตรวจงานรอบ 17:15 แล้วพบว่า health บอก `runs 4` ทั้งที่ log มีแค่ 2 รอบ และ `started_at`
+เป็นเวลา 11:00 ทั้งที่ process ของ launchd เริ่ม 16:35 — ไล่ดูพบว่า **process ทดสอบ
+ที่รันจาก shell ตอน 10:59 กับ 11:00 ยังไม่ตาย** (คำสั่ง `pkill -f "apphub/goldhub/service/app.py"`
+ไม่โดน เพราะรันด้วย `cd service && python3 app.py` argv จึงเป็น `app.py` เฉยๆ)
+ตอน 17:07 จึงมีสาม process ยิง QuikStrike/Barchart พร้อมกัน (เห็นชัดในไฟล์ history
+ที่มีสองบรรทัด ts ห่างกัน 0.08 วินาที)
+
+**ผลกระทบ** ไม่มีข้อมูลเสียหาย (ทุกตัวเขียนค่าเดียวกัน) ตัวเบรก QuikStrike ไม่ทำงาน
+(`net_fail 0`, ไม่มี pause ใหม่) แต่เป็นความเสี่ยงโดนบล็อกที่เราพยายามเลี่ยงที่สุด
+
+**แก้แล้ว** ฆ่า process ค้างทั้งสอง + เพิ่ม `common/hub/lock.py` (flock) ให้หนึ่งบริการ
+มีได้ process เดียว ตัวที่สองจะ log ว่าชนกับ pid ไหนแล้วออกด้วย exit 0 (ไม่ให้ launchd
+วน restart) ทดสอบแล้ว: สั่ง `python3 app.py` ซ้ำได้ข้อความ "มี goldhub ตัวอื่นรันอยู่แล้ว (pid 18270) — ออก"
+
 **ตรวจว่าเฟส 1 ผ่าน:** หลังติดตั้งแล้วรอถึงนาทีที่ :07 ของชั่วโมงถัดไป แล้วดู log ว่ามีบรรทัด
 `ok [barchart]` และ `/tmp/cme_putcall.json` มี timestamp ใหม่ / widget บน desktop ยังขึ้นปกติ

@@ -27,10 +27,23 @@ Pine ข้าม key ที่ไม่รู้จัก → เพิ่ม k
 ของเดิมอยู่ที่ `claude_code/tdw_indi/oi_block.pine` (git 14 คอมมิต) — ยังไม่ได้ลบ
 ถ้าจะเลิกใช้ที่เดิม ค่อยใส่ README ชี้มาที่นี่
 
-## ที่มาของโค้ดเดิม
+## โครงโฟลเดอร์
 
-- `my-cronjob/cme_fetcher.py` → service/ (Barchart, QuikStrike, clip, กราฟ)
-- `my-cronjob/gold_fetcher.py` → service/ (ราคาสด, curve)
-- `cme_scraping/cme_ticker.py` → service/ (ticker — ต้องเขียนส่วนดึงข้อมูลใหม่เป็น Barchart)
-- `mac_widget/widgets/cme-putcall.jsx` → widgets/
-- `cme_scraping/cme-ticker.jsx` → widgets/
+```
+goldhub/
+├── service/     cme_fetcher.py (Barchart+QuikStrike+clip+กราฟ), gold_fetcher.py (ราคาสด)
+│                cme_ticker.py.old = ต้นฉบับ ก.ค. 2026 ยังรันไม่ได้ ใช้เป็นต้นแบบ logic
+├── widgets/     cme-putcall.jsx (การ์ดหลัก), cme-ticker.jsx (ticker — ยังไม่ได้ต่อของใหม่)
+├── indicator/   oi_block.pine — ฝั่ง TradingView ที่กิน /api/clip
+├── mobile/      termux/ — สคริปต์บน Android (จะเปลี่ยนมาดึงผ่าน API แทนการ scrape เอง)
+├── docs/        pipeline-notes.md (บันทึกกลไกทั้งหมด), INTRADAY-TICKER-EXPLAINED.md
+└── deploy/      launchd plist / Dockerfile
+```
+
+## ของที่ยังรันอยู่จริงตอนนี้ (ยังไม่ย้าย)
+
+- cron รัน `~/src/my-cronjob/cme_fetcher.py` + `gold_fetcher.py`
+- Übersicht โหลด widget จาก `~/Library/Application Support/Übersicht/widgets/`
+
+ไฟล์ใน repo นี้คือ **ต้นทางที่ทางการ** แก้ที่นี่ที่เดียว แล้วค่อย deploy ออกไป
+(ระหว่างเฟสย้าย ยังต้อง copy ไปทับของเดิมเหมือนที่ทำอยู่)

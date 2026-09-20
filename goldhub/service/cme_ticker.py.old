@@ -1,0 +1,271 @@
+"""
+CME Ticker — เก็บ flow ของ option gold รายสไตรค์ทุก 5 นาที ให้ cme-ticker.jsx (widget แนวตั้ง)
+
+cron:
+  */5 * * * * /usr/bin/python3 /Users/sorachai/src/my-cronjob/cme_ticker.py >> /tmp/cme_ticker.log 2>&1
+
+เขียน /tmp/cme_ticker.json = { iv_hist, ticker, active, meta }
+
+--- ทำไมคาบ 5 นาที ---
+วัดจริง 2026-07-16: ATMVol ของ QuikStrike เปลี่ยน **ทุก ~5 นาทีเป๊ะ** (303/305/306/309 วินาที
+ติดกัน 4 ครั้ง) ดึงถี่กว่านี้ได้ค่าเดิมเป๊ะทุกหลักทศนิยม = เปลืองฟรี
+ผลข้างเคียงที่ต้องยอมรับ: เห็นแค่ผลรวมต่อ 5 นาที → **แยกไม่ออกว่า block เดียว 200 ไม้
+หรือรายย่อยซอย 20 ไม้** (แหล่งนี้ไม่มี time & sales) — แก้ไม่ได้ด้วยการดึงถี่ขึ้น
+
+--- ทำไม F ต้องมาจาก gold_data.json ---
+FuturePrice ของ QuikStrike **เก่า/ค้าง** — วัดแล้วเพี้ยนจากราคาจริง -13.3 ถึง +8.0 จุด
+และค้างนิ่งได้ 3.5 นาทีขณะทองวิ่ง 6 จุด → delta ที่คำนวณจากมันจะเพี้ยนแรงตอนใกล้ expire
+เลยใช้ราคาสดจาก gold_data.json (gold_fetcher เขียนทุก ~5 วินาที) แทน
+ยืนยันแล้วว่าเป็น contract เดียวกัน (ส่วนต่างแกว่งรอบ 0 ไม่ใช่ spread คงที่แบบคนละเดือน)
+
+--- ทำไม OI ดึงชั่วโมงละครั้ง ---
+ทดสอบ 10.4 นาทีช่วง LDN+NY เปิด: OI **0/15 strikes ขยับ** (Intraday ขยับ 2/15)
+= CME publish OI วันละครั้ง OI จึงเป็น "บริบท" ไม่ใช่ตัวสร้าง event
+"""
+import http.cookiejar
+import json
+import math
+import os
+import re
+import sys
+import urllib.request
+from datetime import datetime
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import cme_fetcher as C  # ใช้ parser/postback ตัวเดียวกัน ไม่ copy โค้ด
+
+OUT = "/tmp/cme_ticker.json"
+STATE = "/tmp/cme_ticker_state.json"   # snapshot รอบก่อน + history (หายตอน reboot = ยอมรับได้)
+OI_CACHE = "/tmp/cme_ticker_oi.json"
+GOLD_JSON = "/tmp/gold_data.json"
+
+# แยก 2 หน้าต่าง: กราฟ IV มองยาว (2 ชม.) แต่ Most Active มองสั้น (1 ชม.) เพื่อจับของสดกว่า
+IV_WINDOW_MIN = 120         # ความยาวกราฟ IV
+ACTIVE_WINDOW_MIN = 60      # sliding window ของ Most Active เท่านั้น (ไม่เกี่ยวกับ ticker แล้ว)
+TICKER_MIN_CONTRACTS = 10   # เกณฑ์ขึ้น ticker (put+call รวมกันในช่องนั้น)
+TICKER_ROWS = 12        # widget ตรึงความสูงไว้เท่านี้ ส่งเกินไปก็ไม่ได้โชว์
+# ticker เป็น FIFO ตามจำนวน ไม่ใช่ตามอายุ — event เก่าจะอยู่จนกว่ามีอันใหม่มาดันออก
+# (ไม่หายตามเวลาเหมือนเดิมที่ผูกกับ ACTIVE_WINDOW_MIN) เก็บเผื่อ display ไว้หน่อย
+TICKER_KEEP = 50
+ACTIVE_ROWS = 5
+OI_TTL_SEC = 3600       # OI นิ่งทั้งวัน → ดึงชั่วโมงละครั้งพอ
+GOLD_MAX_AGE = 900
+
+
+def _load(path, default=None):
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except Exception:
+        return default
+
+
+def atomic_write(path, obj):
+    tmp = path + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(obj, f)
+    os.replace(tmp, path)
+
+
+def live_future():
+    """ราคา future สดจาก gold_fetcher — (price, source)
+    ไม่มี/เก่าเกิน 15 นาที = คืน None ให้ caller ตกไปใช้ QS_F (เก่ากว่าแต่ยังดีกว่าไม่มี)"""
+    try:
+        if os.path.getmtime(GOLD_JSON) > datetime.now().timestamp() - GOLD_MAX_AGE:
+            p = ((_load(GOLD_JSON) or {}).get("future") or {}).get("price")
+            if p:
+                return float(p), "live"
+    except Exception:
+        pass
+    return None, None
+
+
+def norm_cdf(x):
+    return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
+
+
+def greeks(F, K, sigma, dte_days):
+    """Black-76 (option บน futures) — คืน (delta_otm, p_touch)
+    delta_otm = delta ของฝั่งที่ยัง OTM (K>F ใช้ call / K<F ใช้ |put|)
+      → ATM ได้ ~0.5 ทั้งสองข้าง ไกลออกไป → 0 อ่านเป็น "ระยะห่างเชิงความน่าจะเป็น"
+    p_touch ≈ 2 × delta = กฎประมาณของเทรดเดอร์ (reflection principle, สมมติ driftless
+      ไม่คิด skew) — ตอบคำถาม "ราคาจะวิ่งไปแตะไหม" ซึ่งต่างจาก delta ที่ตอบ "จะจบ ITM ไหม"
+    r ตัดทิ้งได้ (T สั้นมาก → e^(-rT) ≈ 1)"""
+    T = (dte_days or 0) / 365.0
+    if not (F and K and sigma and T > 0):
+        return None, None
+    d1 = (math.log(F / K) + 0.5 * sigma * sigma * T) / (sigma * math.sqrt(T))
+    dc = norm_cdf(d1)
+    otm = dc if K > F else 1.0 - dc
+    return round(otm, 3), round(min(2.0 * otm, 1.0), 2)
+
+
+def fetch_intraday():
+    """GET + postback เลือก series ใกล้หมดอายุสุด = 2 requests (ไม่แตะแท็บ OI)
+    หน้าเดียวได้ครบ: ATMVol, Put/Call รายสไตรค์, smile (Vol), F, DTE"""
+    jar = http.cookiejar.CookieJar()
+    op = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
+    op.addheaders = [("User-Agent", C.UA), ("Referer", C.REFERER)]
+    r = op.open(C.URL, timeout=60)
+    html = r.read().decode()
+    final_url = r.geturl()
+    try:
+        best = C.nearest_expiration(html)
+        if best:
+            html = C._postback(op, final_url, html, best[0])
+    except Exception:
+        pass
+    return C.extract_payload(html), op, final_url, html
+
+
+def fetch_oi(op, final_url, html):
+    """แท็บ OI = อีก 1 request — เรียกเฉพาะตอน cache หมดอายุ (OI นิ่งทั้งวัน)"""
+    cached = _load(OI_CACHE)
+    if cached and cached.get("ts", 0) > datetime.now().timestamp() - OI_TTL_SEC:
+        return {int(k): v for k, v in cached["oi"].items()}, True
+    oi_settings = C.extract_payload(C._postback(op, final_url, html, C.OI_TARGET))
+    oi = {s: p + c for s, p, c in C.strike_rows(oi_settings)}
+    atomic_write(OI_CACHE, {"ts": datetime.now().timestamp(), "oi": {str(k): v for k, v in oi.items()}})
+    return oi, False
+
+
+def main():
+    now = datetime.now()
+    ts = now.timestamp()
+
+    settings, op, final_url, html = fetch_intraday()
+    meta = C.meta_of(settings)
+    series = meta["series"]
+    dte = meta["dte"]
+    smile = C.series_points(settings, "Vol")          # IV รายสไตรค์ (ทศนิยม)
+    rows = {s: (p, c) for s, p, c in C.strike_rows(settings)}
+
+    F_live, src = live_future()
+    F = F_live or meta["F"]                            # ตกไป QS_F ถ้าไม่มีของสด
+    F_src = src or "quikstrike"
+
+    try:
+        oi_map, oi_cached = fetch_oi(op, final_url, html)
+    except Exception as e:
+        print(f"⚠️ OI fetch failed ({e}) — ticker จะไม่มีคอลัมน์ OI")
+        oi_map, oi_cached = {}, False
+
+    state = _load(STATE) or {}
+    # series เปลี่ยน (วันใหม่ / roll) = ล้างประวัติทั้งหมด ห้ามเอาของคนละ series มาต่อกัน
+    if state.get("series") != series:
+        state = {"series": series, "prev": {}, "contribs": [], "iv_hist": [], "ticker_log": []}
+
+    prev = state.get("prev") or {}
+    contribs = state.get("contribs") or []
+    iv_hist = state.get("iv_hist") or []
+    # ticker_log ไม่มี key = state เก่าก่อนแยก log (ครั้งแรกหลัง deploy) → seed จาก contribs
+    # ที่เกินเกณฑ์ ให้ ticker เริ่มเต็ม ไม่ใช่เริ่มจากว่าง
+    ticker_log = state.get("ticker_log")
+    if ticker_log is None:
+        ticker_log = sorted(
+            (x for x in contribs if x["n"] >= TICKER_MIN_CONTRACTS),
+            key=lambda x: x["ts"])[-TICKER_KEEP:]
+
+    # ---- diff เทียบรอบก่อน ----
+    # Intraday volume เป็นยอด "สะสมทั้งวัน" → ส่วนต่างมีแต่บวก
+    # กับดัก 2 อย่างที่ต้อง skip ไม่ใช่นับเป็น 0 (ไม่งั้นได้ event ปลอมก้อนใหญ่):
+    #   1. strike เพิ่งโผล่เข้าหน้าต่างชาร์ต (ไม่มี baseline) — วัดแล้วหน้าต่างหด 22→15 ใน 1 เย็น
+    #   2. ยอดลดลง = ข้อมูลรีเซ็ต/หน้าต่างเลื่อน ไม่ใช่การเทรดจริง
+    new_contribs = []
+    for k, (p, c) in rows.items():
+        base = prev.get(str(k))
+        if base is None:
+            continue                                   # รอบแรกที่เห็น strike นี้ = ตั้ง baseline เฉยๆ
+        dp, dc = p - base[0], c - base[1]
+        if dp < 0 or dc < 0:
+            continue                                   # re-baseline เงียบๆ
+        tot = dp + dc
+        if tot <= 0:
+            continue
+        sigma = smile.get(k)
+        d_otm, p_touch = greeks(F, k, sigma, dte)
+        new_contribs.append({
+            "ts": ts, "strike": k, "n": tot, "dp": dp, "dc": dc,
+            # delta/p_touch แช่ไว้ ณ เวลาที่ flow เข้า — ticker คือ log ของอดีต
+            # ("ตอนนั้น strike นี้ห่างจากราคาแค่ไหน")
+            "d": d_otm, "pt": p_touch, "dist": round(k - F, 1),
+            "oi": oi_map.get(k),
+            # intraday volume ที่ strike นี้ "ก่อน" flow ก้อนนี้เข้า (= ยอดรอบก่อน = p+c-tot)
+            # ไม่นับ tot เพราะ tot โชว์แยกในคอลัมน์ +n อยู่แล้ว กันนับซ้ำ
+            "intra": p + c - tot,
+        })
+
+    contribs = [x for x in contribs + new_contribs if x["ts"] > ts - ACTIVE_WINDOW_MIN * 60]
+
+    # ticker log: FIFO ตามจำนวน — event ที่เกินเกณฑ์ต่อท้าย เก็บ N ล่าสุด (ไม่ตัดตามเวลา)
+    # → แถวเก่าอยู่จนกว่ามีอันใหม่มาดันออก ไม่หายเองตอนครบ 60 นาทีเหมือนเดิม
+    ticker_log += [x for x in new_contribs if x["n"] >= TICKER_MIN_CONTRACTS]
+    ticker_log = ticker_log[-TICKER_KEEP:]
+
+    # ---- ประวัติ IV (กราฟ 2 ชม. = 24 จุดที่คาบ 5 นาที) ----
+    sub = re.sub("<[^>]+>", "", settings.get("Subtitle", "")).replace("\xa0", " ")
+    mv = re.search(r"Vol Chg:\s*(-?[\d.]+)", sub)
+    iv_chg = float(mv.group(1)) if mv else None
+    iv = meta["iv"]
+    if not iv_hist or iv_hist[-1]["iv"] != iv or ts - iv_hist[-1]["ts"] >= 240:
+        iv_hist.append({"ts": ts, "iv": iv, "chg": iv_chg})
+    iv_hist = [x for x in iv_hist if x["ts"] > ts - IV_WINDOW_MIN * 60]
+
+    # ---- ticker: N ล่าสุดจาก log (ใหม่สุดขึ้นก่อน) — ไม่ตัดตามอายุ ----
+    ticker = sorted(ticker_log, key=lambda x: -x["ts"])[:TICKER_ROWS]
+
+    # ---- Most Active: sliding window ต่อ strike ----
+    # Sum = รวมทุกก้อนที่ยังอยู่ในหน้าต่าง / Age = อายุก้อน "เก่าสุดที่ยังไม่ pop"
+    # เรียงตาม rate (ไม้/นาที) ไม่ใช่ Sum — 30 ไม้ใน 5 นาที มีนัยยะกว่า 30 ไม้ใน 65 นาที
+    agg = {}
+    for x in contribs:
+        a = agg.setdefault(x["strike"], {"sum": 0, "first_ts": x["ts"], "last_ts": x["ts"]})
+        a["sum"] += x["n"]
+        a["first_ts"] = min(a["first_ts"], x["ts"])
+        a["last_ts"] = max(a["last_ts"], x["ts"])
+    active = []
+    for k, a in agg.items():
+        age_min = (ts - a["first_ts"]) / 60.0
+        # ก้อนเดียวอายุ 0 → หารศูนย์: ใช้พื้น 1 คาบ (5 นาที) เป็นตัวหาร
+        rate = a["sum"] / max(age_min, 5.0)
+        d_otm, p_touch = greeks(F, k, smile.get(k), dte)
+        active.append({
+            "strike": k, "sum": a["sum"], "age": round(age_min),
+            "rate": round(rate, 1), "d": d_otm, "pt": p_touch,
+            "dist": round(k - F, 1), "oi": oi_map.get(k),
+        })
+    active.sort(key=lambda x: -x["rate"])
+    active = active[:ACTIVE_ROWS]
+
+    atomic_write(STATE, {
+        "series": series,
+        "prev": {str(k): [p, c] for k, (p, c) in rows.items()},
+        "contribs": contribs,
+        "iv_hist": iv_hist,
+        "ticker_log": ticker_log,
+    })
+    atomic_write(OUT, {
+        "meta": {
+            "series": series, "dte": round(dte, 4) if dte else None,
+            "iv": iv, "iv_chg": iv_chg,
+            "F": round(F, 2), "F_src": F_src, "qs_F": meta["F"],
+            "iv_window_min": IV_WINDOW_MIN, "active_window_min": ACTIVE_WINDOW_MIN,
+            "threshold": TICKER_MIN_CONTRACTS,
+            "system_time": now.strftime("%H:%M"), "ts": ts,
+        },
+        "iv_hist": iv_hist,
+        "ticker": ticker,
+        "active": active,
+    })
+    print(f"[{now:%Y-%m-%d %H:%M:%S}] ok {series} IV={iv} F={F}({F_src}) "
+          f"new={len(new_contribs)} win={len(contribs)} tick={len(ticker)} "
+          f"act={len(active)} oi={'cache' if oi_cached else 'fetched'}")
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception as e:
+        print(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] ERROR {type(e).__name__}: {e}",
+              file=sys.stderr)
+        sys.exit(1)

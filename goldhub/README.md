@@ -16,6 +16,17 @@
 
 `/api/state` `/api/clip` `/api/chart` `/api/flat` `/api/health`
 
+## indicator/
+
+`indicator/oi_block.pine` — indicator ฝั่ง TradingView ที่กิน clip จาก `/api/clip`
+อยู่ในโฟลเดอร์เดียวกับ service เพราะ **format ของ clip กับตัว parser ใน Pine ต้องแก้คู่กันเสมอ**
+(header `F:|D:|S:|IV:|IVCHG:|DTE:|IVS:|IVSCHG:` + บรรทัด `ID;` `OI;` `VS;`)
+Pine ข้าม key ที่ไม่รู้จัก → เพิ่ม key ใหม่ได้โดยไม่ต้องอัปเดต indicator ทันที
+แต่ถ้าเปลี่ยนความหมายของ key เดิม ต้องแก้ทั้งสองฝั่งในคอมมิตเดียวกัน
+
+ของเดิมอยู่ที่ `claude_code/tdw_indi/oi_block.pine` (git 14 คอมมิต) — ยังไม่ได้ลบ
+ถ้าจะเลิกใช้ที่เดิม ค่อยใส่ README ชี้มาที่นี่
+
 ## ที่มาของโค้ดเดิม
 
 - `my-cronjob/cme_fetcher.py` → service/ (Barchart, QuikStrike, clip, กราฟ)

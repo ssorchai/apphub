@@ -6,6 +6,10 @@
 import threading
 import time
 
+# งานคาบสั้น (gold ทุก 5 วิ) ไม่ต้องเขียนไฟล์ทุก tick -- ของในหน่วยความจำยังสดเสมอ
+# ที่เขียนลงดิสก์ช้าได้สุด 15 วินาที ยกเว้นตอนพัง/ตั้งรอบใหม่ ซึ่งเขียนทันที
+WRITE_MIN_INTERVAL = 15
+
 
 class Health:
     def __init__(self, store=None, name="health"):
@@ -14,6 +18,7 @@ class Health:
         self._store = store
         self._name = name
         self.started_at = time.time()
+        self._last_write = 0.0
 
     def _job(self, job):
         return self._jobs.setdefault(job, {
@@ -22,15 +27,20 @@ class Health:
             "last_error": None, "last_duration": None, "next_run": None,
         })
 
-    def _set(self, job, **kw):
+    def _set(self, job, _force=True, **kw):
         with self._lock:
             self._job(job).update(kw)
+            if not self._store:
+                return
+            now = time.time()
+            if not _force and now - self._last_write < WRITE_MIN_INTERVAL:
+                return
+            self._last_write = now
             snap = self.snapshot()
-        if self._store:
-            try:
-                self._store.write_json(self._name, snap)
-            except Exception:
-                pass
+        try:
+            self._store.write_json(self._name, snap)
+        except Exception:
+            pass
 
     def started(self, job):
         with self._lock:
@@ -39,7 +49,8 @@ class Health:
             j["last_start"] = time.time()
 
     def ok(self, job, duration):
-        self._set(job, last_ok=time.time(), last_duration=round(duration, 2), last_error=None)
+        self._set(job, _force=False,
+                  last_ok=time.time(), last_duration=round(duration, 2), last_error=None)
 
     def fail(self, job, error):
         with self._lock:
@@ -51,7 +62,8 @@ class Health:
             self._job(job)["skips"] += 1
 
     def next_run(self, job, ts):
-        self._set(job, next_run=ts)
+        # งาน gold ตั้งรอบใหม่ทุก 5 วินาที ถ้าบังคับเขียนทุกครั้งการหน่วงข้างบนก็ไม่มีผล
+        self._set(job, _force=False, next_run=ts)
 
     def snapshot(self):
         return {

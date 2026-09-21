@@ -39,6 +39,8 @@ class Scheduler:
         self.health = health
         self.jobs = []
         self._stop = threading.Event()
+        self._last_err = {}      # job -> ข้อความ error ล่าสุดที่ log ไปแล้ว
+        self._fail_streak = {}   # job -> พลาดติดกันกี่รอบ
 
     def add(self, *jobs):
         self.jobs.extend(jobs)
@@ -64,11 +66,21 @@ class Scheduler:
             job.fn()
             dt = time.time() - t0
             self.health.ok(job.name, dt)
+            n = self._fail_streak.pop(job.name, 0)
+            if n:
+                log("{} กลับมาปกติ (พลาดไป {} รอบ)", job.name, n)
+            self._last_err.pop(job.name, None)
             if dt > job.timeout:
                 err("{} ใช้เวลา {:.0f}s เกิน timeout ที่ตั้งไว้ {:.0f}s", job.name, dt, job.timeout)
         except Exception as e:
-            self.health.fail(job.name, "{}: {}".format(type(e).__name__, str(e)[:200]))
-            err("{} พัง {}: {}", job.name, type(e).__name__, str(e)[:200])
+            msg = "{}: {}".format(type(e).__name__, str(e)[:200])
+            self.health.fail(job.name, msg)
+            # งานคาบสั้น (gold ทุก 5 วิ) ถ้าแหล่งล่มจะพังทุกรอบ -> log ซ้ำเฉพาะตอนข้อความเปลี่ยน
+            # ส่วนจำนวนครั้งดูได้จาก health (fails) และบรรทัด "กลับมาปกติ" ตอนหาย
+            self._fail_streak[job.name] = self._fail_streak.get(job.name, 0) + 1
+            if msg != self._last_err.get(job.name):
+                self._last_err[job.name] = msg
+                err("{} พัง {}", job.name, msg)
 
     def _loop(self, job):
         if job.run_at_start:

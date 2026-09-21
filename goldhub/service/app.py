@@ -3,8 +3,9 @@
 เฟสนี้ตั้งใจให้ "พฤติกรรมเหมือนเดิมทุกอย่าง" เปลี่ยนแค่ตัวขับเคลื่อน:
   - งาน cme ยังคาบ 1 ชั่วโมง นาทีที่ :07 เท่ากับบรรทัด cron เดิม
   - ยังเขียนไฟล์ /tmp ชุดเดิมครบ (cme_putcall.json / clip / chart / curve / eventvol)
-  - ยังไม่มี HTTP API (เฟส 2) ยังไม่เปลี่ยนคาบเป็น 5 นาที (เฟส 3)
-  - gold_fetcher ยังรันผ่าน cron ไปก่อน (เป็น poller ยาว 290 วิ ย้ายเข้ามาเฟสถัดไป)
+  - ยังไม่มี HTTP API (เฟส 2) ยังไม่เปลี่ยนคาบ cme เป็น 5 นาที (เฟส 3)
+  - งาน gold คาบ 5 วินาทีต่อเนื่อง (21 ก.ย.) — เดิม cron ปลุกทุก 5 นาทีให้รันรอบละ 290 วิ
+    แล้วเงียบไป ~10 วินาทีต้นรอบ ตอนนี้ไม่ขาดช่วงแล้ว ดูรายละเอียดใน gold_job.py
 
 รัน:  python3 app.py            (foreground ไว้ทดสอบ)
       launchctl load ...plist   (ของจริง ดู deploy/)
@@ -18,6 +19,7 @@ sys.path.insert(0, HERE)                                   # cme_fetcher.py อ�
 sys.path.insert(0, os.path.dirname(os.path.dirname(HERE)))  # apphub/ -> common.hub
 
 import cme_fetcher  # noqa: E402
+import gold_job  # noqa: E402
 from common.hub import (Health, Job, Scheduler, Store, err, holder_pid,  # noqa: E402
                         log, single_instance)
 
@@ -72,8 +74,12 @@ def main():
         err("มี goldhub ตัวอื่นรันอยู่แล้ว (pid {}) — ออก", holder_pid(lockfile))
         sys.exit(0)
     log("goldhub start (pid {}) data={}", os.getpid(), store.root)
+    gold = gold_job.GoldPoller()
     Scheduler(health).add(
         Job("cme", job_cme, CME_INTERVAL, timeout=CME_TIMEOUT, at_minute=CME_AT_MINUTE),
+        # ราคาสด: คาบสั้นมาก งานนี้พังบ่อยได้ (investing/Cloudflare) scheduler จะ log
+        # ซ้ำเฉพาะตอนข้อความ error เปลี่ยน ไม่งั้นท่วม log ทุก 5 วินาที
+        Job("gold", gold.tick, gold_job.POLL, timeout=gold_job.TIMEOUT),
         # ล้างของเก่า: รันตอน start แล้ววันละครั้ง (ไฟล์เล็ก ไม่ต้องเลือกเวลา)
         Job("housekeeping", job_housekeeping, HOUSEKEEPING_INTERVAL),
     ).run_forever()

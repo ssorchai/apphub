@@ -18,6 +18,9 @@ from datetime import datetime
 
 from .log import err, log
 
+TICK = 30        # วินาที ต่อการตื่นมาเช็กเวลาหนึ่งครั้ง
+LATE_WARN = 120  # ช้าเกินเท่านี้ (วินาที) ถือว่าผิดปกติ ให้ขึ้น log
+
 
 class Job:
     def __init__(self, name, fn, interval, timeout=None, at_minute=None,
@@ -73,8 +76,17 @@ class Scheduler:
         while not self._stop.is_set():
             due = self._next_due(job, time.time())
             self.health.next_run(job.name, due)
-            if self._stop.wait(max(due - time.time(), 0)):
+            # รอทีละ TICK แล้วเทียบ "เวลาจริง" ใหม่ทุกครั้ง ห้ามรอยาวรวดเดียว:
+            # 20 ก.ย. 26 เครื่องหลับข้ามคืน แล้วรอบ :07 หายไปหลายรอบ เพราะ timer
+            # ของ Event.wait() ไม่ตรงกับนาฬิกาจริงหลังเครื่องตื่น (ดู PLAN.md)
+            while not self._stop.is_set() and time.time() < due:
+                if self._stop.wait(min(due - time.time(), TICK)):
+                    return
+            if self._stop.is_set():
                 return
+            late = time.time() - due
+            if late > LATE_WARN:
+                err("{} ยิงช้า {:.0f} นาที (เครื่องหลับ/หยุดชั่วคราว?)", job.name, late / 60)
             self._run_once(job)
 
     def run_forever(self):

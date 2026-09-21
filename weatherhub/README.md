@@ -9,6 +9,21 @@
 - cache ต่อ "ช่องตาราง" ปัดพิกัดเป็นกริด (~0.05°) กันยิง upstream ซ้ำและกันเก็บพิกัดตรงๆ
 - เรดาร์เป็นภาพเฉพาะพื้นที่ (BMA = กรุงเทพฯ) เลือก layer ตาม bbox ถ้าอยู่นอกพื้นที่ = ไม่มีเรดาร์
 
+## สถานะตอนนี้ (21 ก.ย. 2026)
+
+ย้ายจาก cron มาเป็น daemon แล้ว (`com.apphub.weatherhub`) ส่วน API กับพิกัดจากผู้เรียก
+ยังไม่ได้ทำ — ยังเป็นเรดาร์หนองจอกพิกัดเดียวเหมือนเดิม
+
+- งาน `radar` ทุก 5 นาที = `weather_fetcher.main()` เขียน `/tmp/weather_meta.json`
+- งาน `nowcast` ทุก 5 นาที = `rain_nowcast.run_check()` ซึ่งตัดสินใจเฉพาะ
+  16:00/16:15/16:30/16:45 (รับคลาดเคลื่อนได้ 2 นาที) เตือนแล้วจบทั้งวัน
+- สองงานนี้ **แยกกันตั้งใจ** ดึงภาพพังไม่ควรทำให้ nowcast ไม่ทำงาน (ของเดิมก็แยก)
+- ทั้งคู่ตั้ง `align=True` ให้ยึดนาฬิกาจริงแบบ cron (:00 :05 :10 …) ไม่ใช่นับต่อจากรอบที่แล้ว
+  ซึ่งจะเลื่อนสะสมจนหลุดหน้าต่างเวลาของ nowcast
+
+ติดตั้ง/ถอด: `bash deploy/install.sh` / `bash deploy/install.sh uninstall`
+log: `~/Library/Logs/apphub/weatherhub.log`
+
 ## ที่มาของโค้ดเดิม
 
-- `my-cronjob/weather_fetcher.py`, `my-cronjob/rain_nowcast.py`
+- `my-cronjob/weather_fetcher.py`, `my-cronjob/rain_nowcast.py` (คัดลอกมาทั้งไฟล์ ไม่แก้ logic)

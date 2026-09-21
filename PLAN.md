@@ -145,7 +145,10 @@ spread Dec->Oct 34.2 / `gold_live.js` อัปเดตทุก 5 วินา
   **ข้อจำกัดที่ต้องยอมรับ: Mac หลับเมื่อไหร่ มือถือดึงไม่ได้**
 
 **weatherhub** (พอร์ต 8788, โครงเดียวกัน)
-- ย้าย `weather_fetcher.py` + `rain_nowcast.py` เข้า `weatherhub/service/`
+- ~~ย้าย `weather_fetcher.py` + `rain_nowcast.py` เข้า `weatherhub/service/`~~
+  ✅ ทำไปก่อนแล้ว 21 ก.ย. เพราะอยากปิด cron ให้หมดในวันเดียวกับที่ย้าย gold
+  (daemon `com.apphub.weatherhub` งาน radar + nowcast ทุก 5 นาที `align=True`)
+  **ที่เหลือของเฟส 4 คือ API + พิกัดจากผู้เรียก ยังไม่ได้ทำ**
 - `/api/state?lat=&lon=` — ไม่ส่งมาใช้ default, cache ต่อช่องกริด ~0.05°
   (กันยิง upstream ซ้ำ และไม่เก็บพิกัดตรงๆ ของผู้ใช้)
 - เรดาร์ผูกกับพื้นที่: อยู่นอก bbox กรุงเทพฯ = ไม่มี layer เรดาร์ ส่งเฉพาะค่ารายจุด
@@ -284,3 +287,11 @@ tail -f ~/Library/Logs/apphub/goldhub.log
 **เคยใส่ flock ใน `cme_fetcher.main()` แล้วถอดออก (21 ก.ย.)** เพราะการยิงทับกรณีนี้เกิดจาก
 คนกดปุ่ม refresh เอง ไม่ใช่ของที่เกิดซ้ำเองโดยอัตโนมัติ ไม่คุ้มกับการมีล็อกตัวที่สองให้ดูแล
 ถ้าเฟส 2 ทำให้ widget ยิง API แทนการรัน fetcher เอง เรื่องนี้ก็หมดไปโดยปริยาย
+
+### 21 ก.ย. 10:55 — crontab ว่างแล้ว
+
+`crontab -l` ไม่เหลือบรรทัดที่ทำงานเลย (เหลือแต่ comment ไว้เป็นทางถอย 3 บรรทัด)
+ทุกงานเดินด้วย launchd สองตัว: `com.apphub.goldhub` (cme รายชั่วโมง + gold ทุก 5 วิ)
+และ `com.apphub.weatherhub` (radar + nowcast ทุก 5 นาที)
+
+ค่อยลบ comment ทิ้งตอนเฟส 5 หลังปล่อยให้เดินสัก 2-3 วัน

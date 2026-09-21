@@ -43,10 +43,11 @@ class Health:
             pass
 
     def started(self, job):
+        # เขียนลงไฟล์ด้วย (แบบหน่วงได้) ไม่งั้น runs/last_start ในไฟล์ตามหลังของจริงหลายวินาที
+        # ตอนไล่ดูย้อนหลังจะงงว่าทำไมรอบที่เพิ่งเห็นใน log ยังไม่โผล่ใน health
         with self._lock:
-            j = self._job(job)
-            j["runs"] += 1
-            j["last_start"] = time.time()
+            self._job(job)["runs"] += 1
+        self._set(job, _force=False, last_start=time.time())
 
     def ok(self, job, duration):
         self._set(job, _force=False,

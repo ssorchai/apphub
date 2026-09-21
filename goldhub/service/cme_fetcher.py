@@ -56,6 +56,7 @@ cron รายชั่วโมง:
 """
 
 import calendar
+import fcntl
 import json
 import math
 import os
@@ -99,6 +100,9 @@ QS_BUDGET = 60          # งบแยกของ QuikStrike -- ห้ามก
 # สถานะที่ต้องรอดข้าม restart (macOS ล้าง /tmp ตอนบูต): cache ค่ารายวันของ QuikStrike
 # + สถานะตัวเบรก
 QS_STATE = os.path.expanduser("~/Library/Caches/cme-fetcher/qs_state.json")
+# กันสองตัวยิงแหล่งข้อมูลพร้อมกัน -- daemon goldhub กับปุ่ม refresh ของ widget เป็นคนละ
+# process ล็อกของ goldhub กันได้แค่ daemon ซ้อน daemon (21 ก.ย. 26)
+FETCH_LOCK = os.path.expanduser("~/Library/Caches/cme-fetcher/fetch.lock")
 QS_CACHE_MAX_AGE = 2 * 3600   # Vol2Vol/Settlement ดึงใหม่เมื่อข้ามวัน CME หรือ cache เก่าเกินนี้
 # smile ที่ cache ไว้ "เสีย" ถ้าเส้นที่ราคา settle ไม่ตรงกับ ATMVol ของก้อนเดียวกันเกินค่านี้
 # (18 ก.ย. 26 06:07: ATMVol 25.2 แต่เส้นทั้งเส้น 39-42 = ได้ payload คนละรอบมาปนกัน)
@@ -1399,7 +1403,7 @@ def chart_html(snap, now, ev=None):
     return CHART_TMPL.replace("__DATA__", json.dumps(payload))
 
 
-def main():
+def _run():
     global _deadline
     now = datetime.now()
     _deadline = time.monotonic() + MAX_RUNTIME
@@ -1687,6 +1691,45 @@ def main():
               data["oi"]["put"], data["oi"]["call"],
               meta["iv"], snap.get("iv_src"),
               len(id_rows), len(oi_rows), len(vs_rows), len(clip)))
+
+
+def _fetch_lock():
+    """ได้ล็อก -> คืน file object (ปิดเมื่อไหร่ = ปลดเมื่อนั้น / process ตายก็ปลดเอง)
+    ไม่ได้ -> คืน None"""
+    os.makedirs(os.path.dirname(FETCH_LOCK), exist_ok=True)
+    f = open(FETCH_LOCK, "a+")
+    try:
+        fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        f.close()
+        return None
+    f.seek(0)
+    f.truncate()
+    f.write(str(os.getpid()))
+    f.flush()
+    return f
+
+
+def _lock_holder():
+    try:
+        with open(FETCH_LOCK) as f:
+            return f.read().strip() or "?"
+    except OSError:
+        return "?"
+
+
+def main():
+    """ข้ามรอบเงียบๆ ถ้ามีตัวอื่นรันอยู่ -- ตัวที่รันอยู่เขียนไฟล์ให้อยู่แล้ว
+    ฝั่ง widget รอบ refresh ถัดไป (5 วินาที) ก็เห็นของใหม่เอง"""
+    lock = _fetch_lock()
+    if lock is None:
+        print("[{:%Y-%m-%d %H:%M:%S}] มี cme_fetcher ตัวอื่นรันอยู่ (pid {}) -- ข้ามรอบนี้".format(
+            datetime.now(), _lock_holder()), file=sys.stderr)
+        return
+    try:
+        _run()
+    finally:
+        lock.close()
 
 
 if __name__ == "__main__":

@@ -257,3 +257,9 @@ tail -f ~/Library/Logs/apphub/goldhub.log
   ของ session ใหม่ ตัว fetcher ไม่เขียนทับไฟล์เดิม (ถูกต้องตามที่ออกแบบ) รอบ 09:16 กลับมาปกติ
 - ปุ่ม refresh ใน widget ยังเรียก `/Users/sorachai/src/my-cronjob/cme_fetcher.py` (path เก่า)
   ใช้งานได้ แต่ต้องเปลี่ยนตอนเฟส 5 หรือตอนเปิด API ในเฟส 2
+
+**เพิ่มล็อกใน cme_fetcher เอง (21 ก.ย.)** flock ของ goldhub กันได้แค่ daemon ซ้อน daemon
+ปุ่ม refresh เป็นคนละ process จึงยิงทับรอบของ daemon ได้ (เช้านี้ห่างกันไม่กี่วินาที)
+`main()` จึงคว้า `~/Library/Caches/cme-fetcher/fetch.lock` ก่อน ถ้าไม่ได้ก็ log ว่าชนกับ pid ไหน
+แล้ว return (ไม่ error) — ตัวที่รันอยู่เขียนไฟล์ให้อยู่แล้ว widget รอบถัดไปใน 5 วินาทีก็เห็นของใหม่
+ล็อกปล่อยตอนปิดไฟล์และตอน process ตาย จึงไม่มีล็อกค้าง ของเดิม `main()` ย้ายไปเป็น `_run()`

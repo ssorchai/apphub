@@ -24,13 +24,14 @@ LATE_WARN = 120  # ช้าเกินเท่านี้ (วินาท�
 
 class Job:
     def __init__(self, name, fn, interval, timeout=None, at_minute=None,
-                 gate=None, run_at_start=True, align=False):
+                 gate=None, run_at_start=True, align=False, offset=0):
         self.name = name
         self.fn = fn
         self.interval = interval          # วินาที
         self.timeout = timeout or interval
         self.at_minute = at_minute        # None = นับจากเวลาเริ่ม / 7 = ทุกชั่วโมงนาทีที่ 7
         self.align = align                # True = ยึดนาฬิกาจริงแบบ cron (คาบ 300 -> :00 :05 :10)
+        self.offset = offset              # เลื่อนกริดของ align (300 + offset 120 -> :02 :07 :12)
         self.gate = gate
         self.run_at_start = run_at_start
 
@@ -51,7 +52,8 @@ class Scheduler:
         if job.align:
             # ยึดนาฬิกาจริงเหมือน cron ไม่ใช่ "นับต่อจากรอบที่แล้ว" ซึ่งเลื่อนสะสมตามเวลาที่งานใช้
             # จำเป็นกับงานที่มีเงื่อนไขผูกกับนาที เช่น nowcast ที่ตัดสินใจเฉพาะ :00/:15/:30/:45
-            return (int(now // job.interval) + 1) * job.interval
+            off = job.offset
+            return (int((now - off) // job.interval) + 1) * job.interval + off
         if job.at_minute is None:
             return now + job.interval
         # ยึดนาทีที่กำหนดของชั่วโมงถัดไป (ให้ log เทียบกับยุค cron ได้ตรงๆ)

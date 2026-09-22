@@ -3,8 +3,30 @@ import { run } from 'uebersicht';
 // อ่าน 2 ไฟล์: cme_ticker.json (ข้อมูล flow เขียนทุก 5 นาที) + gold_data.json (ราคา future สด
 // ทุก ~5 วิ) — คั่นด้วย ---SPLIT--- แล้ว parse แยกฝั่ง refresh ทุก 10 วิ ให้สีของ strike
 // (เหนือ/ต่ำกว่าราคาปัจจุบัน) ขยับตามราคาสด ไม่ต้องรอรอบเขียน 5 นาที
-export const command =
+const CMD =
   "printf '%s\\n---SPLIT---\\n%s' \"$(cat /tmp/cme_ticker.json 2>/dev/null)\" \"$(cat /tmp/gold_data.json 2>/dev/null)\"";
+
+// เฟส 3 (22 ก.ย. 26): ticker เขียนโดย goldhub daemon (ไม่มี cme_ticker.py แยกแล้ว)
+// ทางหลัก = API สองก้อนพร้อมกัน (/api/ticker + ราคาสดใน /api/state) ยิงไม่ได้ใน 2 วิ
+// ค่อยอ่านไฟล์ /tmp แบบเดิม / USE_API = false = โหมดไฟล์อย่างเดียว
+const USE_API = true;
+const API = 'http://127.0.0.1:8787';
+const TICKER_STATE = '$HOME/Library/Application Support/apphub/goldhub/state/ticker_state.json';
+const fetchJson = (url) => Promise.race([
+  fetch(url).then((r) => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); }),
+  new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 2000)),
+]);
+// ส่งต่อเป็น string รูปแบบเดิม (ticker + ---SPLIT--- + gold) render ไม่ต้องรู้ว่ามาทางไหน
+const load = (dispatch) => {
+  const viaFile = () => run(CMD).then((out) => dispatch({ type: 'DATA', output: out }));
+  if (!USE_API) return viaFile();
+  return Promise.all([fetchJson(API + '/api/ticker'), fetchJson(API + '/api/state?fields=live')])
+    .then(([t, s]) => dispatch({
+      type: 'DATA', output: JSON.stringify(t) + '\n---SPLIT---\n' + JSON.stringify(s.live),
+    }))
+    .catch(viaFile);
+};
+export const command = load;
 export const refreshFrequency = 15000;  // ราคาข้าม strike (ห่าง 5) ไม่บ่อย 15 วิทันสายตา + เบา
 
 const TICKER_ROWS = 12;   // ตรึงจำนวนแถว (เติมแถวเปล่า) การ์ดจะได้ไม่ยืดหดตาม event
@@ -16,11 +38,13 @@ const CONTENT_W = CARD_W - 32;   // หัก padding 16 สองข้าง
 export const initialState = { output: null, hold: 0, resetting: false };
 export const updateState = (event, prev) => {
   switch (event.type) {
-    case 'UB/COMMAND_RAN': return { ...prev, output: event.output };
+    // command เป็นฟังก์ชันแล้ว Übersicht ยังยิง UB/COMMAND_RAN เองโดยไม่มี output -- ห้ามให้มันล้างข้อมูล
+    case 'DATA': return { ...prev, output: event.output };
+    case 'UB/COMMAND_RAN': return event.output ? { ...prev, output: event.output } : prev;
     case 'HOLD_TICK': return { ...prev, hold: event.pct };
     case 'HOLD_END': return { ...prev, hold: 0 };
     case 'RESET_START': return { ...prev, hold: 0, resetting: true };
-    case 'RESET_DONE': return { ...prev, resetting: false, output: event.output || prev.output };
+    case 'RESET_DONE': return { ...prev, resetting: false };
     default: return prev;
   }
 };
@@ -187,10 +211,12 @@ export const render = (state, dispatch) => {
   // ไม่ลบ cache OI — OI นิ่งทั้งวัน ไม่ใช่ "ประวัติ" ที่สะสม
   const doReset = () => {
     dispatch({ type: 'RESET_START' });
-    run('rm -f /tmp/cme_ticker_state.json && /usr/bin/python3 /Users/sorachai/src/my-cronjob/cme_ticker.py')
-      .then(() => run('cat /tmp/cme_ticker.json'))
-      .then((out) => dispatch({ type: 'RESET_DONE', output: out }))
-      .catch(() => dispatch({ type: 'RESET_DONE', output: null }));
+    // ล้าง state แล้วรอรอบ 5 นาทีถัดไปของ daemon ตั้ง baseline ใหม่เอง -- ไม่รันตัวดึงข้อมูล
+    // เอง (ของเดิมยิง QuikStrike ทันที ตอนนี้กติกาคือหน้าจอห้ามกระตุ้นให้ดึง upstream)
+    run(`rm -f "${TICKER_STATE}"`)
+      .then(() => load(dispatch))
+      .then(() => dispatch({ type: 'RESET_DONE' }))
+      .catch(() => dispatch({ type: 'RESET_DONE' }));
   };
   const startHold = (e) => {
     if (e.altKey || resetting) return;   // ⌥ สงวนไว้ให้ลากย้ายการ์ด

@@ -507,6 +507,13 @@ def probe_series_expiry(sym):
     return None
 
 
+# รหัส series ที่ยืนยันแล้วต่อวันหมดอายุ -- WEEK_CODES เดาผิดได้ทั้งสัปดาห์ (22 ก.ย. 26 วันอังคาร
+# เดา I0DU26 แต่ของจริง I0EU26) ถ้าไม่จำ รอบ 5 นาทีจะโหลด chain ผิดตัวเต็มๆ ทิ้งทุกรอบ
+# จำใน process เดียว (daemon) พอ -- รันครั้งเดียวจบแบบ cron/ปุ่ม refresh ก็แค่เดาใหม่เหมือนเดิม
+# ตัวตรวจชื่อ series ยังทำงานทุกรอบ รหัสที่จำไว้ผิดเมื่อไหร่ก็ตกไปลองตัวอื่นตามปกติ
+_series_memo = {}
+
+
 def snapshot_barchart():
     """ดึงทุกอย่างจาก barchart ผ่าน core-api ล้วน (ห้ามโหลดหน้า HTML -- โดน WAF)"""
     today = date.today()
@@ -529,6 +536,9 @@ def snapshot_barchart():
     legs = {}
     tried = []
     for exp_guess, syms in weekly_candidates(now_utc)[:5]:
+        memo = _series_memo.get(exp_guess)
+        if memo in syms:
+            syms = [memo] + [x for x in syms if x != memo]
         tried.append(syms[0])
         got = fetch_chain(syms[0])
         named = series_name_expiry(got) if got else None
@@ -545,6 +555,7 @@ def snapshot_barchart():
             break
     if series is None:
         raise SourceDown("barchart: ทุก candidate ว่าง ({})".format(",".join(tried)))
+    _series_memo[expiry] = series
 
     dte = round(max((expiry_utc(expiry) - now_utc).total_seconds(), 0) / 86400, 3)
 
@@ -1399,7 +1410,14 @@ def chart_html(snap, now, ev=None):
     return CHART_TMPL.replace("__DATA__", json.dumps(payload))
 
 
-def main():
+def main(use_qs=True, baseline=True):
+    """หนึ่งรอบ snapshot -- คืน dict ข้อมูลรายสไตรค์ให้ ticker ใช้ต่อในหน่วยความจำ
+
+    use_qs=False (เฟส 3, รอบ 5 นาทีของ daemon): **ไม่แตะ QuikStrike เลย** ใช้ event vol /
+    Vol2Vol / settle จาก cache ล้วน -- request ไป CME ต้องเท่าเดิม (ชั่วโมงละรอบ)
+    baseline=False: ไม่เขียน PREV_STATE ทับ ให้ "Δ CHANGES SINCE" ยังเทียบกับรอบรายชั่วโมง
+    (ไม่งั้นจะกลายเป็นเทียบ 5 นาทีก่อนโดยไม่ตั้งใจ)
+    ค่า default = พฤติกรรมเดิมทุกอย่าง (cron เก่า / ปุ่ม refresh ของ widget)"""
     global _deadline
     now = datetime.now()
     _deadline = time.monotonic() + MAX_RUNTIME
@@ -1436,12 +1454,18 @@ def main():
             return True                      # ไม่มีของให้ตรวจ -> ปล่อยผ่าน
         return abs(min(v for _, v in e["vs"]) - e["atm"]) <= QS_SMILE_TOL
     ev0 = None
+    ev_fresh = False
     qs_sym = cache.get("qs_sym")
 
     def qlog(msg):
         print("[{:%Y-%m-%d %H:%M:%S}] {}".format(now, msg), file=sys.stderr)
 
-    if now_ts < st.get("paused_until", 0):
+    if not use_qs:
+        # รอบ Barchart-only: event vol ล่าสุดของ series นี้จาก cache (ดึงไว้รอบรายชั่วโมง)
+        e = cache.get("ev")
+        if e and now_ts - e.get("ts", 0) < QS_CACHE_MAX_AGE:
+            ev0 = e.get("point")
+    elif now_ts < st.get("paused_until", 0):
         qlog("QuikStrike paused ถึง {:%d %b %H:%M} ({}) -- ใช้ cache".format(
             datetime.fromtimestamp(st["paused_until"]), st.get("pause_reason")))
     else:
@@ -1451,6 +1475,8 @@ def main():
                 for p in fetch_eventvol(qs):
                     if datetime.strptime(p["expires"], "%m/%d/%Y").date() == snap["expiry"]:
                         ev0, qs_sym = p, p["sym"]
+                        ev_fresh = True
+                        cache["ev"] = {"ts": now_ts, "point": p}
                         break
                 qlog("eventvol 0DTE {}".format(ev0))
             except QS_ESCALATE:
@@ -1505,10 +1531,12 @@ def main():
                 st["paused_until"] = now_ts + QS_PAUSE_OUTAGE
                 st["pause_reason"] = "ต่อไม่ได้ {} รอบติด".format(st["net_fail"])
                 qlog("⚠️ หยุดยิง QuikStrike {} ชม.".format(QS_PAUSE_OUTAGE // 3600))
-    if qs_sym:
-        cache["qs_sym"] = qs_sym
-    st["cache"] = cache
-    qs_state_save(st)
+    if use_qs:
+        # รอบ Barchart-only ไม่เขียน state ของ QuikStrike (ไม่ได้แตะอะไร จะได้ไม่ชนกับ process อื่น)
+        if qs_sym:
+            cache["qs_sym"] = qs_sym
+        st["cache"] = cache
+        qs_state_save(st)
     qs_paused = now_ts < st.get("paused_until", 0)
 
     # ค่าที่ใช้ มาจาก cache เสมอ (รอบนี้เพิ่งดึง หรือของเดิมของ series เดียวกัน)
@@ -1663,11 +1691,13 @@ def main():
         "oi": {str(s): [p, c] for s, p, c in oi_rows},
     })
     writes = [(JSON_OUT, json.dumps(data, ensure_ascii=False)),
-              (CLIP_OUT, clip), (PREV_STATE, new_state),
+              (CLIP_OUT, clip),
               (CHART_OUT, chart_html(snap, now, ev0))]
+    if baseline:
+        writes.append((PREV_STATE, new_state))
     if curve:
         writes.append((CURVE_OUT, json.dumps(curve)))
-    if ev0:
+    if ev_fresh:          # ts ของไฟล์นี้ = เวลาที่ดึงจาก QuikStrike จริง ไม่ใช่เวลาที่ยืม cache
         writes.append((EVENTVOL_OUT, json.dumps({"ts": now.timestamp(), "point": ev0})))
     for path, content in writes:
         tmp = path + ".tmp"
@@ -1687,6 +1717,12 @@ def main():
               data["oi"]["put"], data["oi"]["call"],
               meta["iv"], snap.get("iv_src"),
               len(id_rows), len(oi_rows), len(vs_rows), len(clip)))
+    return {
+        "ts": now.timestamp(), "series": meta["series"], "und_sym": snap.get("und_sym"),
+        "F": meta["F"], "dte": meta["dte"], "iv_settle_chg": snap.get("iv_settle_chg"),
+        "id_rows": id_rows, "oi_rows": oi_rows,
+        "iv_live_rows": snap.get("iv_live_rows") or [],
+    }
 
 
 if __name__ == "__main__":

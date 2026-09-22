@@ -61,6 +61,7 @@ live = FileCache(gf.JSON_PATH, _json)
 clip = FileCache(cme_fetcher.CLIP_OUT, _text)
 chart = FileCache(cme_fetcher.CHART_OUT, _text)
 live_js = FileCache(gf.LIVE_JS_PATH, _text)
+tick = FileCache("/tmp/cme_ticker.json", _json)       # ticker.OUT (ไม่ import กันวงวน)
 
 
 def _age(v):
@@ -113,6 +114,13 @@ def r_flat(query):
     return 200, TEXT, "\n".join(lines) + "\n"
 
 
+def r_ticker(query):
+    v, _ = tick.get()
+    if v is None:
+        return 503, TEXT, "ticker ยังไม่มี (รอรอบ 5 นาทีแรก)\n"
+    return 200, JSON, json_body(dict(v, schema_version=SCHEMA_VERSION))
+
+
 def _file_route(cache, ctype, what):
     def r(query):
         v, _ = cache.get()
@@ -128,6 +136,8 @@ def build(health):
     api.route("/api/flat", r_flat)
     api.route("/api/health", lambda q: (200, JSON, json_body(health.snapshot())))
     api.route("/api/clip", _file_route(clip, TEXT, "clip"))
+    # แยกจาก /api/state ตามที่ตัดสินใจไว้: client ที่สนใจแค่ ticker poll ได้โดยไม่ลากก้อนใหญ่
+    api.route("/api/ticker", r_ticker)
     api.route("/api/chart", _file_route(chart, HTML, "chart"))
     # หน้ากราฟโหลด "gold_live.js" แบบ relative -- เปิดผ่าน /api/chart จะขอ /api/gold_live.js
     api.route("/api/gold_live.js", _file_route(live_js, JS, "gold_live.js"))

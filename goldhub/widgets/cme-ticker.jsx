@@ -123,6 +123,10 @@ const oiCell = (oi, intra) => {
 // — แยกจาก macos.green/red ที่ยังใช้กับ +n และ IV change (ต้องสดเหมือนเดิม)
 const STRIKE_UP = '#83e0a3';    // เขียว mint นวล = เหนือราคา
 const STRIKE_DOWN = '#ff6b78';  // แดง rose เย็น = ต่ำกว่าราคา (#ff8f8f เดิมออก salmon/ส้ม)
+// สี put/call ของคอลัมน์ P / C = ค่าเดียวกับการ์ด P/C (ส้ม = put, ฟ้า = call) ให้อ่านข้ามการ์ดได้ตรงกัน
+const PUT_C = '#ffb340';
+const CALL_C = '#64d2ff';
+const plus = (n) => (n > 0 ? `+${n}` : '');   // ฝั่งที่ไม่มีของเข้า เว้นว่าง ไม่โชว์ +0 ให้รก
 const STRIKE_NEAR = 2.6;  // ครึ่งหนึ่งของ strike step 5 → นับว่า "ที่ราคา"
 const strikeColor = (k, Fnow) => {
   if (Fnow == null) return macos.label;
@@ -328,7 +332,7 @@ export const render = (state, dispatch) => {
             </span>
           )}
         </span>
-        <span style={{ fontSize: '9px', color: macos.tertiary }}>time strike +n Δ oi+in</span>
+        <span style={{ fontSize: '9px', color: macos.tertiary }}>time strike P C Δ oi+in</span>
       </div>
       <div style={{ marginTop: '4px' }}>
         {fixedRows(ticker || [], TICKER_ROWS, (t, i) => {
@@ -337,9 +341,12 @@ export const render = (state, dispatch) => {
             <Row key={i} cells={[
               { v: hhmm(t.ts), w: '40px', c: macos.tertiary },
               { v: t.strike, w: '44px', c: strikeColor(t.strike, Fnow) },
-              { v: `+${t.n}`, w: '42px', a: 'right', c: macos.green },
+              // แยก put/call แทน +n รวม (22 ก.ย. 26) -- ย้ายมาจาก Δ CHANGES ของการ์ด P/C
+              // เกณฑ์ขึ้น ticker ยังเป็นยอดรวม P+C ≥ 10 เหมือนเดิม
+              { v: plus(t.dp), w: '30px', a: 'right', c: PUT_C },
+              { v: plus(t.dc), w: '30px', a: 'right', c: CALL_C },
               { v: t.d != null ? `Δ${t.d.toFixed(2)}` : '–', w: '50px', a: 'right', c: macos.secondary },
-              { v: oi.txt, w: '82px', a: 'right', c: oi.color },
+              { v: oi.txt, w: '64px', a: 'right', c: oi.color },
             ]} />
           );
         })}

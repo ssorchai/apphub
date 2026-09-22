@@ -635,11 +635,12 @@ export const render = (state, dispatch) => {
           <SdBlock sd={data.sd} />
         </div>
 
-        {/* คอลัมน์กลาง: Intraday (Top Active + Δ) */}
+        {/* คอลัมน์กลาง: Intraday (Top Active) -- Δ CHANGES ฝั่ง Intraday ถอดออก 22 ก.ย. 26
+            เพราะซ้ำกับการ์ด CME Ticker (ticker ราย 5 นาที + Most Active 60 นาที แยก P/C แล้ว)
+            ฝั่ง OI ยังเก็บไว้: ticker ไม่ได้ติดตาม OI */}
         <div style={{ flex: 1, minWidth: 0, borderLeft: `0.5px solid ${macos.divider}`, paddingLeft: '16px' }}>
           <div style={{ ...secTitle, marginTop: '6px', color: macos.label }}>Intraday</div>
           <TopActive top={data.intraday && data.intraday.top} sc={strikeColor} />
-          <ChangeRow rows={data.changes && data.changes.intraday} since={data.changes && data.changes.since} sc={strikeColor} />
         </div>
 
         {/* คอลัมน์ขวา: Open Interest (Top Active + Δ) */}

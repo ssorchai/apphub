@@ -215,9 +215,13 @@ fetcher ยังคำนวณ `changes.intraday` ใน JSON ต่อ (ใ�
   `isSecureContext` = true ที่ 127.0.0.1
 
 **ต่อจากนี้ (ยังไม่ทำ)**
-1. **เลิกพึ่ง CDN + Babel ในเบราว์เซอร์** — ตอนนี้โหลด React/ReactDOM/Babel จาก jsdelivr ทุกครั้ง (~3 MB)
-   ทำ build step เล็กๆ: transpile .jsx เป็น .js ตอน daemon start (หรือ vendor ไฟล์ไว้ใน repo)
-   ได้ทั้งเปิดเร็วขึ้นและใช้ได้ตอนไม่มีเน็ตภายนอก
+1. ~~เลิกพึ่ง CDN + Babel ในเบราว์เซอร์~~ ✅ 22 ก.ย. 12:45 — **ไม่ต้องดาวน์โหลดอะไรเลย**
+   ทุกอย่างมีใน Übersicht.app อยู่แล้ว: React/ReactDOM 16.13.1 (UMD) + node v16 + @babel 7.11.6
+   - `web/vendor/` = React สองไฟล์ (~130 KB, MIT) รุ่นเดียวกับที่ Übersicht ใช้ -> desktop กับเว็บเหมือนกันเป๊ะ
+   - `web/build.js` แปลง .jsx -> `web/dist/gold-dashboard.js` (ห่อเป็น factory ที่ window.APPHUB_WIDGETS)
+   - goldhub build เองเมื่อ .jsx ใหม่กว่า dist (แก้แล้ว reload หน้าเว็บได้เลย) / .jsx พัง = log บรรทัด error
+     พร้อมตำแหน่ง แล้วเสิร์ฟ dist ตัวล่าสุดที่ดีต่อ / dist ถูก commit ไว้ เครื่องที่ไม่มี Übersicht ก็เสิร์ฟได้
+   - เปิดหน้าหนึ่งครั้ง = 4 ไฟล์จาก 127.0.0.1 ล้วน (เดิม ~3 MB จาก jsdelivr ทุกครั้ง) ไม่มี error ใน console
 2. **layout มือถือ** — การ์ดกว้างตายตัว 1,062px จอเล็กต้องเรียงเป็นแนวตั้ง
    (ราคาสด -> F/SD -> กราฟ -> ticker) ผ่าน `window.innerWidth` ใน WEB เท่านั้น desktop ไม่กระทบ
 3. **เปิดจากเครื่องอื่น** (ผูกกับเฟส 4) — bind IP ของ Tailscale + token: หน้าเว็บรับ `?token=`

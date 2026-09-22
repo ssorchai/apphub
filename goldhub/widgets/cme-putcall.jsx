@@ -165,34 +165,6 @@ const TopActive = ({ top, sc }) => {
   );
 };
 
-// ของที่เติมเข้ามาตั้งแต่ refresh รอบก่อน (แบบวงเล็บ +28 ของบอท telegram)
-// ป้าย P/C คงสีฝั่ง (ส้ม/ฟ้า) แต่ตัวเลขให้สีตามทิศ: บวกเขียว / ลบแดง — เห็นค่าลบชัดทันที
-const ChangeRow = ({ rows, since, sc }) => {
-  const dnum = (v) => (
-    <span style={{ color: v > 0 ? macos.green : macos.red, fontWeight: '700' }}>
-      {v > 0 ? '+' : '−'}{fmt(Math.abs(v))}
-    </span>
-  );
-  return (
-    <div style={{ marginTop: '10px' }}>
-      <div style={secTitle}>Δ Changes{since ? ` · since ${since}` : ''}</div>
-      {(!rows || !rows.length) && (
-        <div style={{ fontSize: '12px', color: macos.tertiary, marginTop: '2px' }}>no fills</div>
-      )}
-      {(rows || []).map((r) => (
-        <div key={r.strike} style={{ display: 'flex', alignItems: 'baseline', gap: '8px', fontSize: '12px', marginTop: '3px' }}>
-          <span style={{ fontWeight: '600', color: sc(r.strike), minWidth: '38px' }}>{r.strike}</span>
-          <span style={{ marginLeft: 'auto' }}>
-            {r.dp !== 0 && <span style={{ color: macos.orange, fontWeight: '600' }}>P {dnum(r.dp)}</span>}
-            {r.dp !== 0 && r.dc !== 0 && <span style={{ color: macos.tertiary }}> · </span>}
-            {r.dc !== 0 && <span style={{ color: macos.blue, fontWeight: '600' }}>C {dnum(r.dc)}</span>}
-          </span>
-        </div>
-      ))}
-    </div>
-  );
-};
-
 // กรอบ SD: mean = ราคาเปิด Yahoo, DTE 0.6, vol = event vol ของ 0DTE (คำนวณโดย fetcher)
 const SdBlock = ({ sd }) => {
   if (!sd) {
@@ -637,17 +609,16 @@ export const render = (state, dispatch) => {
 
         {/* คอลัมน์กลาง: Intraday (Top Active) -- Δ CHANGES ฝั่ง Intraday ถอดออก 22 ก.ย. 26
             เพราะซ้ำกับการ์ด CME Ticker (ticker ราย 5 นาที + Most Active 60 นาที แยก P/C แล้ว)
-            ฝั่ง OI ยังเก็บไว้: ticker ไม่ได้ติดตาม OI */}
+            ฝั่ง OI ถอดตามไปด้วย (OI ของ Barchart อัปเดตวันละครั้ง ช่องนี้ขึ้น no fills แทบทั้งวัน) */}
         <div style={{ flex: 1, minWidth: 0, borderLeft: `0.5px solid ${macos.divider}`, paddingLeft: '16px' }}>
           <div style={{ ...secTitle, marginTop: '6px', color: macos.label }}>Intraday</div>
           <TopActive top={data.intraday && data.intraday.top} sc={strikeColor} />
         </div>
 
-        {/* คอลัมน์ขวา: Open Interest (Top Active + Δ) */}
+        {/* คอลัมน์ขวา: Open Interest (Top Active) */}
         <div style={{ flex: 1, minWidth: 0, borderLeft: `0.5px solid ${macos.divider}`, paddingLeft: '16px' }}>
           <div style={{ ...secTitle, marginTop: '6px', color: macos.label }}>Open Interest</div>
           <TopActive top={data.oi && data.oi.top} sc={strikeColor} />
-          <ChangeRow rows={data.changes && data.changes.oi} since={data.changes && data.changes.since} sc={strikeColor} />
         </div>
       </div>
 

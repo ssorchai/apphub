@@ -2,7 +2,8 @@ import { run } from 'uebersicht';
 
 // ============================================================================
 // Gold Dashboard — การ์ดรวม 3 ตัวที่เคยแยกกัน (22 ก.ย. 26)
-//   กรอบหลัก = cme-putcall · มุมขวาบน = gold-update · แปะซ้าย = cme-ticker (ยาวขึ้นเป็น ~24 แถว)
+//   กรอบหลัก = cme-putcall · มุมซ้ายบน = gold-update · แปะขวา = cme-ticker (ยาวขึ้น + Most Active 10)
+//   Top Active ของ Intraday กับ OI ซ้อนเป็นคอลัมน์เดียว ความกว้างกรอบหลักเลยกลับมาเท่าการ์ดเดิม
 // โหลดข้อมูลรอบเดียวต่อ 5 วินาที: /api/state (cme + ราคาสด) + /api/ticker จาก goldhub daemon
 // API ยิงไม่ได้ใน 2 วิ -> อ่านไฟล์ /tmp ทั้งสามแบบเดิม (footer ขึ้น "· file")
 // การ์ดเดิมสามตัวเก็บไว้ใน repo (goldhub/widgets/) เผื่อถอยกลับ
@@ -98,13 +99,13 @@ const macos = {
 // ---- ขนาด ----
 const PAD = 16;
 const TICK_W = 258;      // เนื้อหาคอลัมน์ ticker (เท่าการ์ดเดิม)
-const MAIN_W = 960;      // เนื้อหากรอบหลัก (กราฟกว้างเท่านี้)
-const GOLD_W = 236;      // บล็อกราคาสดมุมขวาบน
-const COL_GAP = 16;      // ระยะแต่ละฝั่งของเส้นคั่น ticker | หลัก
+const MAIN_W = 740;      // เนื้อหากรอบหลัก (กราฟกว้างเท่านี้)
+const GOLD_W = 254;      // บล็อกราคาสดมุมซ้ายบน
+const COL_GAP = 16;      // ระยะแต่ละฝั่งของเส้นคั่น หลัก | ticker
 const CARD_W = PAD + TICK_W + COL_GAP * 2 + MAIN_W + PAD;
 const CHART_H = 400;
-const TICKER_ROWS = 24;
-const ACTIVE_ROWS = 5;
+const TICKER_ROWS = 22;
+const ACTIVE_ROWS = 10;
 const HOLD_MS = 5000;
 
 const fmt = (v) => (v == null ? '--' : Number(v).toLocaleString());
@@ -465,7 +466,7 @@ const Chart = ({ data, liveF, mode, sdMode, dMode, hover, dispatch }) => {
 };
 
 // ============================================================================
-// ส่วน gold-update (มุมขวาบนของกรอบหลัก)
+// ส่วน gold-update (มุมซ้ายบนของกรอบหลัก)
 // ============================================================================
 const sessionState = () => {
   const now = new Date();
@@ -544,7 +545,7 @@ const GoldBlock = ({ live }) => {
   };
   if (!live) {
     return (
-      <div style={{ width: `${GOLD_W}px`, flexShrink: 0, ...vline, paddingLeft: '16px', color: macos.tertiary, fontSize: '12px' }}>
+      <div style={{ width: `${GOLD_W}px`, flexShrink: 0, color: macos.tertiary, fontSize: '12px' }}>
         ราคาสดยังไม่มา
       </div>
     );
@@ -557,7 +558,7 @@ const GoldBlock = ({ live }) => {
   return (
     <div onClick={open} onDoubleClick={(e) => e.stopPropagation()}
       title="Click = open vol2vol.com"
-      style={{ width: `${GOLD_W}px`, flexShrink: 0, ...vline, paddingLeft: '16px', display: 'flex', flexDirection: 'column' }}>
+      style={{ width: `${GOLD_W}px`, flexShrink: 0, display: 'flex', flexDirection: 'column' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '4px' }}>
         <div style={{ display: 'flex', gap: '4px' }}>
           {sessionState().map((s) => <SessionLight s={s} key={s.label} />)}
@@ -592,7 +593,7 @@ const GoldBlock = ({ live }) => {
 };
 
 // ============================================================================
-// ส่วน cme-ticker (คอลัมน์ซ้าย)
+// ส่วน cme-ticker (คอลัมน์ขวา)
 // ============================================================================
 let holdTimer = null;   // เก็บนอก render — render ถูกเรียกใหม่ทุกรอบ
 const clearHold = () => { if (holdTimer) { clearInterval(holdTimer); holdTimer = null; } };
@@ -861,8 +862,9 @@ export const render = (state, dispatch) => {
       onClick={handleCopy} onDoubleClick={handleOpenChart}
       title="Click = copy P/C data for TradingView · Double-click = open Intraday/OI chart · ⌥-drag = move">
       <div style={{ display: 'flex', gap: '18px' }}>
-        {/* ซ้าย: หัว + ราคา + สัดส่วน P/C + SD */}
-        <div style={{ flex: 1, minWidth: 0 }}>
+        <GoldBlock live={live} />
+        {/* กลาง: หัว + ราคา + สัดส่วน P/C + SD */}
+        <div style={{ flex: 1, minWidth: 0, ...vline, paddingLeft: '16px' }}>
           <div style={{ fontSize: '11px', fontWeight: '700', letterSpacing: '0.6px', whiteSpace: 'nowrap' }}>
             CME GOLD {data.series || ''}
             <span style={{ color: macos.tertiary, fontWeight: '600', marginLeft: '8px' }}>
@@ -889,15 +891,13 @@ export const render = (state, dispatch) => {
           <PcRow title="Open Interest" pc={data.oi} />
           <SdBlock sd={data.sd} />
         </div>
+        {/* ขวา: Top Active ของ Intraday กับ OI ซ้อนกันในคอลัมน์เดียว */}
         <div style={{ flex: 1, minWidth: 0, ...vline, paddingLeft: '16px' }}>
           <div style={{ ...secTitle, color: macos.label }}>Intraday</div>
           <TopActive top={data.intraday && data.intraday.top} sc={strikeColor} />
-        </div>
-        <div style={{ flex: 1, minWidth: 0, ...vline, paddingLeft: '16px' }}>
-          <div style={{ ...secTitle, color: macos.label }}>Open Interest</div>
+          <div style={{ ...secTitle, color: macos.label, marginTop: '12px' }}>Open Interest</div>
           <TopActive top={data.oi && data.oi.top} sc={strikeColor} />
         </div>
-        <GoldBlock live={live} />
       </div>
 
       <Chart data={data} liveF={liveF} mode={chartMode || 'id'} sdMode={sdMode || 'open'}
@@ -918,9 +918,9 @@ export const render = (state, dispatch) => {
 
   return (
     <div style={container} onMouseDown={altDrag}>
-      <TickerColumn tick={tick} live={live} hold={hold} resetting={resetting} dispatch={dispatch} />
-      <div style={{ ...vline, margin: `0 ${COL_GAP}px 0 ${COL_GAP}px` }} />
       {main}
+      <div style={{ ...vline, margin: `0 ${COL_GAP}px 0 ${COL_GAP}px` }} />
+      <TickerColumn tick={tick} live={live} hold={hold} resetting={resetting} dispatch={dispatch} />
     </div>
   );
 };

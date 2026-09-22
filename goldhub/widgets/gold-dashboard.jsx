@@ -7,10 +7,16 @@ import { run } from 'uebersicht';
 // โหลดข้อมูลรอบเดียวต่อ 5 วินาที: /api/state (cme + ราคาสด) + /api/ticker จาก goldhub daemon
 // API ยิงไม่ได้ใน 2 วิ -> อ่านไฟล์ /tmp ทั้งสามแบบเดิม (footer ขึ้น "· file")
 // การ์ดเดิมสามตัวเก็บไว้ใน repo (goldhub/widgets/) เผื่อถอยกลับ
+//
+// ไฟล์เดียวกันนี้เป็นหน้าเว็บด้วย: goldhub เสิร์ฟ /dashboard ซึ่งโหลดไฟล์นี้มา transpile ใน
+// เบราว์เซอร์แล้วรันแบบเดียวกับ Übersicht (goldhub/web/dashboard.html) -- แก้ที่นี่ที่เดียว
+// ต่างกันแค่ของที่ต้องใช้ shell: copy / เปิดลิงก์ / ปุ่ม refresh / Reset (ดู WEB ด้านล่าง)
 // ============================================================================
 
-const USE_API = true;            // false = โหมดไฟล์อย่างเดียว (สวิตช์ถอยกลับ)
-const API = 'http://127.0.0.1:8787';
+// WEB = รันในหน้าเว็บ /dashboard (หน้า host ตั้ง window.APPHUB_WEB ก่อนโหลดไฟล์นี้)
+const WEB = typeof window !== 'undefined' && !!window.APPHUB_WEB;
+const USE_API = true;            // false = โหมดไฟล์อย่างเดียว (สวิตช์ถอยกลับ ใช้ได้เฉพาะ Übersicht)
+const API = WEB ? '' : 'http://127.0.0.1:8787';   // เว็บ = origin เดียวกับ API
 const API_TIMEOUT = 2000;
 const TICKER_STATE = '$HOME/Library/Application Support/apphub/goldhub/state/ticker_state.json';
 const CMD = "cat /tmp/cme_putcall.json 2>/dev/null; echo; echo '@@LIVE@@'; cat /tmp/gold_data.json 2>/dev/null;"
@@ -28,13 +34,30 @@ const load = (dispatch) => {
     const [b, c = ''] = rest.split('@@TICK@@');
     dispatch({ type: 'DATA', cme: parse(a), live: parse(b), tick: parse(c), src: 'file' });
   });
-  if (!USE_API) return viaFile();
+  // เว็บไม่มีไฟล์ให้ถอยไปอ่าน: ยิงไม่ได้ก็คงข้อมูลเดิมไว้แล้วขึ้น "· offline"
+  const onFail = WEB ? () => dispatch({ type: 'OFFLINE' }) : viaFile;
+  if (!USE_API && !WEB) return viaFile();
   return Promise.all([
     fetchJson(API + '/api/state?fields=cme,live'),
     // ticker ยังไม่มี (503 ช่วงเพิ่ง start) ต้องไม่ลากทั้งการ์ดตกไปโหมดไฟล์
     fetchJson(API + '/api/ticker').catch(() => null),
   ]).then(([s, t]) => dispatch({ type: 'DATA', cme: s.cme, live: s.live, tick: t, src: 'api' }))
-    .catch(viaFile);
+    .catch(onFail);
+};
+
+// ---- action ที่ต่างกันระหว่าง Übersicht (มี shell) กับหน้าเว็บ ----
+const openUrl = (url, chrome) => {
+  if (WEB) { window.open(url, '_blank'); return; }
+  run(chrome ? `open -a 'Google Chrome' '${url}'` : `open '${url}'`);
+};
+// clipboard API ใช้ได้เฉพาะ secure context (localhost ผ่าน) -- เปิดผ่าน IP อื่นในอนาคต (Tailscale)
+// จะไม่ใช่ secure context เลยมีทางสำรองแบบ textarea + execCommand
+const copyWeb = (text) => {
+  if (navigator.clipboard && window.isSecureContext) return navigator.clipboard.writeText(text);
+  const ta = document.createElement('textarea');
+  ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+  document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove();
+  return Promise.resolve();
 };
 
 export const command = load;
@@ -62,6 +85,8 @@ export const updateState = (event, prev) => {
   switch (event.type) {
     // command เป็นฟังก์ชัน Übersicht จะยิง UB/COMMAND_RAN เองแบบไม่มี output -- ไม่ใช้ event นั้นเลย
     case 'DATA': return { ...prev, cme: event.cme, live: event.live, tick: event.tick, src: event.src };
+    case 'OFFLINE': return { ...prev, src: 'offline' };
+    case 'COPIED': return { ...prev, copied: event.at };
     case 'REFRESH_START': return { ...prev, refreshing: true };
     case 'REFRESH_DONE': return { ...prev, refreshing: false };
     case 'CHART_MODE': return { ...prev, chartMode: event.mode };
@@ -541,7 +566,7 @@ const GoldBlock = ({ live }) => {
     if (e.altKey) return;
     e.preventDefault();
     e.stopPropagation();
-    run("open -a 'Google Chrome' 'https://www.vol2vol.com'");
+    openUrl('https://www.vol2vol.com', true);
   };
   if (!live) {
     return (
@@ -711,7 +736,7 @@ const TickerColumn = ({ tick, live, hold, resetting, dispatch }) => {
     <div style={box} onClick={(e) => e.stopPropagation()} onDoubleClick={(e) => e.stopPropagation()}>
       <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
         <span style={{ fontSize: '11px', fontWeight: '700', letterSpacing: '0.6px' }}>CME TICKER · {meta.series}</span>
-        <div onMouseDown={startHold} onMouseUp={cancelHold} onMouseLeave={cancelHold}
+        {!WEB && <div onMouseDown={startHold} onMouseUp={cancelHold} onMouseLeave={cancelHold}
           title="Hold 5s to clear all history (ticker / most active / IV chart)"
           style={{ position: 'relative', overflow: 'hidden', userSelect: 'none', borderRadius: '999px',
                    background: 'rgba(255,255,255,0.10)', padding: '2px 8px', lineHeight: '1',
@@ -720,7 +745,7 @@ const TickerColumn = ({ tick, live, hold, resetting, dispatch }) => {
                         background: 'rgba(255,69,58,0.75)', transition: 'width 90ms linear', pointerEvents: 'none' }} />
           <span style={{ position: 'relative', fontSize: '9px', fontWeight: '700', letterSpacing: '0.3px',
                          color: resetting ? macos.yellow : hold > 0 ? macos.label : macos.tertiary }}>Reset</span>
-        </div>
+        </div>}
         <span style={{ marginLeft: 'auto', fontSize: '10px', color: stale ? macos.orange : macos.tertiary,
                        fontWeight: stale ? '700' : '400' }}>
           {stale ? '● ' : ''}{meta.system_time}
@@ -805,7 +830,9 @@ export const render = (state, dispatch) => {
   }
 
   const container = {
-    position: 'fixed', bottom: savedPos().bottom || '9px', left: savedPos().left || '14px',
+    // Übersicht = ลอยบน desktop ลากย้ายได้ / เว็บ = วางกลางหน้า
+    ...(WEB ? { position: 'relative', margin: '24px auto' }
+      : { position: 'fixed', bottom: savedPos().bottom || '9px', left: savedPos().left || '14px' }),
     width: `${CARD_W}px`, display: 'flex', alignItems: 'stretch',
     padding: `14px ${PAD}px`, borderRadius: macos.radius,
     color: macos.label, fontFamily: macos.font,
@@ -817,12 +844,20 @@ export const render = (state, dispatch) => {
   const handleCopy = (e) => {
     if (e.altKey) return;
     e.preventDefault();
+    if (WEB) {
+      fetch(API + '/api/clip').then((r) => r.text()).then(copyWeb)
+        .then(() => dispatch({ type: 'COPIED', at: Date.now() })).catch(() => {});
+      return;
+    }
     run(`curl -sf -m 2 ${API}/api/clip | pbcopy || cat /tmp/cme_putcall_clip.txt | pbcopy`);
   };
+  // ดับเบิลคลิก: บน desktop = เปิดหน้าเว็บของ dashboard นี้ (daemon ดับ -> กราฟไฟล์แบบเดิม)
+  //             บนหน้าเว็บ = เปิดกราฟ Intraday/OI แบบ CME
   const handleOpenChart = (e) => {
     if (e.altKey) return;
     e.preventDefault();
-    run(`curl -sf -m 2 -o /dev/null ${API}/api/health && open ${API}/api/chart`
+    if (WEB) { openUrl(API + '/api/chart'); return; }
+    run(`curl -sf -m 2 -o /dev/null ${API}/api/health && open ${API}/dashboard`
       + ' || (test -f /tmp/cme_chart.html && open /tmp/cme_chart.html)');
   };
   // ↻ = รัน fetcher เดี๋ยวนั้น (API อ่านอย่างเดียวตามกฎ สั่งดึง upstream ผ่าน API ไม่ได้)
@@ -838,7 +873,8 @@ export const render = (state, dispatch) => {
       .then(() => dispatch({ type: 'REFRESH_DONE' }))
       .catch(() => dispatch({ type: 'REFRESH_DONE' }));
   };
-  const refreshPill = (
+  // เว็บไม่มีปุ่ม refresh: ต้องรัน fetcher ซึ่งทำผ่าน API ไม่ได้ (กฎข้อ 1: API อ่านอย่างเดียว)
+  const refreshPill = WEB ? null : (
     <span onClick={handleRefresh} onDoubleClick={(e) => e.stopPropagation()} title="Refresh CME data now + copy"
       style={{ fontSize: '12px', fontWeight: '700', lineHeight: '1', color: refreshing ? macos.yellow : macos.secondary,
                background: 'rgba(255,255,255,0.15)', borderRadius: '999px', padding: '4px 10px', cursor: 'pointer' }}>
@@ -860,7 +896,8 @@ export const render = (state, dispatch) => {
   ) : (
     <div style={{ width: `${MAIN_W}px`, display: 'flex', flexDirection: 'column', cursor: 'pointer' }}
       onClick={handleCopy} onDoubleClick={handleOpenChart}
-      title="Click = copy P/C data for TradingView · Double-click = open Intraday/OI chart · ⌥-drag = move">
+      title={WEB ? 'Click = copy P/C data for TradingView · Double-click = open CME-style chart'
+                 : 'Click = copy P/C data for TradingView · Double-click = open web dashboard · ⌥-drag = move'}>
       <div style={{ display: 'flex', gap: '18px' }}>
         <GoldBlock live={live} />
         {/* กลาง: หัว + ราคา + สัดส่วน P/C + SD */}
@@ -907,17 +944,23 @@ export const render = (state, dispatch) => {
                     display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <span style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
           {refreshPill}
-          <span style={{ fontSize: '10px', color: macos.tertiary }}>click → copy for TV · double-click → chart</span>
+          <span style={{ fontSize: '10px', color: macos.tertiary }}>
+            click → copy for TV · double-click → {WEB ? 'CME chart' : 'web dashboard'}
+            {WEB && state.copied && Date.now() - state.copied < 3000 && (
+              <span style={{ color: macos.green, marginLeft: '8px' }}>copied ✓</span>
+            )}
+          </span>
         </span>
         <span style={{ fontSize: '10px', color: macos.tertiary }}>
           Sync {data.system_time || '--'}{src === 'file' ? ' · file' : ''}
+          {src === 'offline' && <span style={{ color: macos.orange }}> · offline</span>}
         </span>
       </div>
     </div>
   );
 
   return (
-    <div style={container} onMouseDown={altDrag}>
+    <div style={container} onMouseDown={WEB ? undefined : altDrag}>
       {main}
       <div style={{ ...vline, margin: `0 ${COL_GAP}px 0 ${COL_GAP}px` }} />
       <TickerColumn tick={tick} live={live} hold={hold} resetting={resetting} dispatch={dispatch} />

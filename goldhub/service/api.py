@@ -63,6 +63,12 @@ chart = FileCache(cme_fetcher.CHART_OUT, _text)
 live_js = FileCache(gf.LIVE_JS_PATH, _text)
 tick = FileCache("/tmp/cme_ticker.json", _json)       # ticker.OUT (ไม่ import กันวงวน)
 
+# หน้าเว็บ dashboard = หน้า host + ตัว widget ไฟล์เดียวกับที่ Übersicht ใช้ (อ่านจาก repo ตาม mtime
+# แก้ .jsx แล้ว reload หน้าเว็บได้เลย ไม่ต้อง restart daemon)
+_GOLDHUB = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+dash_html = FileCache(os.path.join(_GOLDHUB, "web", "dashboard.html"), _text)
+dash_jsx = FileCache(os.path.join(_GOLDHUB, "widgets", "gold-dashboard.jsx"), _text)
+
 
 def _age(v):
     ts = (v or {}).get("ts")
@@ -141,6 +147,8 @@ def build(health):
     api.route("/api/chart", _file_route(chart, HTML, "chart"))
     # หน้ากราฟโหลด "gold_live.js" แบบ relative -- เปิดผ่าน /api/chart จะขอ /api/gold_live.js
     api.route("/api/gold_live.js", _file_route(live_js, JS, "gold_live.js"))
+    api.route("/dashboard", _file_route(dash_html, HTML, "dashboard.html"))
+    api.route("/dashboard/widget.jsx", _file_route(dash_jsx, JS, "gold-dashboard.jsx"))
     api.route("/", lambda q: (200, JSON, json_body({"service": "goldhub",
                                                      "schema_version": SCHEMA_VERSION,
                                                      "routes": sorted(api.routes)})))

@@ -198,6 +198,35 @@ fetcher ยังคำนวณ `changes.intraday` ใน JSON ต่อ (ใ�
 
 ---
 
+## เฟส 3.5 — dashboard เป็นหน้าเว็บ ⏳ เริ่ม 22 ก.ย. 2026
+
+**ทำแล้ว (22 ก.ย.)**
+- `http://127.0.0.1:8787/dashboard` เสิร์ฟโดย goldhub เอง ดับเบิลคลิกการ์ดบน desktop = เปิดหน้านี้
+  (daemon ดับ -> ถอยไปเปิด /tmp/cme_chart.html แบบเดิม)
+- **โค้ดชุดเดียว**: หน้าเว็บ (`goldhub/web/dashboard.html`) โหลด `widgets/gold-dashboard.jsx` ไฟล์เดียวกับ
+  Übersicht มา transpile ด้วย Babel ในเบราว์เซอร์ แล้ววน initialState -> command -> updateState -> render
+  แบบเดียวกับ Übersicht / ตัว widget เช็ค `WEB` เฉพาะจุดที่ต้องใช้ shell
+  - copy -> `navigator.clipboard` (มีทางสำรอง textarea ตอนไม่ใช่ secure context เช่นเปิดผ่าน IP อื่น)
+  - ดับเบิลคลิกบนเว็บ = เปิดกราฟแบบ CME (/api/chart)
+  - **ไม่มีปุ่ม refresh และ Reset บนเว็บ** — ต้องรัน fetcher / ลบไฟล์ ซึ่งผ่าน API ไม่ได้ (กฎข้อ 1)
+  - ยิง API ไม่ได้ = คงข้อมูลเดิม ขึ้น `· offline` (เว็บไม่มีไฟล์ /tmp ให้ถอย)
+- เสิร์ฟ .jsx จาก repo ตาม mtime -> แก้หน้าตาแล้ว reload หน้าเว็บได้เลย ไม่ต้อง restart daemon
+- ทดสอบใน browser pane: หน้าตาเหมือน desktop, hover กราฟได้, console ไม่มี error,
+  `isSecureContext` = true ที่ 127.0.0.1
+
+**ต่อจากนี้ (ยังไม่ทำ)**
+1. **เลิกพึ่ง CDN + Babel ในเบราว์เซอร์** — ตอนนี้โหลด React/ReactDOM/Babel จาก jsdelivr ทุกครั้ง (~3 MB)
+   ทำ build step เล็กๆ: transpile .jsx เป็น .js ตอน daemon start (หรือ vendor ไฟล์ไว้ใน repo)
+   ได้ทั้งเปิดเร็วขึ้นและใช้ได้ตอนไม่มีเน็ตภายนอก
+2. **layout มือถือ** — การ์ดกว้างตายตัว 1,062px จอเล็กต้องเรียงเป็นแนวตั้ง
+   (ราคาสด -> F/SD -> กราฟ -> ticker) ผ่าน `window.innerWidth` ใน WEB เท่านั้น desktop ไม่กระทบ
+3. **เปิดจากเครื่องอื่น** (ผูกกับเฟส 4) — bind IP ของ Tailscale + token: หน้าเว็บรับ `?token=`
+   แล้วแนบใน fetch ทุกตัว / Host check ต้องเพิ่มชื่อเครื่องใน Tailscale
+4. poll ด้วย `If-None-Match` ให้ได้ 304 (มือถือประหยัดเน็ต) — server รองรับแล้ว ฝั่งเว็บยังไม่ส่ง
+5. เพิ่มส่วน weatherhub ในหน้าเดียวกัน (อนาคตอยากรวมทุกอย่าง) ตอนที่ weatherhub มี API
+
+---
+
 ## เฟส 4 — มือถือ + weatherhub
 
 **มือถือ**

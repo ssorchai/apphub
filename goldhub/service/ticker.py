@@ -11,7 +11,8 @@ Most Active แบบ rate / delta แช่ ณ ตอน log) ที่ต่�
   - **กับดักข้อ 3 (ใหม่): ช่องว่างระหว่างรอบนานเกิน** เครื่องหลับ/ปิดไปหลายชั่วโมง ยอดทั้งช่วง
     จะถูกนับเป็น event ก้อนเดียวที่ไม่เคยเกิด -> ตั้ง baseline ใหม่เฉยๆ
   - Barchart delayed 10-15 นาที: เวลาใน ticker = เวลาที่เราเห็น ไม่ใช่เวลาที่เทรดจริง
-  - ATM IV คิดจาก mid bid/ask (iv_live_rows) แทน ATMVol ของ QuikStrike
+  - ATM IV คิดจาก mid bid/ask (iv_live_rows) แทน ATMVol ของ QuikStrike อ่านที่ F ของ Barchart
+    (เวลาเดียวกับ quote) ส่วน delta ใช้ราคาสด
   - state อยู่ใน Store (Application Support) รอด reboot / widget ล้างได้ด้วยการลบไฟล์นั้น
     (อ่านจากไฟล์ทุกรอบ ไม่ถือไว้ในหน่วยความจำ จะได้ลบแล้วมีผลทันทีรอบถัดไป)
 
@@ -119,7 +120,11 @@ def update(snap, store):
     contribs = [x for x in contribs + new_contribs if x["ts"] > ts - ACTIVE_WINDOW_MIN * 60]
     ticker_log = (ticker_log + [x for x in new_contribs if x["n"] >= TICKER_MIN_CONTRACTS])[-TICKER_KEEP:]
 
-    iv = C.iv_at(iv_rows, F) if iv_rows and F else None
+    # IV อ่านที่ F ของ Barchart เอง ไม่ใช่ราคาสด: smile ทั้งเส้นสร้างจาก quote ของ Barchart ที่ช้า
+    # 10-15 นาที อ่านที่ราคาสด = เอาสองช่วงเวลามาปนกัน (22 ก.ย. 26 11:02 ห่างกัน 3.6 จุด)
+    # ส่วน delta/dist ข้างบนยังใช้ราคาสดตั้งใจ: อยากรู้ว่า strike ห่างจากราคา "ตอนนี้" แค่ไหน
+    F_iv = snap["F"]
+    iv = C.iv_at(iv_rows, F_iv) if iv_rows and F_iv else None
     iv = round(iv, 2) if iv else None
     iv_chg = snap.get("iv_settle_chg")
     if iv is not None and (not iv_hist or iv_hist[-1]["iv"] != iv or ts - iv_hist[-1]["ts"] >= 240):
@@ -156,6 +161,7 @@ def update(snap, store):
             "series": series, "dte": round(dte, 4) if dte else None,
             "iv": iv, "iv_chg": iv_chg,
             "F": round(F, 2) if F else None, "F_src": F_src, "src_F": snap["F"],
+            "iv_F": F_iv,                      # F ที่ใช้อ่าน IV (ของ Barchart เสมอ)
             "src": "barchart", "delay": "10-15m",
             "iv_window_min": IV_WINDOW_MIN, "active_window_min": ACTIVE_WINDOW_MIN,
             "threshold": TICKER_MIN_CONTRACTS,

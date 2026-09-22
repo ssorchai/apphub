@@ -44,7 +44,10 @@ store = Store(SERVICE)
 health = Health(store)
 
 
-_qs = {"ts": 0.0, "series": None}     # QuikStrike ครั้งล่าสุดที่ daemon สั่ง
+# QuikStrike ครั้งล่าสุดที่ daemon สั่ง -- เก็บลง store ด้วย ไม่งั้นทุกครั้งที่ restart
+# (launchd KeepAlive / แก้โค้ด) จะนับเป็น "รอบแรก" แล้วยิง QuikStrike ซ้ำทันที
+# 22 ก.ย. 26 restart 11:07:42 ยิงซ้ำห่างจากรอบ 11:07 แค่ 42 วินาที
+_qs = dict({"ts": 0.0, "series": None}, **(store.read_json("qs_last") or {}))
 _ticker_err = {"msg": None}
 
 
@@ -54,7 +57,7 @@ def want_qs(now):
     และกันยิงถี่: รอบ :07 ที่เพิ่งยิงไปไม่ถึง 20 นาที (เพิ่ง restart) ข้ามไปก่อน
     -> ห่างกันอย่างน้อย 20 นาทีเสมอ request ไป CME ไม่มีทางมากกว่าเดิม"""
     gap = now - _qs["ts"]
-    if _qs["ts"] == 0 or gap > QS_MAX_GAP:
+    if _qs["ts"] == 0 or gap > QS_MAX_GAP or gap < 0:      # < 0 = นาฬิกาถอย ถือว่าไม่รู้
         return True
     return datetime.fromtimestamp(now).minute == CME_AT_MINUTE and gap >= QS_MIN_GAP
 
@@ -63,10 +66,14 @@ def _fetch(use_qs):
     if use_qs:
         _qs["ts"] = time.time()       # นับเป็น "ยิงแล้ว" แม้พัง/โดนเบรก -- ไม่วนยิงซ้ำทุก 5 นาที
     # baseline ของ "Δ CHANGES SINCE" ขยับเฉพาะรอบรายชั่วโมง ให้ยังเทียบกับชั่วโมงก่อนเหมือนเดิม
-    res = cme_fetcher.main(use_qs=use_qs, baseline=use_qs)
-    if use_qs and res:
-        _qs["series"] = res["series"]
-    return res
+    try:
+        res = cme_fetcher.main(use_qs=use_qs, baseline=use_qs)
+        if use_qs and res:
+            _qs["series"] = res["series"]
+        return res
+    finally:
+        if use_qs:
+            store.write_json("qs_last", _qs)
 
 
 def job_cme():

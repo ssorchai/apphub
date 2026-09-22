@@ -32,7 +32,7 @@ STATE_NAME = "ticker_state"
 IV_WINDOW_MIN = 120         # กราฟ IV มองยาว 2 ชม.
 ACTIVE_WINDOW_MIN = 60      # sliding window ของ Most Active เท่านั้น
 TICKER_MIN_CONTRACTS = 10   # เกณฑ์ขึ้น ticker (put+call รวมในรอบนั้น)
-TICKER_ROWS = 12
+TICKER_ROWS = 30            # การ์ดรวม (gold-dashboard) โชว์ ~24 แถว / การ์ดเดิมตัดเหลือ 12 เอง
 TICKER_KEEP = 50            # FIFO ตามจำนวน ไม่ใช่ตามอายุ
 ACTIVE_ROWS = 5
 MAX_GAP_SEC = 12 * 60       # เกินนี้ = ขาดช่วง (หลับ/ปิด/แหล่งล่ม) ตั้ง baseline ใหม่ ไม่สร้าง event

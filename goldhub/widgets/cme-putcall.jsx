@@ -4,7 +4,32 @@ import { run } from 'uebersicht';
 // (เขียนทุก ~5 วินาที) ต่อท้ายหลังตัวคั่น -- รอบ 5 วินาทีเพื่อให้เส้น Future ในกราฟขยับตามราคา
 const LIVE_SEP = '@@LIVE@@';
 const CMD = `cat /tmp/cme_putcall.json; echo; echo '${LIVE_SEP}'; cat /tmp/gold_data.json 2>/dev/null`;
-export const command = CMD;
+
+// เฟส 2 (22 ก.ย. 26): ทางหลักคือ API ของ goldhub daemon ถ้ายิงไม่ได้ใน 2 วินาที
+// (daemon ดับ / ยังไม่ขึ้นหลัง boot) ถอยไปอ่านไฟล์ /tmp แบบเดิมเอง
+// USE_API = false = กลับเป็นโหมดไฟล์อย่างเดียว (สวิตช์ถอยกลับของเฟส 2)
+const USE_API = true;
+const API = 'http://127.0.0.1:8787';
+const API_TIMEOUT = 2000;
+
+const fetchJson = (url) => Promise.race([
+  fetch(url).then((r) => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); }),
+  new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), API_TIMEOUT)),
+]);
+
+// ส่งออกเป็น string รูปแบบเดิม (cme JSON + ตัวคั่น + gold JSON) ให้ render ไม่ต้องรู้ว่ามาทางไหน
+const load = (dispatch) => {
+  const viaFile = () => run(CMD).then((out) => dispatch({ type: 'DATA', output: out, src: 'file' }));
+  if (!USE_API) return viaFile();
+  return fetchJson(API + '/api/state?fields=cme,live')
+    .then((s) => dispatch({
+      type: 'DATA', src: 'api',
+      output: JSON.stringify(s.cme) + '\n' + LIVE_SEP + JSON.stringify(s.live),
+    }))
+    .catch(viaFile);
+};
+
+export const command = load;
 export const refreshFrequency = 5000;
 
 // state แบบ redux ของ Übersicht: รองรับปุ่ม refresh (รัน fetcher ทันที + copy อัตโนมัติ)
@@ -25,14 +50,15 @@ const savePref = (k, v) => {
 // sdMode: 'open' = anchor ราคาเปิด + DTE 0.6 (ตรงกับกล่อง SD Range) / 'cme' = รอบ F + DTE ที่เหลือจริง
 // dMode: เส้น delta แบบ CME -- 'off' (ค่าเริ่มต้น) / 'all' = 5-45Δ ครบสิบเส้น
 export const initialState = {
-  output: null, refreshing: false, hover: null,
+  output: null, src: null, refreshing: false, hover: null,
   chartMode: pref('chartMode', 'id'), sdMode: pref('sdMode', 'open'), dMode: pref('dMode', 'off'),
 };
 export const updateState = (event, prev) => {
   switch (event.type) {
-    case 'UB/COMMAND_RAN': return { ...prev, output: event.output };
+    case 'DATA': return { ...prev, output: event.output, src: event.src };
+    case 'UB/COMMAND_RAN': return event.output ? { ...prev, output: event.output } : prev;
     case 'REFRESH_START': return { ...prev, refreshing: true };
-    case 'REFRESH_DONE': return { ...prev, refreshing: false, output: event.output || prev.output };
+    case 'REFRESH_DONE': return { ...prev, refreshing: false };
     case 'CHART_MODE': return { ...prev, chartMode: event.mode };
     case 'SD_MODE': return { ...prev, sdMode: event.mode };
     case 'DELTA_MODE': return { ...prev, dMode: event.mode };
@@ -462,7 +488,7 @@ const Chart = ({ data, liveF, mode, sdMode, dMode, hover, dispatch }) => {
 };
 
 export const render = (state, dispatch) => {
-  const { output, refreshing, chartMode, sdMode, dMode, hover } = state || {};
+  const { output, src, refreshing, chartMode, sdMode, dMode, hover } = state || {};
   const [cmeTxt, liveTxt] = (output || '').split(LIVE_SEP);
   let data = null;
   try { data = JSON.parse(cmeTxt); } catch (e) { data = null; }
@@ -490,7 +516,7 @@ export const render = (state, dispatch) => {
   const handleCopy = (e) => {
     if (e.altKey) return;
     e.preventDefault();
-    run('cat /tmp/cme_putcall_clip.txt | pbcopy');
+    run(`curl -sf -m 2 ${API}/api/clip | pbcopy || cat /tmp/cme_putcall_clip.txt | pbcopy`);
   };
 
   // ดับเบิลคลิก = เปิดกราฟ Intraday/OI แบบ CME (fetcher เขียนไว้ทุกรอบ หน้า reload ตัวเองทุก 5 นาที)
@@ -498,7 +524,9 @@ export const render = (state, dispatch) => {
   const handleOpenChart = (e) => {
     if (e.altKey) return;
     e.preventDefault();
-    run('test -f /tmp/cme_chart.html && open /tmp/cme_chart.html');
+    // ผ่าน API ได้ราคาสดจาก /api/gold_live.js ด้วย / daemon ดับค่อยเปิดไฟล์แบบเดิม
+    run(`curl -sf -m 2 -o /dev/null ${API}/api/health && open ${API}/api/chart`
+      + ' || (test -f /tmp/cme_chart.html && open /tmp/cme_chart.html)');
   };
 
   // ปุ่ม ↻ = รัน fetcher เดี๋ยวนั้น เสร็จแล้ว copy ให้อัตโนมัติ (กันกดซ้ำระหว่างรัน)
@@ -508,11 +536,13 @@ export const render = (state, dispatch) => {
     e.stopPropagation();
     if (refreshing) return;
     dispatch({ type: 'REFRESH_START' });
-    run('/usr/bin/python3 /Users/sorachai/src/my-cronjob/cme_fetcher.py')
+    // API อ่านอย่างเดียวตามกฎ (สั่งดึง upstream ผ่าน API ไม่ได้) ปุ่มนี้จึงยังรัน fetcher เอง
+    // ผลลงไฟล์ /tmp ซึ่ง API อ่านตาม mtime -> load() รอบนี้ก็ได้ของใหม่ทันที
+    run('/usr/bin/python3 /Users/sorachai/src/claude_code/apphub/goldhub/service/cme_fetcher.py')
       .then(() => run('cat /tmp/cme_putcall_clip.txt | pbcopy'))
-      .then(() => run(CMD))
-      .then((out) => dispatch({ type: 'REFRESH_DONE', output: out }))
-      .catch(() => dispatch({ type: 'REFRESH_DONE', output: null }));
+      .then(() => load(dispatch))
+      .then(() => dispatch({ type: 'REFRESH_DONE' }))
+      .catch(() => dispatch({ type: 'REFRESH_DONE' }));
   };
 
   const refreshPill = (
@@ -635,7 +665,7 @@ export const render = (state, dispatch) => {
           </span>
         </span>
         <span style={{ fontSize: '10px', color: macos.tertiary }}>
-          Sync {data.system_time || '--'}
+          Sync {data.system_time || '--'}{src === 'file' ? ' · file' : ''}
         </span>
       </div>
     </div>

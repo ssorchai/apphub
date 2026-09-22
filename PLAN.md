@@ -86,7 +86,7 @@ spread Dec->Oct 34.2 / `gold_live.js` อัปเดตทุก 5 วินา
 
 ---
 
-## เฟส 2 — เปิด HTTP API แล้วให้หน้าจอดึงผ่าน API
+## เฟส 2 — เปิด HTTP API แล้วให้หน้าจอดึงผ่าน API ✅ เสร็จ 22 ก.ย. 2026
 
 **ไฟล์ที่ทำ**
 - `common/hub/server.py` — `ThreadingHTTPServer`, routing สั้นๆ, `ETag`/`If-None-Match`,
@@ -105,6 +105,23 @@ spread Dec->Oct 34.2 / `gold_live.js` อัปเดตทุก 5 วินา
 
 **เสร็จเมื่อ** widget ใช้ API เป็นทางหลัก และ fallback ทำงานเมื่อ daemon ดับ
 **ถอยกลับ** widget มีสวิตช์ในไฟล์ ตั้งกลับเป็นโหมดไฟล์อย่างเดียว
+
+**ผลทดสอบ 22 ก.ย. 10:15–10:18**
+- ทุก route ตอบถูก: `/api/state` (มี `schema_version` + `age` เป็นวินาที) · `?fields=live` คืนแค่ที่ขอ ·
+  `/api/flat` 58 บรรทัด · `/api/health` · 404 · POST ได้ 501 (อ่านอย่างเดียวจริง)
+- `If-None-Match` ได้ 304 · CORS `*` มา · Host แปลก (`evil.example.com`) ได้ 403 = กัน DNS rebinding
+- `/api/clip` และ `/api/chart` ตรงกับไฟล์ /tmp ทุกไบต์ · เปิด `/api/chart` ในเบราว์เซอร์แล้ว
+  ราคาสดขึ้น (หน้ากราฟขอ `gold_live.js` แบบ relative จึงต้องมี route `/api/gold_live.js`)
+- **fallback ทดสอบของจริง**: ติดตั้ง widget ใหม่ตอน API ยังไม่ขึ้น → footer ขึ้น `Sync 10:07 · file`
+  ข้อมูลครบทุกช่อง → เปิด API → footer เหลือ `Sync 10:16` (มาทาง API)
+
+**ตัดสินใจระหว่างทำ**
+- API **อ่านจากไฟล์ /tmp ตาม mtime** ไม่ใช่เก็บผลของ daemon ไว้ในหน่วยความจำ เพราะปุ่ม refresh
+  ยังรัน fetcher เป็น process แยก ถ้าจำแค่ผลของ daemon กด refresh แล้วจอจะค้างของเก่าจนรอบชั่วโมง
+- ปุ่ม refresh **ยังรัน fetcher เอง** ไม่ได้เปลี่ยนเป็นยิง API เพราะกฎข้อ 1 (API ห้ามสั่งดึง upstream)
+  แต่ย้าย path ไปเป็นสำเนาใน apphub แล้ว (เนื้อหาเหมือน my-cronjob ทุกไบต์)
+- พอร์ตชน/เปิด API ไม่ได้ → log แล้วเดินต่อ งานดึงข้อมูลห้ามพังเพราะ API
+- widget ยังส่งข้อมูลต่อให้ render ในรูปแบบ string เดิม (cme + `@@LIVE@@` + gold) โค้ดวาดกราฟไม่ต้องแตะเลย
 
 ---
 

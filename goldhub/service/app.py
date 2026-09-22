@@ -3,7 +3,8 @@
 เฟสนี้ตั้งใจให้ "พฤติกรรมเหมือนเดิมทุกอย่าง" เปลี่ยนแค่ตัวขับเคลื่อน:
   - งาน cme ยังคาบ 1 ชั่วโมง นาทีที่ :07 เท่ากับบรรทัด cron เดิม
   - ยังเขียนไฟล์ /tmp ชุดเดิมครบ (cme_putcall.json / clip / chart / curve / eventvol)
-  - ยังไม่มี HTTP API (เฟส 2) ยังไม่เปลี่ยนคาบ cme เป็น 5 นาที (เฟส 3)
+  - HTTP API ที่ 127.0.0.1:8787 (เฟส 2, 22 ก.ย.) อ่านจากไฟล์อย่างเดียว ดู api.py
+  - ยังไม่เปลี่ยนคาบ cme เป็น 5 นาที (เฟส 3)
   - งาน gold คาบ 5 วินาทีต่อเนื่อง (21 ก.ย.) — เดิม cron ปลุกทุก 5 นาทีให้รันรอบละ 290 วิ
     แล้วเงียบไป ~10 วินาทีต้นรอบ ตอนนี้ไม่ขาดช่วงแล้ว ดูรายละเอียดใน gold_job.py
 
@@ -18,6 +19,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)                                   # cme_fetcher.py อยู่โฟลเดอร์เดียวกัน
 sys.path.insert(0, os.path.dirname(os.path.dirname(HERE)))  # apphub/ -> common.hub
 
+import api  # noqa: E402
 import cme_fetcher  # noqa: E402
 import gold_job  # noqa: E402
 from common.hub import (Health, Job, Scheduler, Store, err, holder_pid,  # noqa: E402
@@ -74,6 +76,7 @@ def main():
         err("มี goldhub ตัวอื่นรันอยู่แล้ว (pid {}) — ออก", holder_pid(lockfile))
         sys.exit(0)
     log("goldhub start (pid {}) data={}", os.getpid(), store.root)
+    api.build(health).start()
     gold = gold_job.GoldPoller()
     Scheduler(health).add(
         Job("cme", job_cme, CME_INTERVAL, timeout=CME_TIMEOUT, at_minute=CME_AT_MINUTE),

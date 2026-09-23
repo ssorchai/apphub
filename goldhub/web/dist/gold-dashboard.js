@@ -454,7 +454,7 @@ const SdBlock = ({
       marginTop: '1px',
       whiteSpace: 'nowrap'
     }
-  }, "open ", fmt(sd.open), " \xB7 vol ", sd.vol_used, " \xB7 dte ", sd.dte), rows.map(([n, b, s]) => /*#__PURE__*/React.createElement("div", {
+  }, "vol ", sd.vol_used, " \xB7 dte ", sd.dte), rows.map(([n, b, s]) => /*#__PURE__*/React.createElement("div", {
     key: n,
     style: {
       display: 'flex',
@@ -1136,19 +1136,7 @@ const Asset = ({
       marginLeft: '4px',
       fontSize: '10px'
     }
-  }, up ? '+' : '', fmt2(asset.percent), "%"))), showOpen && asset.open != null && /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: '13px',
-      fontWeight: '700',
-      color: macos.secondary,
-      marginTop: '1px'
-    }
-  }, /*#__PURE__*/React.createElement("span", {
-    style: { ...secTitle,
-      fontSize: '10px',
-      fontWeight: '600'
-    }
-  }, "open "), fmt2(asset.open)));
+  }, up ? '+' : '', fmt2(asset.percent), "%"))));
 };
 
 const GoldBlock = ({
@@ -1920,17 +1908,19 @@ const render = (state, dispatch) => {
       fontWeight: '600',
       letterSpacing: '-0.3px',
       whiteSpace: 'nowrap'
-    }
-  }, "F ", fNow == null ? '--' : Number(fNow).toLocaleString(undefined, {
+    },
+    title: `ราคาเปิดของ ${data.und_sym || 'สัญญาอ้างอิง'} (จุดกลางของกรอบ SD)`
+  }, "OPEN ", data.sd && data.sd.open != null ? Number(data.sd.open).toLocaleString(undefined, {
     minimumFractionDigits: 1,
     maximumFractionDigits: 1
-  }), /*#__PURE__*/React.createElement("span", {
+  }) : '--', /*#__PURE__*/React.createElement("span", {
     style: {
       fontSize: '9px',
       marginLeft: '4px',
       verticalAlign: 'middle',
       color: liveF != null ? macos.green : macos.tertiary
-    }
+    },
+    title: liveF != null ? 'ราคาสดกำลังไหล' : 'ไม่มีราคาสด ใช้ F ตอนดึงข้อมูล'
   }, "\u25CF")), /*#__PURE__*/React.createElement("span", {
     style: {
       fontSize: '16px',

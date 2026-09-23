@@ -226,7 +226,7 @@ const SdBlock = ({ sd }) => {
     <div style={{ marginTop: '10px' }}>
       <div style={secTitle}>SD Range</div>
       <div style={{ fontSize: '11px', color: macos.tertiary, marginTop: '1px', whiteSpace: 'nowrap' }}>
-        open {fmt(sd.open)} · vol {sd.vol_used} · dte {sd.dte}
+        vol {sd.vol_used} · dte {sd.dte}
       </div>
       {rows.map(([n, b, s]) => (
         <div key={n} style={{ display: 'flex', alignItems: 'baseline', gap: '8px', fontSize: '12px', marginTop: '3px', fontWeight: '600' }}>
@@ -553,13 +553,6 @@ const Asset = ({ asset, fallbackName, accent, showOpen }) => {
           <span style={{ opacity: 0.75, marginLeft: '4px', fontSize: '10px' }}>{up ? '+' : ''}{fmt2(asset.percent)}%</span>
         </span>
       </div>
-      {/* ราคาเปิดของวัน: อ่านบ่อยเลยขยายเป็น 13px และย้ายมาบรรทัดของตัวเอง ไม่งั้นเบียดชื่อสัญญา
-          จนโดนตัด (23 ก.ย. 26) */}
-      {showOpen && asset.open != null && (
-        <div style={{ fontSize: '13px', fontWeight: '700', color: macos.secondary, marginTop: '1px' }}>
-          <span style={{ ...secTitle, fontSize: '10px', fontWeight: '600' }}>open </span>{fmt2(asset.open)}
-        </div>
-      )}
     </div>
   );
 };
@@ -919,10 +912,14 @@ export const render = (state, dispatch) => {
               </span>
             )}
           </div>
+          {/* ราคา future สดอยู่คอลัมน์ซ้ายแล้ว (23 ก.ย. 26) ตรงนี้เลยโชว์ "ราคาเปิด" ซึ่งเป็นจุดกลาง
+              ของกรอบ SD แทน -- จุดสีบอกว่าราคาสดที่ใช้ขยับเส้น/สีสไตรค์ยังไหลอยู่ไหม */}
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginTop: '6px' }}>
-            <span style={{ fontSize: '20px', fontWeight: '600', letterSpacing: '-0.3px', whiteSpace: 'nowrap' }}>
-              F {fNow == null ? '--' : Number(fNow).toLocaleString(undefined, { minimumFractionDigits: 1, maximumFractionDigits: 1 })}
-              <span style={{ fontSize: '9px', marginLeft: '4px', verticalAlign: 'middle', color: liveF != null ? macos.green : macos.tertiary }}>●</span>
+            <span style={{ fontSize: '20px', fontWeight: '600', letterSpacing: '-0.3px', whiteSpace: 'nowrap' }}
+              title={`ราคาเปิดของ ${data.und_sym || 'สัญญาอ้างอิง'} (จุดกลางของกรอบ SD)`}>
+              OPEN {data.sd && data.sd.open != null ? Number(data.sd.open).toLocaleString(undefined, { minimumFractionDigits: 1, maximumFractionDigits: 1 }) : '--'}
+              <span style={{ fontSize: '9px', marginLeft: '4px', verticalAlign: 'middle', color: liveF != null ? macos.green : macos.tertiary }}
+                title={liveF != null ? 'ราคาสดกำลังไหล' : 'ไม่มีราคาสด ใช้ F ตอนดึงข้อมูล'}>●</span>
             </span>
             <span style={{ fontSize: '16px', fontWeight: '600', whiteSpace: 'nowrap', color: macos.secondary }}>
               IV {data.iv_event != null ? data.iv_event.toFixed(2) : '--'}

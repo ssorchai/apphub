@@ -104,15 +104,16 @@ const DARK = {
   strikeDown: '#ff6b78',
 };
 const LIGHT = {
-  material: 'rgba(255, 255, 255, 0.92)',
-  border: '0.5px solid rgba(0, 0, 0, 0.10)',
+  // ขาวนวล (ครีม) ไม่ใช่ขาวจ้า -- มองนานๆ สบายตากว่าและเข้ากับพื้นหลังอุ่นของหน้าเว็บ
+  material: 'rgba(252, 249, 243, 0.94)',
+  border: '0.5px solid rgba(0, 0, 0, 0.08)',
   shadow: '0 10px 28px rgba(0, 0, 0, 0.14)',
   label: '#14161c',
   secondary: 'rgba(0, 0, 0, 0.72)',
   tertiary: 'rgba(0, 0, 0, 0.50)',
   divider: 'rgba(0, 0, 0, 0.12)',
   ink: '0, 0, 0',
-  panel: 'rgba(255, 255, 255, 0.97)',
+  panel: 'rgba(252, 249, 243, 0.97)',
   chipBg: 'rgba(20, 22, 28, 0.88)',
   chipFg: '#fff',
   pillOn: 'rgba(10, 126, 164, 0.20)',
@@ -120,7 +121,7 @@ const LIGHT = {
   red: '#d02b20',
   blue: '#0a7ea4',
   yellow: '#9a7500',
-  orange: '#b3671a',
+  orange: '#f5a623',      // สี put ของ CME (ชุดเดียวกับหน้ากราฟ /api/chart และ oi_block.pine)
   ivLine: '#e03131',
   ivText: '#c92a2a',
   strikeUp: '#1b8a3a',

@@ -167,7 +167,8 @@ const LIGHT = {
   pillOn: 'rgba(10, 126, 164, 0.20)',
   green: '#1b8a3a',
   red: '#d02b20',
-  blue: '#0a7ea4',
+  blue: '#4a80e8',
+  // สี call ของ CME
   yellow: '#9a7500',
   orange: '#f5a623',
   // สี put ของ CME (ชุดเดียวกับหน้ากราฟ /api/chart และ oi_block.pine)

@@ -76,10 +76,84 @@ const savePref = (k, v) => {
   } catch (e) { /* localStorage ใช้ไม่ได้ก็แค่ไม่จำ */ }
 };
 
+// ---- palette: dark (เดิม) / light (เฉพาะหน้าเว็บ 23 ก.ย. 26) ----
+// ห้ามใช้ backdrop-filter (กระพริบใน Übersicht ทุกรอบ re-render)
+// `ink` = สีฐานของแผ่นโปร่งทั้งหมด (เส้นกริด / แถบ SD / พื้นปุ่ม) -- ธีมสว่างต้องเป็นหมึกดำ
+// ไม่งั้นขาวบนขาวหายหมด / `panel`,`chipBg`,`chipFg` = กล่อง hover กับป้ายราคาที่เป็นสีทึบ
+const DARK = {
+  material: 'rgba(24, 26, 33, 0.55)',
+  border: '0.5px solid rgba(255, 255, 255, 0.16)',
+  shadow: '0 10px 28px rgba(0, 0, 0, 0.32)',
+  label: '#ffffff',
+  secondary: 'rgba(255, 255, 255, 0.78)',
+  tertiary: 'rgba(255, 255, 255, 0.58)',
+  divider: 'rgba(255, 255, 255, 0.18)',
+  ink: '255, 255, 255',
+  panel: 'rgba(20, 22, 28, 0.92)',
+  chipBg: 'rgba(255, 255, 255, 0.85)',
+  chipFg: '#111',
+  pillOn: 'rgba(100, 210, 255, 0.35)',
+  green: '#30d158',
+  red: '#ff453a',
+  blue: '#64d2ff',
+  yellow: '#ffd60a',
+  orange: '#ffb340',
+  ivLine: '#ff6b6b',
+  ivText: '#ff8a8a',
+  strikeUp: '#83e0a3',
+  strikeDown: '#ff6b78',
+};
+const LIGHT = {
+  material: 'rgba(255, 255, 255, 0.92)',
+  border: '0.5px solid rgba(0, 0, 0, 0.10)',
+  shadow: '0 10px 28px rgba(0, 0, 0, 0.14)',
+  label: '#14161c',
+  secondary: 'rgba(0, 0, 0, 0.72)',
+  tertiary: 'rgba(0, 0, 0, 0.50)',
+  divider: 'rgba(0, 0, 0, 0.12)',
+  ink: '0, 0, 0',
+  panel: 'rgba(255, 255, 255, 0.97)',
+  chipBg: 'rgba(20, 22, 28, 0.88)',
+  chipFg: '#fff',
+  pillOn: 'rgba(10, 126, 164, 0.20)',
+  green: '#1b8a3a',
+  red: '#d02b20',
+  blue: '#0a7ea4',
+  yellow: '#9a7500',
+  orange: '#b3671a',
+  ivLine: '#e03131',
+  ivText: '#c92a2a',
+  strikeUp: '#1b8a3a',
+  strikeDown: '#d02b20',
+};
+// component ทุกตัวอ่าน macos.* ตอน render -- สลับธีมจึงทำได้ด้วยการเขียนทับ object นี้แล้ว render ใหม่
+const macos = {
+  radius: '22px',
+  font: '-apple-system, "SF Pro Display", "SF Pro Text", "Helvetica Neue", sans-serif',
+  mono: '"SF Mono", ui-monospace, Menlo, monospace',
+  ...DARK,
+};
+const wash = (a) => `rgba(${macos.ink}, ${a})`;   // แผ่นโปร่งตามธีม
+
+const THEME_KEY = 'gold-dashboard.theme';
+const readTheme = () => {
+  try { return localStorage.getItem(THEME_KEY) === 'light' ? 'light' : 'dark'; } catch (e) { return 'dark'; }
+};
+const applyTheme = (name) => {
+  Object.assign(macos, name === 'light' ? LIGHT : DARK);
+  if (WEB) { try { localStorage.setItem(THEME_KEY, name); } catch (e) { /* ไม่จำก็ไม่เป็นไร */ } }
+  // พื้นหลังของหน้าเว็บอยู่ใน dashboard.html -- บอกผ่าน data-theme ให้ CSS เปลี่ยนตาม
+  if (WEB && document.body) document.body.dataset.theme = name;
+  return name;
+};
+// การ์ดบน desktop ลอยอยู่บน wallpaper -- คงธีมมืดเสมอ ปุ่มสลับมีเฉพาะหน้าเว็บ
+applyTheme(WEB ? readTheme() : 'dark');
+
 export const initialState = {
   cme: null, live: null, tick: null, src: null,
   refreshing: false, hover: null, hold: 0, resetting: false,
   chartMode: pref('chartMode', 'id'), sdMode: pref('sdMode', 'open'), dMode: pref('dMode', 'off'),
+  theme: WEB ? readTheme() : 'dark',
 };
 export const updateState = (event, prev) => {
   switch (event.type) {
@@ -93,6 +167,7 @@ export const updateState = (event, prev) => {
     case 'SD_MODE': return { ...prev, sdMode: event.mode };
     case 'DELTA_MODE': return { ...prev, dMode: event.mode };
     case 'HOVER': return { ...prev, hover: event.k };
+    case 'THEME': return { ...prev, theme: applyTheme(event.name) };
     case 'HOLD_TICK': return { ...prev, hold: event.pct };
     case 'HOLD_END': return { ...prev, hold: 0 };
     case 'RESET_START': return { ...prev, hold: 0, resetting: true };
@@ -101,25 +176,6 @@ export const updateState = (event, prev) => {
   }
 };
 
-// ---- palette เดียวทั้งการ์ด (ของ cme-putcall / gold-update) ----
-// ห้ามใช้ backdrop-filter (กระพริบใน Übersicht ทุกรอบ re-render)
-const macos = {
-  material: 'rgba(24, 26, 33, 0.55)',
-  border: '0.5px solid rgba(255, 255, 255, 0.16)',
-  radius: '22px',
-  shadow: '0 10px 28px rgba(0, 0, 0, 0.32)',
-  font: '-apple-system, "SF Pro Display", "SF Pro Text", "Helvetica Neue", sans-serif',
-  mono: '"SF Mono", ui-monospace, Menlo, monospace',
-  label: '#ffffff',
-  secondary: 'rgba(255, 255, 255, 0.78)',
-  tertiary: 'rgba(255, 255, 255, 0.58)',
-  divider: 'rgba(255, 255, 255, 0.18)',
-  green: '#30d158',
-  red: '#ff453a',
-  blue: '#64d2ff',
-  yellow: '#ffd60a',
-  orange: '#ffb340',
-};
 
 // ---- ขนาด ----
 const PAD = 16;
@@ -136,11 +192,12 @@ const HOLD_MS = 5000;
 const fmt = (v) => (v == null ? '--' : Number(v).toLocaleString());
 const num = (v) => (typeof v === 'number' ? v : parseFloat(String(v).replace(/[,%+]/g, '')) || 0);
 const fmt2 = (v, d = 2) => num(v).toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d });
-const secTitle = {
+// เป็น "ฟังก์ชัน" ไม่ใช่ค่าคงที่: ต้องอ่าน macos ตอน render ไม่งั้นค้างสีของธีมที่โหลดครั้งแรก
+const sec = () => ({
   fontSize: '10px', color: macos.secondary, fontWeight: '600',
   letterSpacing: '0.4px', textTransform: 'uppercase',
-};
-const vline = { borderLeft: `0.5px solid ${macos.divider}` };
+});
+const vl = () => ({ borderLeft: `0.5px solid ${macos.divider}` });
 
 // ⌥-drag ย้ายทั้งการ์ด — ตำแหน่งเก็บ localStorage (ค่าเริ่มต้น = ที่เดิมของ cme-putcall)
 const POS_KEY = 'gold-dashboard.pos';
@@ -179,14 +236,14 @@ const PcRow = ({ title, pc }) => {
   return (
     <div style={{ marginTop: '10px' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-        <span style={secTitle}>{title}</span>
+        <span style={sec()}>{title}</span>
         <span style={{ fontSize: '13px', fontWeight: '600' }}>
           <span style={{ color: macos.orange }}>P {fmt(pc.put)}</span>
           <span style={{ color: macos.tertiary, margin: '0 4px' }}>/</span>
           <span style={{ color: macos.blue }}>C {fmt(pc.call)}</span>
         </span>
       </div>
-      <div style={{ height: '4px', borderRadius: '2px', overflow: 'hidden', display: 'flex', marginTop: '4px', background: 'rgba(255,255,255,0.12)' }}>
+      <div style={{ height: '4px', borderRadius: '2px', overflow: 'hidden', display: 'flex', marginTop: '4px', background: wash(0.12) }}>
         <div style={{ width: `${putShare}%`, background: macos.orange }} />
         <div style={{ flex: 1, background: macos.blue }} />
       </div>
@@ -198,7 +255,7 @@ const TopActive = ({ top, sc, bare }) => {
   if (!top || !top.length) return null;
   return (
     <div style={{ marginTop: bare ? '2px' : '6px' }}>
-      {!bare && <div style={secTitle}>Top Active</div>}
+      {!bare && <div style={sec()}>Top Active</div>}
       {top.map((t) => (
         <div key={t.strike} style={{ display: 'flex', alignItems: 'baseline', gap: '8px', fontSize: '12px', marginTop: '3px' }}>
           <span style={{ fontWeight: '600', color: sc(t.strike), minWidth: '38px' }}>{t.strike}</span>
@@ -216,7 +273,7 @@ const SdBlock = ({ sd }) => {
   if (!sd) {
     return (
       <div style={{ marginTop: '10px' }}>
-        <div style={secTitle}>SD Range</div>
+        <div style={sec()}>SD Range</div>
         <div style={{ fontSize: '12px', color: macos.tertiary, marginTop: '2px' }}>N/A</div>
       </div>
     );
@@ -224,7 +281,7 @@ const SdBlock = ({ sd }) => {
   const rows = [[1, sd.b1, sd.s1], [2, sd.b2, sd.s2], [3, sd.b3, sd.s3]];
   return (
     <div style={{ marginTop: '10px' }}>
-      <div style={secTitle}>SD Range</div>
+      <div style={sec()}>SD Range</div>
       <div style={{ fontSize: '11px', color: macos.tertiary, marginTop: '1px', whiteSpace: 'nowrap' }}>
         vol {sd.vol_used} · dte {sd.dte}
       </div>
@@ -288,8 +345,8 @@ const ModePill = ({ label, on, onPick }) => (
     onDoubleClick={(e) => e.stopPropagation()}
     style={{
       fontSize: '11px', fontWeight: '700', padding: '3px 10px', borderRadius: '999px',
-      color: on ? '#fff' : macos.secondary,
-      background: on ? 'rgba(100,210,255,0.35)' : 'rgba(255,255,255,0.12)',
+      color: on ? macos.label : macos.secondary,
+      background: on ? macos.pillOn : wash(0.12),
     }}>
     {label}
   </span>
@@ -355,7 +412,7 @@ const Chart = ({ data, liveF, mode, sdMode, dMode, hover, dispatch }) => {
   const xt = [];
   for (let s = Math.ceil(lo / xStep) * xStep; s <= hi; s += xStep) xt.push(s);
   const bands = bandS && bandC ? [3, 2, 1] : [];
-  const bandFill = { 1: 'rgba(255,255,255,0.10)', 2: 'rgba(255,255,255,0.065)', 3: 'rgba(255,255,255,0.035)' };
+  const bandFill = { 1: wash(0.10), 2: wash(0.065), 3: wash(0.035) };
 
   let tip = null;
   if (hover != null && hover >= lo && hover <= hi) {
@@ -371,20 +428,20 @@ const Chart = ({ data, liveF, mode, sdMode, dMode, hover, dispatch }) => {
     const bx = X + 12 + bxW > W - R ? X - 12 - bxW : X + 12;
     tip = (
       <g pointerEvents="none">
-        <rect x={X - Math.max(3, bw * 1.3)} y={T} width={Math.max(6, bw * 2.6)} height={H - T - B} fill="rgba(255,255,255,0.10)" />
-        <line x1={X} x2={X} y1={T} y2={H - B} stroke="rgba(255,255,255,0.75)" strokeWidth="1" strokeDasharray="3 3" />
-        {yr && vks != null && <circle cx={X} cy={yr(vks)} r="3.5" fill="#ff6b6b" stroke="#fff" strokeWidth="1.2" />}
-        <rect x={bx} y={T + 18} width={bxW} height={bxH} rx="6" fill="rgba(20,22,28,0.92)" stroke="rgba(255,255,255,0.25)" />
-        <text x={bx + 10} y={T + 36} fontSize="13" fontWeight="700" fill="#fff">
+        <rect x={X - Math.max(3, bw * 1.3)} y={T} width={Math.max(6, bw * 2.6)} height={H - T - B} fill={wash(0.10)} />
+        <line x1={X} x2={X} y1={T} y2={H - B} stroke={wash(0.75)} strokeWidth="1" strokeDasharray="3 3" />
+        {yr && vks != null && <circle cx={X} cy={yr(vks)} r="3.5" fill={macos.ivLine} stroke={macos.material} strokeWidth="1.2" />}
+        <rect x={bx} y={T + 18} width={bxW} height={bxH} rx="6" fill={macos.panel} stroke={wash(0.25)} />
+        <text x={bx + 10} y={T + 36} fontSize="13" fontWeight="700" fill={macos.label}>
           {fmt(hover)}
           {dist != null && <tspan fontSize="10.5" fontWeight="400" fill={macos.tertiary}>{`  ${dist >= 0 ? '+' : ''}${dist.toFixed(2)}σ จาก ${useOpen ? 'open' : 'F'}`}</tspan>}
         </text>
         {lines.map(([t, bold], i) => (
           <text key={i} x={bx + 10} y={T + 53 + i * 15} fontSize="11" fontWeight={bold ? '700' : '400'}
-            fill={bold ? '#fff' : macos.secondary}>{t}</text>
+            fill={bold ? macos.label : macos.secondary}>{t}</text>
         ))}
         {vk != null && (
-          <text x={bx + 10} y={T + 83} fontSize="11" fill="#ff8a8a">
+          <text x={bx + 10} y={T + 83} fontSize="11" fill={macos.ivText}>
             {`${data.iv_settle != null ? 'Vol Settle' : 'IV'} ${vk.toFixed(2)}%`}
           </text>
         )}
@@ -393,8 +450,8 @@ const Chart = ({ data, liveF, mode, sdMode, dMode, hover, dispatch }) => {
             {`Δ ${hd.toFixed(2)}${hover >= (fNow || F) ? 'C' : 'P'}`}
           </text>
         )}
-        <rect x={X - 22} y={H - B + 3} width="44" height="15" rx="3" fill="#fff" />
-        <text x={X} y={H - B + 14} fontSize="10.5" fontWeight="700" fill="#111" textAnchor="middle">{fmt(hover)}</text>
+        <rect x={X - 22} y={H - B + 3} width="44" height="15" rx="3" fill={macos.chipBg} />
+        <text x={X} y={H - B + 14} fontSize="10.5" fontWeight="700" fill={macos.chipFg} textAnchor="middle">{fmt(hover)}</text>
       </g>
     );
   }
@@ -402,10 +459,10 @@ const Chart = ({ data, liveF, mode, sdMode, dMode, hover, dispatch }) => {
   return (
     <div style={{ marginTop: '10px', borderTop: `0.5px solid ${macos.divider}`, paddingTop: '8px' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '4px' }}>
-        <span style={{ ...secTitle, color: macos.label, marginRight: '4px' }}>Put / Call by Strike</span>
+        <span style={{ ...sec(), color: macos.label, marginRight: '4px' }}>Put / Call by Strike</span>
         <ModePill label="Intraday" on={mode === 'id'} onPick={() => { savePref('chartMode', 'id'); dispatch({ type: 'CHART_MODE', mode: 'id' }); }} />
         <ModePill label="OI" on={mode === 'oi'} onPick={() => { savePref('chartMode', 'oi'); dispatch({ type: 'CHART_MODE', mode: 'oi' }); }} />
-        <span style={{ ...secTitle, marginLeft: '10px' }}>SD</span>
+        <span style={{ ...sec(), marginLeft: '10px' }}>SD</span>
         <ModePill label="Open 0.6" on={!!useOpen} onPick={() => { savePref('sdMode', 'open'); dispatch({ type: 'SD_MODE', mode: 'open' }); }} />
         <ModePill label="CME" on={!useOpen} onPick={() => { savePref('sdMode', 'cme'); dispatch({ type: 'SD_MODE', mode: 'cme' }); }} />
         <ModePill label="Δ" on={dMode !== 'off'} onPick={() => {
@@ -415,7 +472,7 @@ const Chart = ({ data, liveF, mode, sdMode, dMode, hover, dispatch }) => {
         <span style={{ marginLeft: 'auto', fontSize: '11px', color: macos.tertiary }}>
           <span style={{ color: macos.orange }}>■</span> Put&nbsp;&nbsp;
           <span style={{ color: macos.blue }}>■</span> Call&nbsp;&nbsp;
-          <span style={{ color: '#ff8a8a' }}>- -</span> {data.iv_settle != null ? 'Vol Settle' : 'IV'}
+          <span style={{ color: macos.ivText }}>- -</span> {data.iv_settle != null ? 'Vol Settle' : 'IV'}
         </span>
       </div>
       <svg width={W} height={H} style={{ display: 'block' }}>
@@ -425,18 +482,18 @@ const Chart = ({ data, liveF, mode, sdMode, dMode, hover, dispatch }) => {
         })}
         {[0.5, 1].map((f) => (
           <g key={f}>
-            <line x1={L} x2={W - R} y1={y((ymax / 1.1) * f)} y2={y((ymax / 1.1) * f)} stroke="rgba(255,255,255,0.10)" />
+            <line x1={L} x2={W - R} y1={y((ymax / 1.1) * f)} y2={y((ymax / 1.1) * f)} stroke={wash(0.10)} />
             <text x={L - 5} y={y((ymax / 1.1) * f) + 3} fontSize="9.5" fill={macos.tertiary} textAnchor="end">
               {fmt(Math.round((ymax / 1.1) * f))}
             </text>
           </g>
         ))}
-        <line x1={L} x2={W - R} y1={y(0)} y2={y(0)} stroke="rgba(255,255,255,0.25)" />
+        <line x1={L} x2={W - R} y1={y(0)} y2={y(0)} stroke={wash(0.25)} />
         {liveF != null && F && F > lo && F < hi && (
-          <line x1={x(F)} x2={x(F)} y1={T} y2={H - B} stroke="rgba(255,255,255,0.25)" strokeWidth="0.8" strokeDasharray="2 4" />
+          <line x1={x(F)} x2={x(F)} y1={T} y2={H - B} stroke={wash(0.25)} strokeWidth="0.8" strokeDasharray="2 4" />
         )}
         {fNow && fNow > lo && fNow < hi && (
-          <line x1={x(fNow)} x2={x(fNow)} y1={T + 16} y2={H - B} stroke="rgba(255,255,255,0.45)" strokeWidth="0.8" />
+          <line x1={x(fNow)} x2={x(fNow)} y1={T + 16} y2={H - B} stroke={wash(0.45)} strokeWidth="0.8" />
         )}
         {vrows.map(([s, p, c]) => (
           <g key={s}>
@@ -446,7 +503,7 @@ const Chart = ({ data, liveF, mode, sdMode, dMode, hover, dispatch }) => {
         ))}
         {dLines.map((d) => (
           <g key={d.side + d.d}>
-            <line x1={x(d.k)} x2={x(d.k)} y1={T} y2={H - B} stroke="rgba(255,255,255,0.30)"
+            <line x1={x(d.k)} x2={x(d.k)} y1={T} y2={H - B} stroke={wash(0.30)}
               strokeWidth="0.8" strokeDasharray="4 4" />
             <text x={x(d.k) - 3} y={T + 20} fontSize="9" fill={macos.tertiary}
               transform={`rotate(-90 ${x(d.k) - 3} ${T + 20})`} textAnchor="end">
@@ -456,7 +513,7 @@ const Chart = ({ data, liveF, mode, sdMode, dMode, hover, dispatch }) => {
         ))}
         {yr && (
           <g>
-            <path d={splinePath(vs.map((r) => [x(r[0]), yr(r[1])]))} fill="none" stroke="#ff6b6b"
+            <path d={splinePath(vs.map((r) => [x(r[0]), yr(r[1])]))} fill="none" stroke={macos.ivLine}
               strokeWidth="1.6" strokeDasharray="6 4" />
             {[vlo, (vlo + vhi) / 2, vhi].map((v, i) => (
               <text key={i} x={W - R + 5} y={yr(v) + 3} fontSize="9.5" fill={macos.tertiary}>{v.toFixed(1)}</text>
@@ -465,8 +522,8 @@ const Chart = ({ data, liveF, mode, sdMode, dMode, hover, dispatch }) => {
         )}
         {fNow && fNow > lo && fNow < hi && (
           <g>
-            <rect x={x(fNow) - 46} y={T} width="92" height="16" rx="3" fill="rgba(255,255,255,0.85)" />
-            <text x={x(fNow)} y={T + 12} fontSize="10.5" fontWeight="700" fill="#111" textAnchor="middle">
+            <rect x={x(fNow) - 46} y={T} width="92" height="16" rx="3" fill={macos.chipBg} />
+            <text x={x(fNow)} y={T + 12} fontSize="10.5" fontWeight="700" fill={macos.chipFg} textAnchor="middle">
               {`Future ${fmt(fNow)}`}
             </text>
           </g>
@@ -515,7 +572,7 @@ const SessionLight = ({ s }) => {
     <span style={{
       display: 'inline-flex', alignItems: 'center', gap: '4px',
       padding: '2px 7px', borderRadius: '999px',
-      background: s.on ? 'rgba(255, 255, 255, 0.22)' : 'rgba(255, 255, 255, 0.1)',
+      background: s.on ? wash(0.22) : wash(0.1),
     }}>
       <span style={{ width: '5px', height: '5px', borderRadius: '50%', background: color, boxShadow: `0 0 5px ${color}` }} />
       <span style={{ fontSize: '9px', fontWeight: '700', letterSpacing: '0.5px', color: s.on ? macos.label : macos.secondary }}>
@@ -529,7 +586,7 @@ const Asset = ({ asset, fallbackName, accent, showOpen }) => {
   if (!asset) {
     return (
       <div style={{ marginTop: '8px' }}>
-        <div style={{ ...secTitle, marginBottom: '2px' }}>{fallbackName}</div>
+        <div style={{ ...sec(), marginBottom: '2px' }}>{fallbackName}</div>
         <span style={{ fontSize: '24px', fontWeight: '600', color: macos.tertiary }}>N/A</span>
       </div>
     );
@@ -538,7 +595,7 @@ const Asset = ({ asset, fallbackName, accent, showOpen }) => {
   const up = change >= 0;
   return (
     <div style={{ marginTop: '8px' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: '6px', ...secTitle, marginBottom: '2px', whiteSpace: 'nowrap' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: '6px', ...sec(), marginBottom: '2px', whiteSpace: 'nowrap' }}>
         <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
           {asset.name}
           {asset.sym && <span style={{ color: macos.tertiary }}> · {asset.sym}</span>}
@@ -631,14 +688,12 @@ const oiCell = (oi, intra) => {
   return { txt: `${oi}+${inTxt}`, color: oi === 0 ? macos.green : macos.tertiary };
 };
 // สี strike ตามราคาสด (pastel) — ราคาวิ่งข้าม strike แถวที่ค้างอยู่สลับสีเอง
-const STRIKE_UP = '#83e0a3';
-const STRIKE_DOWN = '#ff6b78';
 const STRIKE_NEAR = 2.6;
 const tickColor = (k, Fnow) => {
   if (Fnow == null) return macos.label;
   const d = k - Fnow;
   if (Math.abs(d) <= STRIKE_NEAR) return macos.label;
-  return d > 0 ? STRIKE_UP : STRIKE_DOWN;
+  return d > 0 ? macos.strikeUp : macos.strikeDown;
 };
 const plus = (side, n) => (n > 0 ? `${side}+${n}` : '');
 
@@ -676,19 +731,19 @@ const IvChart = ({ hist, windowMin }) => {
   );
 };
 
-const rowStyle = {
+const rowStyle = () => ({
   display: 'flex', fontSize: '11px', fontFamily: macos.mono,
   fontVariantNumeric: 'tabular-nums', padding: '2px 0', height: '17px', boxSizing: 'border-box',
-};
+});
 const Row = ({ cells }) => (
-  <div style={{ ...rowStyle, color: macos.label }}>
+  <div style={{ ...rowStyle(), color: macos.label }}>
     {cells.map((c, i) => (
       <span key={i} style={{ width: c.w, textAlign: c.a || 'left', color: c.c || 'inherit',
                              overflow: 'hidden', whiteSpace: 'nowrap' }}>{c.v}</span>
     ))}
   </div>
 );
-const BlankRow = () => <div style={rowStyle}>&nbsp;</div>;
+const BlankRow = () => <div style={rowStyle()}>&nbsp;</div>;
 const fixedRows = (items, n, fn) =>
   Array.from({ length: n }, (_, i) => (i < items.length ? fn(items[i], i) : <BlankRow key={`b${i}`} />));
 
@@ -736,7 +791,7 @@ const TickerColumn = ({ tick, live, hold, resetting, dispatch }) => {
         {!WEB && <div onMouseDown={startHold} onMouseUp={cancelHold} onMouseLeave={cancelHold}
           title="Hold 5s to clear all history (ticker / most active / IV chart)"
           style={{ position: 'relative', overflow: 'hidden', userSelect: 'none', borderRadius: '999px',
-                   background: 'rgba(255,255,255,0.10)', padding: '2px 8px', lineHeight: '1',
+                   background: wash(0.10), padding: '2px 8px', lineHeight: '1',
                    cursor: resetting ? 'default' : 'pointer' }}>
           <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: `${(hold || 0) * 100}%`,
                         background: 'rgba(255,69,58,0.75)', transition: 'width 90ms linear', pointerEvents: 'none' }} />
@@ -750,7 +805,7 @@ const TickerColumn = ({ tick, live, hold, resetting, dispatch }) => {
       </div>
 
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginTop: '10px' }}>
-        <span style={secTitle}>Implied Vol · {(meta.iv_window_min / 60).toFixed(0)}h</span>
+        <span style={sec()}>Implied Vol · {(meta.iv_window_min / 60).toFixed(0)}h</span>
         <span style={{ fontSize: '9px', color: macos.tertiary }}>
           {meta.F_src !== 'live' && <span style={{ color: macos.orange, fontWeight: '700' }}>⚠ stale F · </span>}
           {meta.dte != null && `dte ${meta.dte.toFixed(3)}`}
@@ -767,11 +822,11 @@ const TickerColumn = ({ tick, live, hold, resetting, dispatch }) => {
       <div style={{ height: '1px', background: macos.divider, margin: '10px 0 8px' }} />
 
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-        <span style={secTitle}>
+        <span style={sec()}>
           Ticker · ≥{meta.threshold}
           {Fnow != null && (
             <span style={{ color: macos.tertiary, fontWeight: '400' }}>
-              {' · '}<span style={{ color: STRIKE_UP }}>▲</span>{Fnow.toFixed(1)}<span style={{ color: STRIKE_DOWN }}>▼</span>
+              {' · '}<span style={{ color: macos.strikeUp }}>▲</span>{Fnow.toFixed(1)}<span style={{ color: macos.strikeDown }}>▼</span>
             </span>
           )}
         </span>
@@ -796,7 +851,7 @@ const TickerColumn = ({ tick, live, hold, resetting, dispatch }) => {
       <div style={{ height: '1px', background: macos.divider, margin: '10px 0 8px' }} />
 
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-        <span style={secTitle}>Most Active · {meta.active_window_min}m</span>
+        <span style={sec()}>Most Active · {meta.active_window_min}m</span>
         <span style={{ fontSize: '9px', color: macos.tertiary }}>age strike sum rate</span>
       </div>
       <div style={{ marginTop: '4px' }}>
@@ -817,7 +872,7 @@ const TickerColumn = ({ tick, live, hold, resetting, dispatch }) => {
 // ประกอบ
 // ============================================================================
 export const render = (state, dispatch) => {
-  const { cme: data, live, tick, src, refreshing, chartMode, sdMode, dMode, hover, hold, resetting } = state || {};
+  const { cme: data, live, tick, src, refreshing, chartMode, sdMode, dMode, hover, hold, resetting, theme } = state || {};
 
   // ราคาสดใช้กับกรอบหลักได้เมื่อสัญญาตรงกับ underlying ของ series (GCV6 = GCV26) และไม่เก่าเกิน 3 นาที
   let liveF = null;
@@ -874,7 +929,7 @@ export const render = (state, dispatch) => {
   const refreshPill = WEB ? null : (
     <span onClick={handleRefresh} onDoubleClick={(e) => e.stopPropagation()} title="Refresh CME data now + copy"
       style={{ fontSize: '12px', fontWeight: '700', lineHeight: '1', color: refreshing ? macos.yellow : macos.secondary,
-               background: 'rgba(255,255,255,0.15)', borderRadius: '999px', padding: '4px 10px', cursor: 'pointer' }}>
+               background: wash(0.15), borderRadius: '999px', padding: '4px 10px', cursor: 'pointer' }}>
       {refreshing ? 'refreshing…' : '↻ refresh'}
     </span>
   );
@@ -898,7 +953,7 @@ export const render = (state, dispatch) => {
       <div style={{ display: 'flex', gap: '18px' }}>
         <GoldBlock live={live} />
         {/* กลาง: หัว + ราคา + สัดส่วน P/C + SD */}
-        <div style={{ flex: 1, minWidth: 0, ...vline, paddingLeft: '16px' }}>
+        <div style={{ flex: 1, minWidth: 0, ...vl(), paddingLeft: '16px' }}>
           <div style={{ fontSize: '11px', fontWeight: '700', letterSpacing: '0.6px', whiteSpace: 'nowrap' }}>
             CME GOLD {data.series || ''}
             <span style={{ color: macos.tertiary, fontWeight: '600', marginLeft: '8px' }}>
@@ -930,11 +985,11 @@ export const render = (state, dispatch) => {
           <SdBlock sd={data.sd} />
         </div>
         {/* ขวา: หัวข้อ TOP ACTIVE ครั้งเดียว แล้วไล่ OI -> Intraday (23 ก.ย. 26) */}
-        <div style={{ flex: 1, minWidth: 0, ...vline, paddingLeft: '16px' }}>
-          <div style={{ ...secTitle, color: macos.label }}>Top Active</div>
-          <div style={{ ...secTitle, marginTop: '6px' }}>Open Interest</div>
+        <div style={{ flex: 1, minWidth: 0, ...vl(), paddingLeft: '16px' }}>
+          <div style={{ ...sec(), color: macos.label }}>Top Active</div>
+          <div style={{ ...sec(), marginTop: '6px' }}>Open Interest</div>
           <TopActive top={data.oi && data.oi.top} sc={strikeColor} bare />
-          <div style={{ ...secTitle, marginTop: '12px' }}>Intraday</div>
+          <div style={{ ...sec(), marginTop: '12px' }}>Intraday</div>
           <TopActive top={data.intraday && data.intraday.top} sc={strikeColor} bare />
         </div>
       </div>
@@ -946,6 +1001,13 @@ export const render = (state, dispatch) => {
                     display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <span style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
           {refreshPill}
+          {/* สลับธีมมีเฉพาะหน้าเว็บ -- การ์ดบน desktop ลอยบน wallpaper ใช้ธีมมืดอย่างเดียว */}
+          {WEB && (
+            <span style={{ display: 'flex', gap: '6px' }} onClick={(e) => e.stopPropagation()}>
+              <ModePill label="◐ Dark" on={theme !== 'light'} onPick={() => dispatch({ type: 'THEME', name: 'dark' })} />
+              <ModePill label="◑ Light" on={theme === 'light'} onPick={() => dispatch({ type: 'THEME', name: 'light' })} />
+            </span>
+          )}
           <span style={{ fontSize: '10px', color: macos.tertiary }}>
             click → copy for TV · double-click → {WEB ? 'CME chart' : 'web dashboard'}
             {WEB && state.copied && Date.now() - state.copied < 3000 && (
@@ -964,7 +1026,7 @@ export const render = (state, dispatch) => {
   return (
     <div style={container} onMouseDown={WEB ? undefined : altDrag}>
       {main}
-      <div style={{ ...vline, margin: `0 ${COL_GAP}px 0 ${COL_GAP}px` }} />
+      <div style={{ ...vl(), margin: `0 ${COL_GAP}px 0 ${COL_GAP}px` }} />
       <TickerColumn tick={tick} live={live} hold={hold} resetting={resetting} dispatch={dispatch} />
     </div>
   );

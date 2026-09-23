@@ -122,8 +122,97 @@ const savePref = (k, v) => {
   } catch (e) {
     /* localStorage ใช้ไม่ได้ก็แค่ไม่จำ */
   }
+}; // ---- palette: dark (เดิม) / light (เฉพาะหน้าเว็บ 23 ก.ย. 26) ----
+// ห้ามใช้ backdrop-filter (กระพริบใน Übersicht ทุกรอบ re-render)
+// `ink` = สีฐานของแผ่นโปร่งทั้งหมด (เส้นกริด / แถบ SD / พื้นปุ่ม) -- ธีมสว่างต้องเป็นหมึกดำ
+// ไม่งั้นขาวบนขาวหายหมด / `panel`,`chipBg`,`chipFg` = กล่อง hover กับป้ายราคาที่เป็นสีทึบ
+
+
+const DARK = {
+  material: 'rgba(24, 26, 33, 0.55)',
+  border: '0.5px solid rgba(255, 255, 255, 0.16)',
+  shadow: '0 10px 28px rgba(0, 0, 0, 0.32)',
+  label: '#ffffff',
+  secondary: 'rgba(255, 255, 255, 0.78)',
+  tertiary: 'rgba(255, 255, 255, 0.58)',
+  divider: 'rgba(255, 255, 255, 0.18)',
+  ink: '255, 255, 255',
+  panel: 'rgba(20, 22, 28, 0.92)',
+  chipBg: 'rgba(255, 255, 255, 0.85)',
+  chipFg: '#111',
+  pillOn: 'rgba(100, 210, 255, 0.35)',
+  green: '#30d158',
+  red: '#ff453a',
+  blue: '#64d2ff',
+  yellow: '#ffd60a',
+  orange: '#ffb340',
+  ivLine: '#ff6b6b',
+  ivText: '#ff8a8a',
+  strikeUp: '#83e0a3',
+  strikeDown: '#ff6b78'
+};
+const LIGHT = {
+  material: 'rgba(255, 255, 255, 0.92)',
+  border: '0.5px solid rgba(0, 0, 0, 0.10)',
+  shadow: '0 10px 28px rgba(0, 0, 0, 0.14)',
+  label: '#14161c',
+  secondary: 'rgba(0, 0, 0, 0.72)',
+  tertiary: 'rgba(0, 0, 0, 0.50)',
+  divider: 'rgba(0, 0, 0, 0.12)',
+  ink: '0, 0, 0',
+  panel: 'rgba(255, 255, 255, 0.97)',
+  chipBg: 'rgba(20, 22, 28, 0.88)',
+  chipFg: '#fff',
+  pillOn: 'rgba(10, 126, 164, 0.20)',
+  green: '#1b8a3a',
+  red: '#d02b20',
+  blue: '#0a7ea4',
+  yellow: '#9a7500',
+  orange: '#b3671a',
+  ivLine: '#e03131',
+  ivText: '#c92a2a',
+  strikeUp: '#1b8a3a',
+  strikeDown: '#d02b20'
+}; // component ทุกตัวอ่าน macos.* ตอน render -- สลับธีมจึงทำได้ด้วยการเขียนทับ object นี้แล้ว render ใหม่
+
+const macos = {
+  radius: '22px',
+  font: '-apple-system, "SF Pro Display", "SF Pro Text", "Helvetica Neue", sans-serif',
+  mono: '"SF Mono", ui-monospace, Menlo, monospace',
+  ...DARK
 };
 
+const wash = a => `rgba(${macos.ink}, ${a})`; // แผ่นโปร่งตามธีม
+
+
+const THEME_KEY = 'gold-dashboard.theme';
+
+const readTheme = () => {
+  try {
+    return localStorage.getItem(THEME_KEY) === 'light' ? 'light' : 'dark';
+  } catch (e) {
+    return 'dark';
+  }
+};
+
+const applyTheme = name => {
+  Object.assign(macos, name === 'light' ? LIGHT : DARK);
+
+  if (WEB) {
+    try {
+      localStorage.setItem(THEME_KEY, name);
+    } catch (e) {
+      /* ไม่จำก็ไม่เป็นไร */
+    }
+  } // พื้นหลังของหน้าเว็บอยู่ใน dashboard.html -- บอกผ่าน data-theme ให้ CSS เปลี่ยนตาม
+
+
+  if (WEB && document.body) document.body.dataset.theme = name;
+  return name;
+}; // การ์ดบน desktop ลอยอยู่บน wallpaper -- คงธีมมืดเสมอ ปุ่มสลับมีเฉพาะหน้าเว็บ
+
+
+applyTheme(WEB ? readTheme() : 'dark');
 const initialState = {
   cme: null,
   live: null,
@@ -135,7 +224,8 @@ const initialState = {
   resetting: false,
   chartMode: pref('chartMode', 'id'),
   sdMode: pref('sdMode', 'open'),
-  dMode: pref('dMode', 'off')
+  dMode: pref('dMode', 'off'),
+  theme: WEB ? readTheme() : 'dark'
 };
 exports.initialState = initialState;
 
@@ -190,6 +280,11 @@ const updateState = (event, prev) => {
         hover: event.k
       };
 
+    case 'THEME':
+      return { ...prev,
+        theme: applyTheme(event.name)
+      };
+
     case 'HOLD_TICK':
       return { ...prev,
         hold: event.pct
@@ -214,29 +309,10 @@ const updateState = (event, prev) => {
     default:
       return prev;
   }
-}; // ---- palette เดียวทั้งการ์ด (ของ cme-putcall / gold-update) ----
-// ห้ามใช้ backdrop-filter (กระพริบใน Übersicht ทุกรอบ re-render)
+}; // ---- ขนาด ----
 
 
 exports.updateState = updateState;
-const macos = {
-  material: 'rgba(24, 26, 33, 0.55)',
-  border: '0.5px solid rgba(255, 255, 255, 0.16)',
-  radius: '22px',
-  shadow: '0 10px 28px rgba(0, 0, 0, 0.32)',
-  font: '-apple-system, "SF Pro Display", "SF Pro Text", "Helvetica Neue", sans-serif',
-  mono: '"SF Mono", ui-monospace, Menlo, monospace',
-  label: '#ffffff',
-  secondary: 'rgba(255, 255, 255, 0.78)',
-  tertiary: 'rgba(255, 255, 255, 0.58)',
-  divider: 'rgba(255, 255, 255, 0.18)',
-  green: '#30d158',
-  red: '#ff453a',
-  blue: '#64d2ff',
-  yellow: '#ffd60a',
-  orange: '#ffb340'
-}; // ---- ขนาด ----
-
 const PAD = 16;
 const TICK_W = 258; // เนื้อหาคอลัมน์ ticker (เท่าการ์ดเดิม)
 
@@ -260,18 +336,21 @@ const num = v => typeof v === 'number' ? v : parseFloat(String(v).replace(/[,%+]
 const fmt2 = (v, d = 2) => num(v).toLocaleString(undefined, {
   minimumFractionDigits: d,
   maximumFractionDigits: d
-});
+}); // เป็น "ฟังก์ชัน" ไม่ใช่ค่าคงที่: ต้องอ่าน macos ตอน render ไม่งั้นค้างสีของธีมที่โหลดครั้งแรก
 
-const secTitle = {
+
+const sec = () => ({
   fontSize: '10px',
   color: macos.secondary,
   fontWeight: '600',
   letterSpacing: '0.4px',
   textTransform: 'uppercase'
-};
-const vline = {
+});
+
+const vl = () => ({
   borderLeft: `0.5px solid ${macos.divider}`
-}; // ⌥-drag ย้ายทั้งการ์ด — ตำแหน่งเก็บ localStorage (ค่าเริ่มต้น = ที่เดิมของ cme-putcall)
+}); // ⌥-drag ย้ายทั้งการ์ด — ตำแหน่งเก็บ localStorage (ค่าเริ่มต้น = ที่เดิมของ cme-putcall)
+
 
 const POS_KEY = 'gold-dashboard.pos';
 
@@ -334,7 +413,7 @@ const PcRow = ({
       alignItems: 'baseline'
     }
   }, /*#__PURE__*/React.createElement("span", {
-    style: secTitle
+    style: sec()
   }, title), /*#__PURE__*/React.createElement("span", {
     style: {
       fontSize: '13px',
@@ -360,7 +439,7 @@ const PcRow = ({
       overflow: 'hidden',
       display: 'flex',
       marginTop: '4px',
-      background: 'rgba(255,255,255,0.12)'
+      background: wash(0.12)
     }
   }, /*#__PURE__*/React.createElement("div", {
     style: {
@@ -386,7 +465,7 @@ const TopActive = ({
       marginTop: bare ? '2px' : '6px'
     }
   }, !bare && /*#__PURE__*/React.createElement("div", {
-    style: secTitle
+    style: sec()
   }, "Top Active"), top.map(t => /*#__PURE__*/React.createElement("div", {
     key: t.strike,
     style: {
@@ -431,7 +510,7 @@ const SdBlock = ({
         marginTop: '10px'
       }
     }, /*#__PURE__*/React.createElement("div", {
-      style: secTitle
+      style: sec()
     }, "SD Range"), /*#__PURE__*/React.createElement("div", {
       style: {
         fontSize: '12px',
@@ -447,7 +526,7 @@ const SdBlock = ({
       marginTop: '10px'
     }
   }, /*#__PURE__*/React.createElement("div", {
-    style: secTitle
+    style: sec()
   }, "SD Range"), /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: '11px',
@@ -564,8 +643,8 @@ const ModePill = ({
     fontWeight: '700',
     padding: '3px 10px',
     borderRadius: '999px',
-    color: on ? '#fff' : macos.secondary,
-    background: on ? 'rgba(100,210,255,0.35)' : 'rgba(255,255,255,0.12)'
+    color: on ? macos.label : macos.secondary,
+    background: on ? macos.pillOn : wash(0.12)
   }
 }, label);
 
@@ -675,9 +754,9 @@ const Chart = ({
 
   const bands = bandS && bandC ? [3, 2, 1] : [];
   const bandFill = {
-    1: 'rgba(255,255,255,0.10)',
-    2: 'rgba(255,255,255,0.065)',
-    3: 'rgba(255,255,255,0.035)'
+    1: wash(0.10),
+    2: wash(0.065),
+    3: wash(0.035)
   };
   let tip = null;
 
@@ -703,21 +782,21 @@ const Chart = ({
       y: T,
       width: Math.max(6, bw * 2.6),
       height: H - T - B,
-      fill: "rgba(255,255,255,0.10)"
+      fill: wash(0.10)
     }), /*#__PURE__*/React.createElement("line", {
       x1: X,
       x2: X,
       y1: T,
       y2: H - B,
-      stroke: "rgba(255,255,255,0.75)",
+      stroke: wash(0.75),
       strokeWidth: "1",
       strokeDasharray: "3 3"
     }), yr && vks != null && /*#__PURE__*/React.createElement("circle", {
       cx: X,
       cy: yr(vks),
       r: "3.5",
-      fill: "#ff6b6b",
-      stroke: "#fff",
+      fill: macos.ivLine,
+      stroke: macos.material,
       strokeWidth: "1.2"
     }), /*#__PURE__*/React.createElement("rect", {
       x: bx,
@@ -725,14 +804,14 @@ const Chart = ({
       width: bxW,
       height: bxH,
       rx: "6",
-      fill: "rgba(20,22,28,0.92)",
-      stroke: "rgba(255,255,255,0.25)"
+      fill: macos.panel,
+      stroke: wash(0.25)
     }), /*#__PURE__*/React.createElement("text", {
       x: bx + 10,
       y: T + 36,
       fontSize: "13",
       fontWeight: "700",
-      fill: "#fff"
+      fill: macos.label
     }, fmt(hover), dist != null && /*#__PURE__*/React.createElement("tspan", {
       fontSize: "10.5",
       fontWeight: "400",
@@ -743,12 +822,12 @@ const Chart = ({
       y: T + 53 + i * 15,
       fontSize: "11",
       fontWeight: bold ? '700' : '400',
-      fill: bold ? '#fff' : macos.secondary
+      fill: bold ? macos.label : macos.secondary
     }, t)), vk != null && /*#__PURE__*/React.createElement("text", {
       x: bx + 10,
       y: T + 83,
       fontSize: "11",
-      fill: "#ff8a8a"
+      fill: macos.ivText
     }, `${data.iv_settle != null ? 'Vol Settle' : 'IV'} ${vk.toFixed(2)}%`), hd != null && /*#__PURE__*/React.createElement("text", {
       x: bx + 10,
       y: T + (vk != null ? 98 : 83),
@@ -760,13 +839,13 @@ const Chart = ({
       width: "44",
       height: "15",
       rx: "3",
-      fill: "#fff"
+      fill: macos.chipBg
     }), /*#__PURE__*/React.createElement("text", {
       x: X,
       y: H - B + 14,
       fontSize: "10.5",
       fontWeight: "700",
-      fill: "#111",
+      fill: macos.chipFg,
       textAnchor: "middle"
     }, fmt(hover)));
   }
@@ -785,7 +864,7 @@ const Chart = ({
       marginBottom: '4px'
     }
   }, /*#__PURE__*/React.createElement("span", {
-    style: { ...secTitle,
+    style: { ...sec(),
       color: macos.label,
       marginRight: '4px'
     }
@@ -810,7 +889,7 @@ const Chart = ({
       });
     }
   }), /*#__PURE__*/React.createElement("span", {
-    style: { ...secTitle,
+    style: { ...sec(),
       marginLeft: '10px'
     }
   }, "SD"), /*#__PURE__*/React.createElement(ModePill, {
@@ -860,7 +939,7 @@ const Chart = ({
     }
   }, "\u25A0"), " Call\xA0\xA0", /*#__PURE__*/React.createElement("span", {
     style: {
-      color: '#ff8a8a'
+      color: macos.ivText
     }
   }, "- -"), " ", data.iv_settle != null ? 'Vol Settle' : 'IV')), /*#__PURE__*/React.createElement("svg", {
     width: W,
@@ -886,7 +965,7 @@ const Chart = ({
     x2: W - R,
     y1: y(ymax / 1.1 * f),
     y2: y(ymax / 1.1 * f),
-    stroke: "rgba(255,255,255,0.10)"
+    stroke: wash(0.10)
   }), /*#__PURE__*/React.createElement("text", {
     x: L - 5,
     y: y(ymax / 1.1 * f) + 3,
@@ -898,13 +977,13 @@ const Chart = ({
     x2: W - R,
     y1: y(0),
     y2: y(0),
-    stroke: "rgba(255,255,255,0.25)"
+    stroke: wash(0.25)
   }), liveF != null && F && F > lo && F < hi && /*#__PURE__*/React.createElement("line", {
     x1: x(F),
     x2: x(F),
     y1: T,
     y2: H - B,
-    stroke: "rgba(255,255,255,0.25)",
+    stroke: wash(0.25),
     strokeWidth: "0.8",
     strokeDasharray: "2 4"
   }), fNow && fNow > lo && fNow < hi && /*#__PURE__*/React.createElement("line", {
@@ -912,7 +991,7 @@ const Chart = ({
     x2: x(fNow),
     y1: T + 16,
     y2: H - B,
-    stroke: "rgba(255,255,255,0.45)",
+    stroke: wash(0.45),
     strokeWidth: "0.8"
   }), vrows.map(([s, p, c]) => /*#__PURE__*/React.createElement("g", {
     key: s
@@ -935,7 +1014,7 @@ const Chart = ({
     x2: x(d.k),
     y1: T,
     y2: H - B,
-    stroke: "rgba(255,255,255,0.30)",
+    stroke: wash(0.30),
     strokeWidth: "0.8",
     strokeDasharray: "4 4"
   }), /*#__PURE__*/React.createElement("text", {
@@ -948,7 +1027,7 @@ const Chart = ({
   }, `${Math.round(d.d * 100)}Δ${d.side}`))), yr && /*#__PURE__*/React.createElement("g", null, /*#__PURE__*/React.createElement("path", {
     d: splinePath(vs.map(r => [x(r[0]), yr(r[1])])),
     fill: "none",
-    stroke: "#ff6b6b",
+    stroke: macos.ivLine,
     strokeWidth: "1.6",
     strokeDasharray: "6 4"
   }), [vlo, (vlo + vhi) / 2, vhi].map((v, i) => /*#__PURE__*/React.createElement("text", {
@@ -963,13 +1042,13 @@ const Chart = ({
     width: "92",
     height: "16",
     rx: "3",
-    fill: "rgba(255,255,255,0.85)"
+    fill: macos.chipBg
   }), /*#__PURE__*/React.createElement("text", {
     x: x(fNow),
     y: T + 12,
     fontSize: "10.5",
     fontWeight: "700",
-    fill: "#111",
+    fill: macos.chipFg,
     textAnchor: "middle"
   }, `Future ${fmt(fNow)}`)), xt.map(s => /*#__PURE__*/React.createElement("text", {
     key: s,
@@ -1043,7 +1122,7 @@ const SessionLight = ({
       gap: '4px',
       padding: '2px 7px',
       borderRadius: '999px',
-      background: s.on ? 'rgba(255, 255, 255, 0.22)' : 'rgba(255, 255, 255, 0.1)'
+      background: s.on ? wash(0.22) : wash(0.1)
     }
   }, /*#__PURE__*/React.createElement("span", {
     style: {
@@ -1075,7 +1154,7 @@ const Asset = ({
         marginTop: '8px'
       }
     }, /*#__PURE__*/React.createElement("div", {
-      style: { ...secTitle,
+      style: { ...sec(),
         marginBottom: '2px'
       }
     }, fallbackName), /*#__PURE__*/React.createElement("span", {
@@ -1099,7 +1178,7 @@ const Asset = ({
       justifyContent: 'space-between',
       alignItems: 'baseline',
       gap: '6px',
-      ...secTitle,
+      ...sec(),
       marginBottom: '2px',
       whiteSpace: 'nowrap'
     }
@@ -1297,15 +1376,13 @@ const oiCell = (oi, intra) => {
 }; // สี strike ตามราคาสด (pastel) — ราคาวิ่งข้าม strike แถวที่ค้างอยู่สลับสีเอง
 
 
-const STRIKE_UP = '#83e0a3';
-const STRIKE_DOWN = '#ff6b78';
 const STRIKE_NEAR = 2.6;
 
 const tickColor = (k, Fnow) => {
   if (Fnow == null) return macos.label;
   const d = k - Fnow;
   if (Math.abs(d) <= STRIKE_NEAR) return macos.label;
-  return d > 0 ? STRIKE_UP : STRIKE_DOWN;
+  return d > 0 ? macos.strikeUp : macos.strikeDown;
 };
 
 const plus = (side, n) => n > 0 ? `${side}+${n}` : '';
@@ -1381,7 +1458,7 @@ const IvChart = ({
   }, lo.toFixed(1)));
 };
 
-const rowStyle = {
+const rowStyle = () => ({
   display: 'flex',
   fontSize: '11px',
   fontFamily: macos.mono,
@@ -1389,12 +1466,12 @@ const rowStyle = {
   padding: '2px 0',
   height: '17px',
   boxSizing: 'border-box'
-};
+});
 
 const Row = ({
   cells
 }) => /*#__PURE__*/React.createElement("div", {
-  style: { ...rowStyle,
+  style: { ...rowStyle(),
     color: macos.label
   }
 }, cells.map((c, i) => /*#__PURE__*/React.createElement("span", {
@@ -1409,7 +1486,7 @@ const Row = ({
 }, c.v)));
 
 const BlankRow = () => /*#__PURE__*/React.createElement("div", {
-  style: rowStyle
+  style: rowStyle()
 }, "\xA0");
 
 const fixedRows = (items, n, fn) => Array.from({
@@ -1518,7 +1595,7 @@ const TickerColumn = ({
       overflow: 'hidden',
       userSelect: 'none',
       borderRadius: '999px',
-      background: 'rgba(255,255,255,0.10)',
+      background: wash(0.10),
       padding: '2px 8px',
       lineHeight: '1',
       cursor: resetting ? 'default' : 'pointer'
@@ -1557,7 +1634,7 @@ const TickerColumn = ({
       marginTop: '10px'
     }
   }, /*#__PURE__*/React.createElement("span", {
-    style: secTitle
+    style: sec()
   }, "Implied Vol \xB7 ", (meta.iv_window_min / 60).toFixed(0), "h"), /*#__PURE__*/React.createElement("span", {
     style: {
       fontSize: '9px',
@@ -1602,7 +1679,7 @@ const TickerColumn = ({
       alignItems: 'baseline'
     }
   }, /*#__PURE__*/React.createElement("span", {
-    style: secTitle
+    style: sec()
   }, "Ticker \xB7 \u2265", meta.threshold, Fnow != null && /*#__PURE__*/React.createElement("span", {
     style: {
       color: macos.tertiary,
@@ -1610,11 +1687,11 @@ const TickerColumn = ({
     }
   }, ' · ', /*#__PURE__*/React.createElement("span", {
     style: {
-      color: STRIKE_UP
+      color: macos.strikeUp
     }
   }, "\u25B2"), Fnow.toFixed(1), /*#__PURE__*/React.createElement("span", {
     style: {
-      color: STRIKE_DOWN
+      color: macos.strikeDown
     }
   }, "\u25BC"))), /*#__PURE__*/React.createElement("span", {
     style: {
@@ -1672,7 +1749,7 @@ const TickerColumn = ({
       alignItems: 'baseline'
     }
   }, /*#__PURE__*/React.createElement("span", {
-    style: secTitle
+    style: sec()
   }, "Most Active \xB7 ", meta.active_window_min, "m"), /*#__PURE__*/React.createElement("span", {
     style: {
       fontSize: '9px',
@@ -1721,7 +1798,8 @@ const render = (state, dispatch) => {
     dMode,
     hover,
     hold,
-    resetting
+    resetting,
+    theme
   } = state || {}; // ราคาสดใช้กับกรอบหลักได้เมื่อสัญญาตรงกับ underlying ของ series (GCV6 = GCV26) และไม่เก่าเกิน 3 นาที
 
   let liveF = null;
@@ -1809,7 +1887,7 @@ const render = (state, dispatch) => {
       fontWeight: '700',
       lineHeight: '1',
       color: refreshing ? macos.yellow : macos.secondary,
-      background: 'rgba(255,255,255,0.15)',
+      background: wash(0.15),
       borderRadius: '999px',
       padding: '4px 10px',
       cursor: 'pointer'
@@ -1866,7 +1944,7 @@ const render = (state, dispatch) => {
     style: {
       flex: 1,
       minWidth: 0,
-      ...vline,
+      ...vl(),
       paddingLeft: '16px'
     }
   }, /*#__PURE__*/React.createElement("div", {
@@ -1941,15 +2019,15 @@ const render = (state, dispatch) => {
     style: {
       flex: 1,
       minWidth: 0,
-      ...vline,
+      ...vl(),
       paddingLeft: '16px'
     }
   }, /*#__PURE__*/React.createElement("div", {
-    style: { ...secTitle,
+    style: { ...sec(),
       color: macos.label
     }
   }, "Top Active"), /*#__PURE__*/React.createElement("div", {
-    style: { ...secTitle,
+    style: { ...sec(),
       marginTop: '6px'
     }
   }, "Open Interest"), /*#__PURE__*/React.createElement(TopActive, {
@@ -1957,7 +2035,7 @@ const render = (state, dispatch) => {
     sc: strikeColor,
     bare: true
   }), /*#__PURE__*/React.createElement("div", {
-    style: { ...secTitle,
+    style: { ...sec(),
       marginTop: '12px'
     }
   }, "Intraday"), /*#__PURE__*/React.createElement(TopActive, {
@@ -1987,7 +2065,27 @@ const render = (state, dispatch) => {
       alignItems: 'center',
       gap: '10px'
     }
-  }, refreshPill, /*#__PURE__*/React.createElement("span", {
+  }, refreshPill, WEB && /*#__PURE__*/React.createElement("span", {
+    style: {
+      display: 'flex',
+      gap: '6px'
+    },
+    onClick: e => e.stopPropagation()
+  }, /*#__PURE__*/React.createElement(ModePill, {
+    label: "\u25D0 Dark",
+    on: theme !== 'light',
+    onPick: () => dispatch({
+      type: 'THEME',
+      name: 'dark'
+    })
+  }), /*#__PURE__*/React.createElement(ModePill, {
+    label: "\u25D1 Light",
+    on: theme === 'light',
+    onPick: () => dispatch({
+      type: 'THEME',
+      name: 'light'
+    })
+  })), /*#__PURE__*/React.createElement("span", {
     style: {
       fontSize: '10px',
       color: macos.tertiary
@@ -2011,7 +2109,7 @@ const render = (state, dispatch) => {
     style: container,
     onMouseDown: WEB ? undefined : altDrag
   }, main, /*#__PURE__*/React.createElement("div", {
-    style: { ...vline,
+    style: { ...vl(),
       margin: `0 ${COL_GAP}px 0 ${COL_GAP}px`
     }
   }), /*#__PURE__*/React.createElement(TickerColumn, {

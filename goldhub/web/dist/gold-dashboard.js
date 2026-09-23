@@ -377,14 +377,15 @@ const PcRow = ({
 
 const TopActive = ({
   top,
-  sc
+  sc,
+  bare
 }) => {
   if (!top || !top.length) return null;
   return /*#__PURE__*/React.createElement("div", {
     style: {
-      marginTop: '6px'
+      marginTop: bare ? '2px' : '6px'
     }
-  }, /*#__PURE__*/React.createElement("div", {
+  }, !bare && /*#__PURE__*/React.createElement("div", {
     style: secTitle
   }, "Top Active"), top.map(t => /*#__PURE__*/React.createElement("div", {
     key: t.strike,
@@ -1436,7 +1437,7 @@ const TickerColumn = ({
         color: macos.tertiary,
         fontSize: '12px'
       }
-    }, "CME TICKER \xB7 \u0E23\u0E2D\u0E23\u0E2D\u0E1A 5 \u0E19\u0E32\u0E17\u0E35\u0E41\u0E23\u0E01\u2026");
+    }, "TICKER \xB7 \u0E23\u0E2D\u0E23\u0E2D\u0E1A 5 \u0E19\u0E32\u0E17\u0E35\u0E41\u0E23\u0E01\u2026");
   }
 
   const {
@@ -1507,7 +1508,7 @@ const TickerColumn = ({
       fontWeight: '700',
       letterSpacing: '0.6px'
     }
-  }, "CME TICKER \xB7 ", meta.series), !WEB && /*#__PURE__*/React.createElement("div", {
+  }, "TICKER \xB7 ", meta.series), !WEB && /*#__PURE__*/React.createElement("div", {
     onMouseDown: startHold,
     onMouseUp: cancelHold,
     onMouseLeave: cancelHold,
@@ -1947,17 +1948,22 @@ const render = (state, dispatch) => {
     style: { ...secTitle,
       color: macos.label
     }
-  }, "Intraday"), /*#__PURE__*/React.createElement(TopActive, {
-    top: data.intraday && data.intraday.top,
-    sc: strikeColor
-  }), /*#__PURE__*/React.createElement("div", {
+  }, "Top Active"), /*#__PURE__*/React.createElement("div", {
     style: { ...secTitle,
-      color: macos.label,
-      marginTop: '12px'
+      marginTop: '6px'
     }
   }, "Open Interest"), /*#__PURE__*/React.createElement(TopActive, {
     top: data.oi && data.oi.top,
-    sc: strikeColor
+    sc: strikeColor,
+    bare: true
+  }), /*#__PURE__*/React.createElement("div", {
+    style: { ...secTitle,
+      marginTop: '12px'
+    }
+  }, "Intraday"), /*#__PURE__*/React.createElement(TopActive, {
+    top: data.intraday && data.intraday.top,
+    sc: strikeColor,
+    bare: true
   }))), /*#__PURE__*/React.createElement(Chart, {
     data: data,
     liveF: liveF,

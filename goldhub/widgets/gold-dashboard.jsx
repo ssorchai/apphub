@@ -194,11 +194,11 @@ const PcRow = ({ title, pc }) => {
   );
 };
 
-const TopActive = ({ top, sc }) => {
+const TopActive = ({ top, sc, bare }) => {
   if (!top || !top.length) return null;
   return (
-    <div style={{ marginTop: '6px' }}>
-      <div style={secTitle}>Top Active</div>
+    <div style={{ marginTop: bare ? '2px' : '6px' }}>
+      {!bare && <div style={secTitle}>Top Active</div>}
       {top.map((t) => (
         <div key={t.strike} style={{ display: 'flex', alignItems: 'baseline', gap: '8px', fontSize: '12px', marginTop: '3px' }}>
           <span style={{ fontWeight: '600', color: sc(t.strike), minWidth: '38px' }}>{t.strike}</span>
@@ -695,7 +695,7 @@ const fixedRows = (items, n, fn) =>
 const TickerColumn = ({ tick, live, hold, resetting, dispatch }) => {
   const box = { width: `${TICK_W}px`, flexShrink: 0, cursor: 'default' };
   if (!tick || !tick.meta) {
-    return <div style={{ ...box, color: macos.tertiary, fontSize: '12px' }}>CME TICKER · รอรอบ 5 นาทีแรก…</div>;
+    return <div style={{ ...box, color: macos.tertiary, fontSize: '12px' }}>TICKER · รอรอบ 5 นาทีแรก…</div>;
   }
   const { meta, iv_hist, ticker, active } = tick;
   let Fnow = meta.F;
@@ -732,7 +732,7 @@ const TickerColumn = ({ tick, live, hold, resetting, dispatch }) => {
   return (
     <div style={box} onClick={(e) => e.stopPropagation()} onDoubleClick={(e) => e.stopPropagation()}>
       <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-        <span style={{ fontSize: '11px', fontWeight: '700', letterSpacing: '0.6px' }}>CME TICKER · {meta.series}</span>
+        <span style={{ fontSize: '11px', fontWeight: '700', letterSpacing: '0.6px' }}>TICKER · {meta.series}</span>
         {!WEB && <div onMouseDown={startHold} onMouseUp={cancelHold} onMouseLeave={cancelHold}
           title="Hold 5s to clear all history (ticker / most active / IV chart)"
           style={{ position: 'relative', overflow: 'hidden', userSelect: 'none', borderRadius: '999px',
@@ -929,12 +929,13 @@ export const render = (state, dispatch) => {
           <PcRow title="Open Interest" pc={data.oi} />
           <SdBlock sd={data.sd} />
         </div>
-        {/* ขวา: Top Active ของ Intraday กับ OI ซ้อนกันในคอลัมน์เดียว */}
+        {/* ขวา: หัวข้อ TOP ACTIVE ครั้งเดียว แล้วไล่ OI -> Intraday (23 ก.ย. 26) */}
         <div style={{ flex: 1, minWidth: 0, ...vline, paddingLeft: '16px' }}>
-          <div style={{ ...secTitle, color: macos.label }}>Intraday</div>
-          <TopActive top={data.intraday && data.intraday.top} sc={strikeColor} />
-          <div style={{ ...secTitle, color: macos.label, marginTop: '12px' }}>Open Interest</div>
-          <TopActive top={data.oi && data.oi.top} sc={strikeColor} />
+          <div style={{ ...secTitle, color: macos.label }}>Top Active</div>
+          <div style={{ ...secTitle, marginTop: '6px' }}>Open Interest</div>
+          <TopActive top={data.oi && data.oi.top} sc={strikeColor} bare />
+          <div style={{ ...secTitle, marginTop: '12px' }}>Intraday</div>
+          <TopActive top={data.intraday && data.intraday.top} sc={strikeColor} bare />
         </div>
       </div>
 

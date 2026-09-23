@@ -1904,13 +1904,13 @@ const render = (state, dispatch) => {
     }
   }, /*#__PURE__*/React.createElement("span", {
     style: {
-      fontSize: '20px',
+      fontSize: '16px',
       fontWeight: '600',
-      letterSpacing: '-0.3px',
-      whiteSpace: 'nowrap'
+      whiteSpace: 'nowrap',
+      color: macos.secondary
     },
     title: `ราคาเปิดของ ${data.und_sym || 'สัญญาอ้างอิง'} (จุดกลางของกรอบ SD)`
-  }, "OPEN ", data.sd && data.sd.open != null ? Number(data.sd.open).toLocaleString(undefined, {
+  }, "O ", data.sd && data.sd.open != null ? Number(data.sd.open).toLocaleString(undefined, {
     minimumFractionDigits: 1,
     maximumFractionDigits: 1
   }) : '--', /*#__PURE__*/React.createElement("span", {

@@ -915,9 +915,9 @@ export const render = (state, dispatch) => {
           {/* ราคา future สดอยู่คอลัมน์ซ้ายแล้ว (23 ก.ย. 26) ตรงนี้เลยโชว์ "ราคาเปิด" ซึ่งเป็นจุดกลาง
               ของกรอบ SD แทน -- จุดสีบอกว่าราคาสดที่ใช้ขยับเส้น/สีสไตรค์ยังไหลอยู่ไหม */}
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginTop: '6px' }}>
-            <span style={{ fontSize: '20px', fontWeight: '600', letterSpacing: '-0.3px', whiteSpace: 'nowrap' }}
+            <span style={{ fontSize: '16px', fontWeight: '600', whiteSpace: 'nowrap', color: macos.secondary }}
               title={`ราคาเปิดของ ${data.und_sym || 'สัญญาอ้างอิง'} (จุดกลางของกรอบ SD)`}>
-              OPEN {data.sd && data.sd.open != null ? Number(data.sd.open).toLocaleString(undefined, { minimumFractionDigits: 1, maximumFractionDigits: 1 }) : '--'}
+              O {data.sd && data.sd.open != null ? Number(data.sd.open).toLocaleString(undefined, { minimumFractionDigits: 1, maximumFractionDigits: 1 }) : '--'}
               <span style={{ fontSize: '9px', marginLeft: '4px', verticalAlign: 'middle', color: liveF != null ? macos.green : macos.tertiary }}
                 title={liveF != null ? 'ราคาสดกำลังไหล' : 'ไม่มีราคาสด ใช้ F ตอนดึงข้อมูล'}>●</span>
             </span>

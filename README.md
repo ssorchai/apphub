@@ -17,7 +17,7 @@ apphub/
     └── deploy/
 ```
 
-แผนย้ายทีละเฟสอยู่ที่ [PLAN.md](PLAN.md)
+แผนย้ายทีละเฟสอยู่ที่ [PLAN.md](PLAN.md) · โน้ตสำหรับพอร์ตไป Windows: [docs/windows.md](docs/windows.md)
 
 ## หลักการ
 

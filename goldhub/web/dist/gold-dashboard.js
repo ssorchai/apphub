@@ -1111,13 +1111,7 @@ const Asset = ({
     style: {
       color: macos.tertiary
     }
-  }, " \xB7 ", asset.sym)), showOpen && asset.open != null && /*#__PURE__*/React.createElement("span", {
-    style: {
-      color: macos.tertiary,
-      textTransform: 'none',
-      flexShrink: 0
-    }
-  }, "O ", fmt2(asset.open))), /*#__PURE__*/React.createElement("div", {
+  }, " \xB7 ", asset.sym))), /*#__PURE__*/React.createElement("div", {
     style: {
       display: 'flex',
       justifyContent: 'space-between',
@@ -1142,7 +1136,19 @@ const Asset = ({
       marginLeft: '4px',
       fontSize: '10px'
     }
-  }, up ? '+' : '', fmt2(asset.percent), "%"))));
+  }, up ? '+' : '', fmt2(asset.percent), "%"))), showOpen && asset.open != null && /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: '13px',
+      fontWeight: '700',
+      color: macos.secondary,
+      marginTop: '1px'
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: { ...secTitle,
+      fontSize: '10px',
+      fontWeight: '600'
+    }
+  }, "open "), fmt2(asset.open)));
 };
 
 const GoldBlock = ({
@@ -1927,7 +1933,7 @@ const render = (state, dispatch) => {
     }
   }, "\u25CF")), /*#__PURE__*/React.createElement("span", {
     style: {
-      fontSize: '12px',
+      fontSize: '16px',
       fontWeight: '600',
       whiteSpace: 'nowrap',
       color: macos.secondary

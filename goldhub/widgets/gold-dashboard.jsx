@@ -543,9 +543,6 @@ const Asset = ({ asset, fallbackName, accent, showOpen }) => {
           {asset.name}
           {asset.sym && <span style={{ color: macos.tertiary }}> · {asset.sym}</span>}
         </span>
-        {showOpen && asset.open != null && (
-          <span style={{ color: macos.tertiary, textTransform: 'none', flexShrink: 0 }}>O {fmt2(asset.open)}</span>
-        )}
       </div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
         <span style={{ fontSize: '24px', fontWeight: '600', letterSpacing: '-0.4px', color: accent || macos.label }}>
@@ -556,6 +553,13 @@ const Asset = ({ asset, fallbackName, accent, showOpen }) => {
           <span style={{ opacity: 0.75, marginLeft: '4px', fontSize: '10px' }}>{up ? '+' : ''}{fmt2(asset.percent)}%</span>
         </span>
       </div>
+      {/* ราคาเปิดของวัน: อ่านบ่อยเลยขยายเป็น 13px และย้ายมาบรรทัดของตัวเอง ไม่งั้นเบียดชื่อสัญญา
+          จนโดนตัด (23 ก.ย. 26) */}
+      {showOpen && asset.open != null && (
+        <div style={{ fontSize: '13px', fontWeight: '700', color: macos.secondary, marginTop: '1px' }}>
+          <span style={{ ...secTitle, fontSize: '10px', fontWeight: '600' }}>open </span>{fmt2(asset.open)}
+        </div>
+      )}
     </div>
   );
 };
@@ -920,7 +924,7 @@ export const render = (state, dispatch) => {
               F {fNow == null ? '--' : Number(fNow).toLocaleString(undefined, { minimumFractionDigits: 1, maximumFractionDigits: 1 })}
               <span style={{ fontSize: '9px', marginLeft: '4px', verticalAlign: 'middle', color: liveF != null ? macos.green : macos.tertiary }}>●</span>
             </span>
-            <span style={{ fontSize: '12px', fontWeight: '600', whiteSpace: 'nowrap', color: macos.secondary }}>
+            <span style={{ fontSize: '16px', fontWeight: '600', whiteSpace: 'nowrap', color: macos.secondary }}>
               IV {data.iv_event != null ? data.iv_event.toFixed(2) : '--'}
             </span>
           </div>

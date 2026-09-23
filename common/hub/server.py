@@ -3,14 +3,20 @@
 กติกา (ดู "กฎที่ห้ามละเมิด" ใน PLAN.md):
   - **อ่านอย่างเดียว** รับแค่ GET/HEAD/OPTIONS และ handler ต้องคืนของจาก cache/ไฟล์ที่มีอยู่
     ห้ามไปกระตุ้นให้ดึง upstream ไม่งั้นใครยิงถี่ๆ = เราไปถล่มแหล่งข้อมูลแทน
-  - bind 127.0.0.1 เป็นค่าเริ่ม (เฟส 4 ค่อยเพิ่ม IP ของ Tailscale) ไม่ใช่ 0.0.0.0
+  - bind 127.0.0.1 เสมอ + IP ที่ระบุใน config (`bind`) เท่านั้น **ไม่ใช้ 0.0.0.0** -- เปิดคนละ
+    listener ต่อ address ไม่ใช่เปิดทั้งเครื่องแล้วมากรองทีหลัง
   - เช็ค Host header กัน DNS rebinding: เว็บที่เปิดในเบราว์เซอร์ชี้โดเมนตัวเองมาที่ 127.0.0.1
     แล้วอ่าน API ได้ ถ้าไม่ตรวจ Host
   - ETag / If-None-Match -> 304 ให้ client ที่ poll บ่อยไม่ต้องลากก้อนเต็มทุกครั้ง
   - CORS * : widget ของ Übersicht มาจาก origin อื่น (127.0.0.1:41416) ต้องมี header นี้
     ข้อมูลเป็นราคาตลาดสาธารณะ ส่วนที่ต้องกันจริงคือการ "สั่งงาน" ซึ่ง API นี้ไม่มีให้
-  - token ปิดไว้ในเฟส 2 (ผูก loopback อยู่แล้ว) ตั้ง `token=` เมื่อไหร่ก็บังคับทันที
-    รับได้ทั้ง header X-Apphub-Token และ ?token= (Rainmeter ใส่ header ไม่สะดวก) ไม่ log ค่า
+  - **token บังคับเฉพาะคนที่มาจากนอกเครื่อง** (เฟส 4): 127.0.0.1 ยังเรียกได้เปล่าๆ เพื่อให้
+    widget/หน้าเว็บบนเครื่องเดียวกันไม่ต้องถือ token ส่วนเครื่องอื่นต้องมี
+    รับได้ทั้ง header X-Apphub-Token, ?token= (Rainmeter ใส่ header ไม่สะดวก) และ cookie
+    -- เปิดหน้าเว็บจากเครื่องอื่นต้องใช้ cookie เพราะ <script src> แนบ header เองไม่ได้:
+    เข้า /dashboard?token=… ครั้งเดียว เซิร์ฟเวอร์ set cookie ให้ แล้วไฟล์ย่อย/fetch ตามมาได้เอง
+    (อ่านอย่างเดียวทั้งหมด + CORS เป็น * ซึ่งเบราว์เซอร์ไม่ส่ง cookie ข้าม origin ให้อยู่แล้ว)
+    ไม่ log ค่า token
 
 route หนึ่งตัว = ฟังก์ชัน (query: dict) -> (status, content_type, body: bytes|str)
 """
@@ -33,16 +39,21 @@ def json_body(obj):
     return json.dumps(obj, ensure_ascii=False, separators=(",", ":"))
 
 
+LOOPBACK = ("127.0.0.1", "::1")
+COOKIE = "apphub_token"
+
+
 class Api:
-    def __init__(self, name, port, host="127.0.0.1", token=None):
+    def __init__(self, name, port, host="127.0.0.1", token=None, extra_binds=(), extra_hosts=()):
         self.name = name
         self.port = port
         self.host = host
         self.token = token
+        self.binds = [host] + [a for a in extra_binds if a and a != host and a != "0.0.0.0"]
         self.routes = {}
-        self._httpd = None
-        # Host ที่ยอมรับ: เรียกด้วย localhost หรือ IP ที่ bind (เฟส 4 จะเพิ่มชื่อของ Tailscale)
-        self.allowed_hosts = {"localhost", "127.0.0.1", host}
+        self._httpds = []
+        # Host ที่ยอมรับ: localhost, ทุก address ที่ bind และชื่อที่ระบุเพิ่มใน config
+        self.allowed_hosts = {"localhost"} | set(self.binds) | set(extra_hosts)
 
     def route(self, path, fn):
         self.routes[path] = fn
@@ -78,10 +89,20 @@ class Api:
                 host = (self.headers.get("Host") or "").rsplit(":", 1)[0].strip("[]")
                 return host in api.allowed_hosts
 
+            def _cookie_token(self):
+                raw = self.headers.get("Cookie") or ""
+                for part in raw.split(";"):
+                    k, _, v = part.strip().partition("=")
+                    if k == COOKIE:
+                        return v
+                return ""
+
             def _token_ok(self, query):
-                if not api.token:
+                # เครื่องเดียวกันผ่านได้เลย / เครื่องอื่นต้องมี token (ถ้าตั้งไว้)
+                if self.client_address[0] in LOOPBACK or not api.token:
                     return True
-                got = self.headers.get("X-Apphub-Token") or (query.get("token") or [""])[0]
+                got = (self.headers.get("X-Apphub-Token")
+                       or (query.get("token") or [""])[0] or self._cookie_token())
                 return hmac.compare_digest(got.encode(), api.token.encode())
 
             def do_OPTIONS(self):
@@ -97,6 +118,12 @@ class Api:
                     return self._send(403, TEXT, b"bad host\n", head=head)
                 if not self._token_ok(query):
                     return self._send(401, TEXT, b"token required\n", head=head)
+                # มากับ ?token= ที่ถูก -> ฝาก cookie ไว้ ไฟล์ย่อยของหน้าเว็บจะตามมาได้เอง
+                extra = {}
+                if (api.token and self.client_address[0] not in LOOPBACK
+                        and (query.get("token") or [""])[0] == api.token):
+                    extra["Set-Cookie"] = ("{}={}; Path=/; Max-Age=604800; SameSite=Lax"
+                                           .format(COOKIE, api.token))
                 fn = api.routes.get(u.path.rstrip("/") or "/")
                 if fn is None:
                     body = json_body({"error": "not found", "routes": sorted(api.routes)}).encode()
@@ -110,22 +137,32 @@ class Api:
                 if isinstance(body, str):
                     body = body.encode("utf-8")
                 etag = '"{}"'.format(hashlib.sha1(body).hexdigest()[:16])
+                extra["ETag"] = etag
                 if status == 200 and self.headers.get("If-None-Match") == etag:
-                    return self._send(304, None, extra={"ETag": etag}, head=head)
-                self._send(status, ctype, body, extra={"ETag": etag}, head=head)
+                    return self._send(304, None, extra=extra, head=head)
+                self._send(status, ctype, body, extra=extra, head=head)
 
         return H
 
     def start(self):
-        """เปิดใน thread แยก -- พอร์ตชนก็แค่ log แล้วเดินต่อ งานดึงข้อมูลต้องไม่พังเพราะ API"""
-        try:
-            self._httpd = ThreadingHTTPServer((self.host, self.port), self._handler())
-        except OSError as e:
-            err("api {} เปิดพอร์ต {}:{} ไม่ได้ ({}) — ทำงานต่อโดยไม่มี API",
-                self.name, self.host, self.port, e.strerror or e)
+        """เปิด listener หนึ่งตัวต่อ address ใน thread แยก -- address ไหนเปิดไม่ได้ก็ข้ามตัวนั้น
+        (เช่น IP ของ Tailscale ยังไม่ขึ้น) ขอให้ loopback ขึ้นก็พอ งานดึงข้อมูลต้องไม่พังเพราะ API"""
+        handler = self._handler()
+        ok = []
+        for addr in self.binds:
+            try:
+                httpd = ThreadingHTTPServer((addr, self.port), handler)
+            except OSError as e:
+                err("api {} เปิด {}:{} ไม่ได้ ({}) — ข้าม address นี้",
+                    self.name, addr, self.port, e.strerror or e)
+                continue
+            httpd.daemon_threads = True
+            self._httpds.append(httpd)
+            threading.Thread(target=httpd.serve_forever, name="api-" + addr, daemon=True).start()
+            ok.append(addr)
+        if not ok:
+            err("api {} เปิดไม่ได้เลย — ทำงานต่อโดยไม่มี API", self.name)
             return False
-        self._httpd.daemon_threads = True
-        threading.Thread(target=self._httpd.serve_forever, name="api", daemon=True).start()
-        log("api {} ฟังที่ http://{}:{} ({})", self.name, self.host, self.port,
-            ", ".join(sorted(self.routes)))
+        log("api {} ฟังที่ {} พอร์ต {}{} ({})", self.name, ", ".join(ok), self.port,
+            " · token เปิดใช้กับเครื่องอื่น" if self.token else "", ", ".join(sorted(self.routes)))
         return True

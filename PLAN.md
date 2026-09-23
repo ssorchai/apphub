@@ -254,7 +254,22 @@ event ทั้ง 5 ตัวของวันนี้ตรงกับไ�
 
 ## เฟส 4 — มือถือ + weatherhub
 
-**มือถือ**
+**ขั้น 1 — เปิดให้เครื่องอื่นเข้าได้ ✅ 23 ก.ย. 2026**
+- `common/hub/config.py` -> `~/Library/Application Support/apphub/config.json` สิทธิ์ 0600
+  สร้างเองครั้งแรกพร้อม token สุ่ม / `bind` = address ที่เปิดเพิ่มจาก loopback (กรอง 0.0.0.0 ทิ้ง)
+  / `hosts` = ชื่อที่ยอมใน Host check / เตือนใน log ถ้าสิทธิ์ไฟล์หลวม / **ไม่ log ค่า token**
+- `Api` เปิด listener หนึ่งตัวต่อ address (ไม่ใช้ 0.0.0.0 แล้วมากรองทีหลัง) address ไหนเปิดไม่ได้
+  ก็ข้ามตัวนั้น ขอแค่ loopback ขึ้นก็พอ
+- **token บังคับเฉพาะเครื่องอื่น** loopback ยังเรียกเปล่าๆ ได้ -> widget/หน้าเว็บบนเครื่องไม่ต้องแก้
+- รับ token ได้ 3 ทาง: header `X-Apphub-Token`, `?token=`, **cookie** -- ทางที่สามจำเป็นเพราะ
+  `<script src>` ของหน้าเว็บแนบ header เองไม่ได้: เข้า `/dashboard?token=…` ครั้งเดียวแล้ว
+  เซิร์ฟเวอร์ set cookie (7 วัน, SameSite=Lax) ไฟล์ย่อยกับ fetch ตามมาได้เอง
+- ทดสอบผ่านหมด: loopback ไม่มี token 200 · LAN ไม่มี token 401 · token ผิด 401 ·
+  token ถูกทั้ง header และ query 200 · Host ปลอม 403 · cookie ใช้ได้ทั้ง widget.js และ /api/state ·
+  token ไม่โผล่ใน log
+- **Tailscale ยังไม่ได้ติดตั้งบนเครื่องนี้** ตอนนี้ทดสอบด้วย LAN IP ลงเมื่อไหร่แค่เพิ่ม IP ใน `bind`
+
+**มือถือ** (ขั้น 3)
 - `goldhub/mobile/termux/` — ให้ลองดึง `/api/clip` ก่อน (timeout 5 วิ)
   ถ้าไม่ได้ค่อยตกไปใช้โค้ด scrape เดิมที่มีอยู่ ได้ทั้งความง่ายและความทน
 - ผลพลอยได้: เมื่อดึงผ่าน Mac ได้ มือถือจะเลิกยิง QuikStrike จาก IP อีกวง

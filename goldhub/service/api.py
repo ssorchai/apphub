@@ -15,7 +15,7 @@ import time
 
 import cme_fetcher
 import gold_fetcher as gf
-from common.hub import HTML, JS, JSON, TEXT, Api, err, json_body, log
+from common.hub import HTML, JS, JSON, TEXT, Api, config, err, json_body, log
 
 SCHEMA_VERSION = 1
 PORT = 8787
@@ -182,7 +182,9 @@ def _file_route(cache, ctype, what):
 
 
 def build(health):
-    api = Api("goldhub", PORT)
+    cfg = config.load()
+    api = Api("goldhub", PORT, token=cfg.get("token"),
+              extra_binds=cfg.get("bind"), extra_hosts=cfg.get("hosts"))
     api.route("/api/state", r_state)
     api.route("/api/flat", r_flat)
     api.route("/api/health", lambda q: (200, JSON, json_body(health.snapshot())))

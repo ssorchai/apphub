@@ -3,7 +3,8 @@
 กติกา (ดู "กฎที่ห้ามละเมิด" ใน PLAN.md):
   - **อ่านอย่างเดียว** รับแค่ GET/HEAD/OPTIONS และ handler ต้องคืนของจาก cache/ไฟล์ที่มีอยู่
     ห้ามไปกระตุ้นให้ดึง upstream ไม่งั้นใครยิงถี่ๆ = เราไปถล่มแหล่งข้อมูลแทน
-  - bind 127.0.0.1 เสมอ + IP ที่ระบุใน config (`bind`) เท่านั้น **ไม่ใช้ 0.0.0.0** -- เปิดคนละ
+  - bind 127.0.0.1 เสมอ + address ที่ระบุใน config (`bind`; คำว่า "lan" = IP ปัจจุบันของเครื่อง)
+    **ไม่ใช้ 0.0.0.0** -- เปิดคนละ
     listener ต่อ address ไม่ใช่เปิดทั้งเครื่องแล้วมากรองทีหลัง
   - เช็ค Host header กัน DNS rebinding: เว็บที่เปิดในเบราว์เซอร์ชี้โดเมนตัวเองมาที่ 127.0.0.1
     แล้วอ่าน API ได้ ถ้าไม่ตรวจ Host
@@ -23,6 +24,7 @@ route หนึ่งตัว = ฟังก์ชัน (query: dict) -> (stat
 import hashlib
 import hmac
 import json
+import socket
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
@@ -40,6 +42,19 @@ def json_body(obj):
 
 
 LOOPBACK = ("127.0.0.1", "::1")
+
+
+def lan_ip():
+    """IP ของ interface ที่ใช้ออกเน็ตตอนนี้ -- UDP connect ไม่ได้ส่งอะไรจริง แค่ให้ kernel
+    เลือก route ให้ / ใช้กับคำว่า "lan" ใน config จะได้ไม่ต้องแก้ไฟล์ทุกครั้งที่ย้ายเน็ต"""
+    sk = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        sk.connect(("8.8.8.8", 53))
+        return sk.getsockname()[0]
+    except OSError:
+        return None
+    finally:
+        sk.close()
 COOKIE = "apphub_token"
 
 
@@ -49,7 +64,8 @@ class Api:
         self.port = port
         self.host = host
         self.token = token
-        self.binds = [host] + [a for a in extra_binds if a and a != host and a != "0.0.0.0"]
+        extra = [lan_ip() if a == "lan" else a for a in (extra_binds or [])]
+        self.binds = [host] + [a for a in extra if a and a != host and a != "0.0.0.0"]
         self.routes = {}
         self._httpds = []
         # Host ที่ยอมรับ: localhost, ทุก address ที่ bind และชื่อที่ระบุเพิ่มใน config

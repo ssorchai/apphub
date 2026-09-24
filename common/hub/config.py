@@ -2,12 +2,12 @@
 
 `~/Library/Application Support/apphub/config.json` (หรือ $APPHUB_DATA/config.json) สิทธิ์ 0600
 
-    {"token": "…", "bind": ["192.168.1.10"], "hosts": ["mac.tail1234.ts.net"]}
+    {"token": "…", "bind": ["lan", "100.x.y.z"], "hosts": ["mac.tail1234.ts.net"]}
 
 - **token คงที่** ไม่สุ่มใหม่ทุก start (ตัดสินใจไว้ 20 ก.ย.) ไม่งั้นปุ่มบนมือถือ/Rainmeter
   จะพังเงียบๆ ทุกครั้งที่ launchd restart -- ไฟล์นี้อยู่นอก git และห้าม log ค่า
-- `bind` = address ที่จะเปิดเพิ่มจาก 127.0.0.1 (เช่น IP ของ LAN หรือ Tailscale)
-  **ห้ามใส่ 0.0.0.0** (กฎข้อ 1 ของโปรเจกต์ -- ดู PLAN.md)
+- `bind` = address ที่จะเปิดเพิ่มจาก 127.0.0.1 -- `"lan"` = IP ของเน็ตที่ใช้อยู่ (หาให้เองตอน start)
+  หรือใส่ IP ตรงๆ เช่นของ Tailscale / **ห้ามใส่ 0.0.0.0** (กฎข้อ 1 ของโปรเจกต์ -- ดู PLAN.md)
 - `hosts` = ชื่อโฮสต์ที่ยอมให้เรียกเพิ่ม (Host check กัน DNS rebinding)
 """
 import json

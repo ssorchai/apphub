@@ -117,6 +117,64 @@ def _nth_weekday(year, month, weekday, n):
     return d + timedelta(days=(weekday - d.weekday()) % 7 + (n - 1) * 7)
 
 
+# ---- ปฏิทินวันหยุด CME (ยกมาจาก cme_fetcher.py 24 ก.ย. 26 -- ต้องเหมือนกันสองที่) ----
+EXTRA_HOLIDAYS = set()          # วันหยุดพิเศษที่ CME ประกาศเพิ่ม เติมเองเมื่อมีประกาศ
+_HOLIDAY_CACHE = {}
+
+
+def _easter(year):
+    a, b, c = year % 19, year // 100, year % 100
+    d_, e = b // 4, b % 4
+    f, g = (b + 8) // 25, (b - (b + 8) // 25 + 1) // 3
+    h = (19 * a + b - d_ - g + 15) % 30
+    i, k = c // 4, c % 4
+    l = (32 + 2 * e + 2 * i - h - k) % 7
+    m = (a + 11 * h + 22 * l) // 451
+    month = (h + l - 7 * m + 114) // 31
+    return date(year, month, (h + l - 7 * m + 114) % 31 + 1)
+
+
+def _observed(d):
+    """เสาร์ -> ชดเชยศุกร์ / อาทิตย์ -> จันทร์"""
+    if d.weekday() == 5:
+        return d - timedelta(days=1)
+    if d.weekday() == 6:
+        return d + timedelta(days=1)
+    return d
+
+
+def cme_holidays(year):
+    if year in _HOLIDAY_CACHE:
+        return _HOLIDAY_CACHE[year]
+    hs = {
+        _observed(date(year, 1, 1)),
+        _nth_weekday(year, 1, 0, 3),                 # MLK
+        _nth_weekday(year, 2, 0, 3),                 # Presidents
+        _easter(year) - timedelta(days=2),           # Good Friday
+        _nth_weekday(year, 5, 0, 5) if _nth_weekday(year, 5, 0, 5).month == 5
+        else _nth_weekday(year, 5, 0, 4),            # Memorial
+        _observed(date(year, 6, 19)),                # Juneteenth
+        _observed(date(year, 7, 4)),
+        _nth_weekday(year, 9, 0, 1),                 # Labor
+        _nth_weekday(year, 11, 3, 4),                # Thanksgiving
+        _observed(date(year, 12, 25)),
+    }
+    hs |= {d for d in EXTRA_HOLIDAYS if d.year == year}
+    _HOLIDAY_CACHE[year] = hs
+    return hs
+
+
+def is_business_day(d):
+    return d.weekday() < 5 and d not in cme_holidays(d.year)
+
+
+def prev_business_day(d):
+    d -= timedelta(days=1)
+    while not is_business_day(d):
+        d -= timedelta(days=1)
+    return d
+
+
 def us_dst(d):
     """daylight saving ของ US: อาทิตย์ที่ 2 ของ มี.ค. ถึงอาทิตย์แรกของ พ.ย."""
     return _nth_weekday(d.year, 3, 6, 2) <= d < _nth_weekday(d.year, 11, 6, 1)
@@ -139,14 +197,18 @@ def session_open_utc(now_utc):
 
 
 def month_option_expiry(year, month):
-    """monthly option ของสัญญาเดือน M หมดอายุ ~4 business day ก่อนสิ้นเดือน M-1"""
+    """monthly option ของสัญญาเดือน M: business day ที่ 4 นับจากท้ายเดือน M-1
+    **ถ้าตรงวันศุกร์หรือเป็นวันก่อนวันหยุด ให้เลื่อนขึ้นมาหนึ่งวันทำการ** (กฎ CME)
+    24 ก.ย. 26: ไม่มีท่อนหลัง -> ได้ 25 ก.ย. แต่ของจริงคือ 24 ก.ย. (DTE ผิดไปวันเต็ม)"""
     m, y = (month - 1, year) if month > 1 else (12, year - 1)
     d = date(y, m, calendar.monthrange(y, m)[1])
     n = 0
     while True:
-        if d.weekday() < 5:
+        if is_business_day(d):
             n += 1
             if n == 4:
+                while d.weekday() == 4 or (d + timedelta(days=1)) in cme_holidays((d + timedelta(days=1)).year):
+                    d = prev_business_day(d)
                 return d
         d -= timedelta(days=1)
 
@@ -163,15 +225,33 @@ def underlying_for(series_expiry):
     return None
 
 
+def monthly_option_symbol(d):
+    """วันหมดอายุรายเดือน -> สัญลักษณ์ chain รายเดือนของ barchart (= สัญลักษณ์ futures เอง)
+    เช่น 25 ก.ย. 26 -> GCV26 (CME เรียก OGV6) / ไม่ใช่วันนั้นคืน None
+
+    24 ก.ย. 26: วันหมดอายุรายเดือนมีทั้ง weekly (IG4U26 OI ~10,500) และ monthly
+    (GCV26 OI ~195,000) หมดอายุวันเดียวกัน ตัวหลักคือรายเดือน"""
+    for k in range(14):
+        mm = (d.month + k - 1) % 12 + 1
+        yy = d.year + (d.month + k - 1) // 12
+        if mm in GC_MONTHS and month_option_expiry(yy, mm) == d:
+            code = [c for c, v in MONTH_CODE.items() if v == mm][0]
+            return "GC{}{}".format(code, str(yy)[-2:])
+    return None
+
+
 def weekly_candidates(now_utc, horizon=9):
-    """[(expiry_date, barchart_code)] ของ series ที่ยังไม่หมดอายุ เรียงใกล้->ไกล"""
+    """[(expiry_date, [barchart_code, ...])] ของ series ที่ยังไม่หมดอายุ เรียงใกล้->ไกล
+    วันหมดอายุรายเดือนให้ chain รายเดือนมาก่อน weekly ที่หมดอายุวันเดียวกัน"""
     out = []
     start = now_utc.date() - timedelta(days=1)
     for k in range(horizon):
         d = start + timedelta(days=k)
         if d.weekday() >= 5 or expiry_utc(d) <= now_utc:
             continue
-        out.append((d, series_codes(d)))
+        monthly = monthly_option_symbol(d)
+        codes = series_codes(d)
+        out.append((d, ([monthly] + codes) if monthly else codes))
     return out
 
 
@@ -260,7 +340,11 @@ def barchart_snapshot(s):
         tried.append(syms[0])
         got = fetch_chain(syms[0])
         named = series_name_expiry(got) if got else None
-        if got and (named is None or named == exp_guess):
+        # ตัวแรกอาจเป็น chain รายเดือน ("Gold Oct '26 …") ซึ่งชื่อไม่มีวันหมดอายุให้ตรวจ
+        # เชื่อได้เพราะรหัสสร้างจากปฏิทิน ส่วนรหัส weekly ยังต้องผ่านการตรวจชื่อเหมือนเดิม
+        trusted = syms[0] == monthly_option_symbol(exp_guess)
+        if got and (named is None or named == exp_guess) and (trusted or named is not None
+                                                              or syms[0] in series_codes(exp_guess)):
             series, expiry, legs = syms[0], exp_guess, got
             break
         for alt in syms[1:]:

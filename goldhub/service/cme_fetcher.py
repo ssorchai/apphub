@@ -232,8 +232,15 @@ def futures_expiry(sym):
 
 
 def month_option_expiry(year, month):
-    """monthly OPTION ของสัญญาเดือน M หมดอายุ ~4 business day ก่อนสิ้นเดือน M-1
-    (คนละตัวกับ futures_expiry ซึ่งเป็นการส่งมอบ futures ปลายเดือน M)"""
+    """monthly OPTION ของสัญญาเดือน M หมดอายุ "business day ที่ 4 นับจากท้ายเดือน M-1"
+    **และถ้าวันนั้นเป็นวันศุกร์ ให้เลื่อนขึ้นมาหนึ่งวันทำการ** (กฎของ CME)
+    (คนละตัวกับ futures_expiry ซึ่งเป็นการส่งมอบ futures ปลายเดือน M)
+
+    24 ก.ย. 26: เดิมไม่มีเงื่อนไขวันศุกร์ เลยได้ 25 ก.ย. (ศุกร์) แต่ CME โชว์ OGV6 เหลือ 0.65 DTE
+    ตั้งแต่เช้าวันพฤหัส = หมดอายุ 24 ก.ย. -- ผิดทั้งวันที่เลือก series และจังหวะ roll ของสัญญาอ้างอิง
+
+    ข้อจำกัดที่รู้ตัว: กฎเต็มของ CME มี "หรือวันก่อนวันหยุด" ด้วย แต่เราไม่มีปฏิทินวันหยุด
+    ถ้าเดือนไหน business day ที่ 4 ติดวันหยุด วันที่ที่ได้จะช้าไปหนึ่งวัน"""
     m, y = (month - 1, year) if month > 1 else (12, year - 1)
     d = date(y, m, calendar.monthrange(y, m)[1])
     n = 0
@@ -241,6 +248,10 @@ def month_option_expiry(year, month):
         if d.weekday() < 5:
             n += 1
             if n == 4:
+                if d.weekday() == 4:              # ศุกร์ -> ถอยไปวันทำการก่อนหน้า
+                    d -= timedelta(days=1)
+                    while d.weekday() >= 5:
+                        d -= timedelta(days=1)
                 return d
         d -= timedelta(days=1)
 

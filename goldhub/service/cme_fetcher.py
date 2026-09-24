@@ -276,6 +276,23 @@ def gc_front_months(n=CURVE_N):
     return out
 
 
+def monthly_option_symbol(d):
+    """ถ้า d เป็นวันหมดอายุ option "รายเดือน" คืนสัญลักษณ์ chain ของ barchart -- ซึ่งคือสัญลักษณ์
+    ของ futures เอง เช่น 25 ก.ย. 26 -> GCV26 (CME เรียก OGV6) ไม่ใช่ก็คืน None
+
+    24 ก.ย. 26: วันหมดอายุรายเดือนมี **ทั้ง weekly และ monthly** หมดอายุวันเดียวกัน
+    (IG4U26 "Gold Friday Week 4" OI ~10,500 กับ GCV26 "Gold Oct '26" OI ~205,000)
+    ตัวหลักที่ CME โชว์และที่สภาพคล่องอยู่จริงคือรายเดือน -- ของเดิมสร้างแต่รหัส weekly
+    เลยหยิบตัวเล็กมาใช้ทั้งวัน"""
+    for k in range(14):
+        mm = (d.month + k - 1) % 12 + 1
+        yy = d.year + (d.month + k - 1) // 12
+        if mm in GC_MONTHS and month_option_expiry(yy, mm) == d:
+            code = [c for c, v in MONTH_CODE.items() if v == mm][0]
+            return "GC{}{}".format(code, str(yy)[-2:])
+    return None
+
+
 def weekly_candidates(now_utc, horizon=9):
     """[(expiry_date, series_code)] ของ series ที่ยังไม่หมดอายุ เรียงใกล้->ไกล
     (เริ่มจากเมื่อวานตามเวลา UTC: ช่วง 00:00-00:30 ไทย series ของ "เมื่อวาน" ยังเทรดอยู่)"""
@@ -285,7 +302,10 @@ def weekly_candidates(now_utc, horizon=9):
         d = start + timedelta(days=k)
         if d.weekday() >= 5 or expiry_utc(d) <= now_utc:
             continue
-        out.append((d, series_codes(d)))
+        # วันหมดอายุรายเดือน: ให้ chain รายเดือนมาก่อน weekly ที่หมดอายุวันเดียวกัน
+        monthly = monthly_option_symbol(d)
+        codes = series_codes(d)
+        out.append((d, ([monthly] + codes) if monthly else codes))
     return out
 
 
@@ -542,7 +562,10 @@ def snapshot_barchart():
         tried.append(syms[0])
         got = fetch_chain(syms[0])
         named = series_name_expiry(got) if got else None
-        if got and (named is None or named[0] == exp_guess):
+        # ตัวแรกเป็น chain รายเดือน (สร้างจากปฏิทิน ไม่ใช่เดา) ชื่อมันไม่มีวันหมดอายุให้ตรวจ
+        trusted = syms[0] == monthly_option_symbol(exp_guess)
+        if got and (named is None or named[0] == exp_guess) and (trusted or named is not None
+                                                                 or syms[0] in series_codes(exp_guess)):
             series, expiry, legs = syms[0], exp_guess, got
             break
         for alt in syms[1:]:

@@ -159,6 +159,9 @@ WEEK_CODES = {
 WD_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
 
 # งบเวลารวม (แหล่งเดียวแล้ว) -- urllib นับ timeout ต่อ socket ไม่ใช่ต่อ request
+# วันหยุดพิเศษที่ CME ประกาศเพิ่มเป็นครั้งคราว (เช่นวันไว้อาลัยระดับชาติ) -- เติมเองเมื่อมีประกาศ
+EXTRA_HOLIDAYS = set()
+
 MAX_RUNTIME = 90
 _deadline = None
 
@@ -184,6 +187,68 @@ def _nth_weekday(year, month, weekday, n):
     d = date(year, month, 1)
     off = (weekday - d.weekday()) % 7
     return d + timedelta(days=off + (n - 1) * 7)
+
+
+def _easter(year):
+    """วันอีสเตอร์ (Gregorian) -- ใช้หา Good Friday ซึ่งเป็นวันเดียวที่ CME หยุดแบบไม่ตายตัว"""
+    a, b, c = year % 19, year // 100, year % 100
+    d_, e = b // 4, b % 4
+    f, g = (b + 8) // 25, (b - (b + 8) // 25 + 1) // 3
+    h = (19 * a + b - d_ - g + 15) % 30
+    i, k = c // 4, c % 4
+    l = (32 + 2 * e + 2 * i - h - k) % 7
+    m = (a + 11 * h + 22 * l) // 451
+    month = (h + l - 7 * m + 114) // 31
+    return date(year, month, (h + l - 7 * m + 114) % 31 + 1)
+
+
+def _observed(d):
+    """วันหยุดตรงเสาร์ -> ชดเชยวันศุกร์ / ตรงอาทิตย์ -> วันจันทร์ (แบบตลาดสหรัฐ)"""
+    if d.weekday() == 5:
+        return d - timedelta(days=1)
+    if d.weekday() == 6:
+        return d + timedelta(days=1)
+    return d
+
+
+_HOLIDAY_CACHE = {}
+
+
+def cme_holidays(year):
+    """วันที่ตลาด CME/COMEX ปิด (metals) -- ใช้กับการนับ business day ของวันหมดอายุ
+
+    ไม่รวมวันที่ปิดครึ่งวัน (เช่นก่อนคริสต์มาส) เพราะวันหยุดครึ่งวันยังนับเป็น business day
+    ปฏิทินนี้คำนวณเอง ไม่ต้องอัปเดตรายปี แต่ถ้า CME ประกาศหยุดพิเศษ (เช่น วันไว้อาลัย
+    ประธานาธิบดี) จะไม่รู้ -- ปีไหนมีต้องเติมใน EXTRA_HOLIDAYS"""
+    if year in _HOLIDAY_CACHE:
+        return _HOLIDAY_CACHE[year]
+    hs = {
+        _observed(date(year, 1, 1)),                 # ปีใหม่
+        _nth_weekday(year, 1, 0, 3),                 # MLK: จันทร์ที่ 3 ของ ม.ค.
+        _nth_weekday(year, 2, 0, 3),                 # Presidents: จันทร์ที่ 3 ของ ก.พ.
+        _easter(year) - timedelta(days=2),           # Good Friday
+        _nth_weekday(year, 5, 0, 5) if _nth_weekday(year, 5, 0, 5).month == 5
+        else _nth_weekday(year, 5, 0, 4),            # Memorial: จันทร์สุดท้ายของ พ.ค.
+        _observed(date(year, 6, 19)),                # Juneteenth
+        _observed(date(year, 7, 4)),                 # 4 ก.ค.
+        _nth_weekday(year, 9, 0, 1),                 # Labor: จันทร์แรกของ ก.ย.
+        _nth_weekday(year, 11, 3, 4),                # Thanksgiving: พฤหัสที่ 4 ของ พ.ย.
+        _observed(date(year, 12, 25)),               # คริสต์มาส
+    }
+    hs |= {d for d in EXTRA_HOLIDAYS if d.year == year}
+    _HOLIDAY_CACHE[year] = hs
+    return hs
+
+
+def is_business_day(d):
+    return d.weekday() < 5 and d not in cme_holidays(d.year)
+
+
+def prev_business_day(d):
+    d -= timedelta(days=1)
+    while not is_business_day(d):
+        d -= timedelta(days=1)
+    return d
 
 
 def us_dst(d):
@@ -224,7 +289,7 @@ def futures_expiry(sym):
     d = date(year, month, calendar.monthrange(year, month)[1])
     n = 0
     while True:
-        if d.weekday() < 5:
+        if is_business_day(d):
             n += 1
             if n == 3:
                 return d
@@ -245,15 +310,46 @@ def month_option_expiry(year, month):
     d = date(y, m, calendar.monthrange(y, m)[1])
     n = 0
     while True:
-        if d.weekday() < 5:
+        if is_business_day(d):
             n += 1
             if n == 4:
-                if d.weekday() == 4:              # ศุกร์ -> ถอยไปวันทำการก่อนหน้า
-                    d -= timedelta(days=1)
-                    while d.weekday() >= 5:
-                        d -= timedelta(days=1)
+                # ศุกร์ หรือ "วันก่อนวันหยุด" -> ถอยไปวันทำการก่อนหน้า (วนซ้ำเผื่อเจอซ้อน)
+                while d.weekday() == 4 or (d + timedelta(days=1)) in cme_holidays((d + timedelta(days=1)).year):
+                    d = prev_business_day(d)
                 return d
         d -= timedelta(days=1)
+
+
+def check_monthly_expiry(points, log_fn):
+    """เทียบวันหมดอายุ option รายเดือนที่เราคำนวณ กับรายการวันหมดอายุจริงที่ QuikStrike ส่งมา
+
+    ทำไมต้องมี: สูตรวันหมดอายุ (business day ที่ 4 + เลี่ยงศุกร์/วันก่อนวันหยุด) พึ่งปฏิทินวันหยุด
+    ที่เราคำนวณเอง ถ้า CME ประกาศหยุดพิเศษหรือเราเข้าใจกฎผิดสำหรับบางเดือน จะรู้ตัวก็ต่อเมื่อ
+    ตัวเลขบนจอผิดแล้ว -- ตัวนี้ใช้ข้อมูลที่ดึงมาอยู่แล้วทุกชั่วโมง ไม่มี request เพิ่ม
+
+    EVC ลิสต์ทุกวันหมดอายุที่ซื้อขายได้ (รวม weekly) วันที่เราคำนวณจึง "ต้องมี" อยู่ในลิสต์
+    ถ้าไม่มี = วันนั้นไม่มีสัญญาหมดอายุเลย = สูตรเราผิด"""
+    try:
+        listed = {datetime.strptime(p["expires"], "%m/%d/%Y").date() for p in points}
+    except Exception:
+        return
+    if not listed:
+        return
+    horizon = max(listed)
+    today = date.today()
+    for k in range(14):
+        mm = (today.month + k - 1) % 12 + 1
+        yy = today.year + (today.month + k - 1) // 12
+        if mm not in GC_MONTHS:
+            continue
+        exp = month_option_expiry(yy, mm)
+        if exp < today or exp > horizon:
+            continue
+        if exp not in listed:
+            near = sorted(d for d in listed if abs((d - exp).days) <= 4)
+            log_fn("⚠️ วันหมดอายุรายเดือนที่คำนวณได้ {} (สัญญา {}/{}) ไม่มีในลิสต์ของ CME "
+                   "-- วันใกล้เคียงที่มีจริง: {}".format(exp, mm, yy,
+                   ", ".join(str(d) for d in near) or "ไม่มีเลย"))
 
 
 def underlying_for(series_expiry):
@@ -1506,13 +1602,15 @@ def main(use_qs=True, baseline=True):
         qs = QSClient()
         try:
             try:
-                for p in fetch_eventvol(qs):
+                pts = list(fetch_eventvol(qs))
+                for p in pts:
                     if datetime.strptime(p["expires"], "%m/%d/%Y").date() == snap["expiry"]:
                         ev0, qs_sym = p, p["sym"]
                         ev_fresh = True
                         cache["ev"] = {"ts": now_ts, "point": p}
                         break
                 qlog("eventvol 0DTE {}".format(ev0))
+                check_monthly_expiry(pts, qlog)
             except QS_ESCALATE:
                 raise
             except Exception as e:

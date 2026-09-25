@@ -360,7 +360,12 @@ weekly ที่จับได้ช่วงเช้าหายไป ถู
   - ที่ไม่ย้าย: `captures/` 156 ไฟล์จากการสำรวจ มิ.ย., `.pw-profile`, `session.json`,
     `.claude/settings.local.json` (allowlist ผูกกับ path เดิม) -> อยู่ในถุง
     `_archive/retired-projects-2026-09-25.tar.gz` (6 MB, มี .git ของทุก repo)
-  - เหลือขั้นสุดท้าย: ลบ 4 โฟลเดอร์ทิ้ง (ต้องทำจาก session ที่ไม่ได้ cd อยู่ในนั้น)
+  - **ยังไม่ลบโฟลเดอร์** (ผู้ใช้เลือกปล่อยไว้ก่อน) ใส่ `RETIRED.md` กำกับไว้ทั้งสี่ที่แล้วว่า
+    ห้ามแก้ ของจริงอยู่ apphub และประวัติอยู่ branch ไหน — ลบได้ทุกเมื่อ แต่ต้องสั่งจาก session
+    ที่ไม่ได้ cd อยู่ใน `cme_scraping` (เป็น working dir ของ session ที่ทำงานนี้)
+  - memory: copy ไปไว้ที่ project dir ของ apphub ด้วย (`-Users-sorachai-src-claude-code-apphub`)
+    และดึง `mac-widget-architecture` ของ project dir เก่ามารวมเป็น `widget-data-sources`
+    (แหล่งราคา + ข้อกำหนด TLS/UA + georeference เรดาร์) — สองที่ sync กันแล้ว
 - ✅ **โฟลเดอร์ widget ของ Übersicht เลิกเป็น git repo (25 ก.ย. 26)**
   - เดิม `~/Library/Application Support/Übersicht/widgets/` เป็น git repo แยก (37 commit,
     branch master + tag save-2/3/4) ทำให้มีต้นทาง 2 ที่ ต้อง sync มือทุกครั้ง

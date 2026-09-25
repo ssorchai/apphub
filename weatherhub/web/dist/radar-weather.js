@@ -63,38 +63,71 @@ const flush = v => {
   const w = waiters;
   waiters = [];
   w.forEach(f => f(v));
+}; // สถานะไว้โชว์บนหน้าเว็บ ให้รู้ว่าติดตรงไหน (ผู้ใช้เจอ "ไม่ขึ้น" ทั้งที่ Chrome อนุญาตแล้ว 25 ก.ย.)
+
+
+const geoDiag = {
+  startedAt: null,
+  fixAt: null,
+  accuracy: null,
+  errCode: null,
+  errAt: null,
+  restarts: 0
+};
+const WATCH_RESTART_MS = 60000; // ยังไม่ได้ fix นานเท่านี้ -> เริ่ม watch ใหม่
+
+const onPos = p => {
+  const c = p && p.coords;
+  if (!c || !isFinite(c.latitude) || !isFinite(c.longitude)) return;
+  const prev = loc;
+  loc = {
+    lat: c.latitude,
+    lon: c.longitude,
+    at: Date.now()
+  };
+  locErr = null;
+  geoDiag.fixAt = Date.now();
+  geoDiag.accuracy = isFinite(c.accuracy) ? Math.round(c.accuracy) : null;
+  const waiting = waiters.length > 0;
+  flush(loc);
+  if (!waiting && onFix && (!prev || prev.lat !== loc.lat || prev.lon !== loc.lon)) onFix(loc);
+};
+
+const startWatch = geo => {
+  // ไม่ส่ง timeout ให้ watch: Chrome บางครั้งยิง TIMEOUT แล้วไม่ส่งพิกัดต่อ (watch ตายเงียบ)
+  // -- จับเวลาเองใน locateWeb แทน และถ้านานเกิน WATCH_RESTART_MS ค่อยเริ่มใหม่
+  geoDiag.startedAt = Date.now();
+  watchId = geo.watchPosition(onPos, e => {
+    locErr = e && e.code || 'error';
+    geoDiag.errCode = locErr;
+    geoDiag.errAt = Date.now(); // ไม่อนุญาต = watch จบแล้ว ปล่อยให้รอบถัดไปเริ่มใหม่ (เผื่อผู้ใช้เพิ่งกด Allow)
+
+    if (locErr === 1) {
+      geo.clearWatch(watchId);
+      watchId = null;
+    }
+
+    flush(null);
+  }, {
+    maximumAge: LOC_MAX_AGE
+  }); // ขอพิกัดที่เบราว์เซอร์จำไว้แล้ว (ถ้ามี) มาใช้ก่อน ระหว่างรอ fix ใหม่
+
+  try {
+    geo.getCurrentPosition(onPos, () => {}, {
+      maximumAge: Infinity,
+      timeout: 5000
+    });
+  } catch (e) {
+    /* ไม่มีก็รอ watch */
+  }
 };
 
 const locateWeb = geo => {
-  if (watchId == null) {
-    watchId = geo.watchPosition(p => {
-      const c = p && p.coords;
-      if (!c || !isFinite(c.latitude) || !isFinite(c.longitude)) return;
-      const prev = loc;
-      loc = {
-        lat: c.latitude,
-        lon: c.longitude,
-        at: Date.now()
-      };
-      locErr = null;
-      const waiting = waiters.length > 0;
-      flush(loc);
-      if (!waiting && onFix && (!prev || prev.lat !== loc.lat || prev.lon !== loc.lon)) onFix(loc);
-    }, e => {
-      locErr = e && e.code || 'error'; // ไม่อนุญาต = watch จบแล้ว ปล่อยให้รอบถัดไปเริ่มใหม่ (เผื่อผู้ใช้เพิ่งกด Allow)
-
-      if (locErr === 1) {
-        geo.clearWatch(watchId);
-        watchId = null;
-      }
-
-      flush(null);
-    }, {
-      timeout: LOC_TIMEOUT_WEB,
-      maximumAge: LOC_MAX_AGE
-    });
+  if (watchId == null) startWatch(geo);else if (!loc && Date.now() - geoDiag.startedAt > WATCH_RESTART_MS) {
+    geo.clearWatch(watchId);
+    geoDiag.restarts += 1;
+    startWatch(geo);
   }
-
   if (loc) return Promise.resolve(loc); // watch อัปเดต loc เองอยู่แล้ว
 
   return Promise.race([new Promise(res => waiters.push(res)), new Promise(res => setTimeout(() => {
@@ -699,6 +732,16 @@ const altDrag = e => {
 
   window.addEventListener('mousemove', move);
   window.addEventListener('mouseup', up);
+};
+
+const geoDiagText = () => {
+  const ago = t => t ? `${Math.round((Date.now() - t) / 1000)} วิที่แล้ว` : '-';
+
+  const parts = [`ขอพิกัดมา ${geoDiag.startedAt ? Math.round((Date.now() - geoDiag.startedAt) / 1000) : 0} วิ`];
+  parts.push(geoDiag.fixAt ? `fix ล่าสุด ${ago(geoDiag.fixAt)}${geoDiag.accuracy != null ? ` ±${geoDiag.accuracy} ม.` : ''}` : 'ยังไม่เคยได้ fix');
+  if (geoDiag.errCode) parts.push(`error ${geoDiag.errCode} (${ago(geoDiag.errAt)})`);
+  if (geoDiag.restarts) parts.push(`เริ่มใหม่ ${geoDiag.restarts} ครั้ง`);
+  return parts.join(' · ');
 }; // เหตุผลที่ยังไม่มีจุด "เครื่องนี้" -- บอกให้รู้ว่าต้องไปแก้ที่ไหน
 
 
@@ -1600,7 +1643,7 @@ const WebPage = ({
     on: show.me,
     dispatch: dispatch,
     pending: !basis,
-    note: !(fcById && fcById.me) ? meNote || 'รอพิกัด…' : null,
+    note: !(fcById && fcById.me) ? `${meNote || 'รอพิกัด…'} [${geoDiagText()}]` : null,
     fc: fcById && fcById.me && fcById.me.forecast,
     dist: point && !point.default ? `ห่างสถานีเรดาร์ ${point.distance_km} กม.` : null
   }), custom && /*#__PURE__*/React.createElement(ForecastRow, {

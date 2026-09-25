@@ -51,10 +51,21 @@ const load = (dispatch) => {
 export const command = load;
 export const refreshFrequency = 60000;
 
-export const initialState = { meta: null, state: null, src: null };
+// ปุ่มเปิด/ปิดจุด Office/Home -- จำไว้ใน localStorage ข้าม reboot
+const SHOW_KEY = 'radar-weather.markers';
+const savedShow = () => {
+  try { return { office: true, home: true, ...JSON.parse(localStorage.getItem(SHOW_KEY)) }; } catch (e) { return { office: true, home: true }; }
+};
+
+export const initialState = { meta: null, state: null, src: null, show: savedShow() };
 export const updateState = (event, prev) => {
   // command เป็นฟังก์ชัน Übersicht จะยิง UB/COMMAND_RAN เองแบบไม่มี output -- ไม่ใช้ event นั้นเลย
   if (event.type === 'DATA') return { ...prev, meta: event.meta, state: event.state, src: event.src };
+  if (event.type === 'TOGGLE') {
+    const show = { ...prev.show, [event.id]: !prev.show[event.id] };
+    try { localStorage.setItem(SHOW_KEY, JSON.stringify(show)); } catch (e) {}
+    return { ...prev, show };
+  }
   return prev;
 };
 
@@ -79,9 +90,43 @@ const macos = {
 // ตำแหน่ง Office/บ้าน เป็น % ของภาพเรดาร์ 965x800
 // (เรดาร์หนองจอก 13.8348127,100.8463349 = px(483,400), สเกล 0.3008 กม./px)
 const MARKERS = [
-  { id: 'office', left: '38.7%', top: '52.8%', color: '#64d2ff' },  // 13.7733, 100.5426
-  { id: 'home', left: '41.0%', top: '47.6%', color: '#ffb340' },    // 13.8873, 100.6026
+  { id: 'office', label: 'Office', left: '38.7%', top: '52.8%', color: '#64d2ff' },  // 13.7733, 100.5426
+  { id: 'home', label: 'Home', left: '41.0%', top: '47.6%', color: '#ffb340' },      // 13.8873, 100.6026
 ];
+
+// ไอคอนของปุ่ม toggle (SVG วาดเอง ไม่พึ่งฟอนต์/ไฟล์ภายนอก)
+const ICONS = {
+  office: (c) => (
+    <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke={c} strokeWidth="1.5" strokeLinejoin="round">
+      <rect x="3" y="1.75" width="10" height="12.5" rx="1" />
+      <path d="M6 5h1M9 5h1M6 8h1M9 8h1M7 14.25v-3h2v3" strokeLinecap="round" />
+    </svg>
+  ),
+  home: (c) => (
+    <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke={c} strokeWidth="1.5" strokeLinejoin="round">
+      <path d="M2 7.5 8 2.5l6 5" strokeLinecap="round" />
+      <path d="M3.75 6.25v7.5h8.5v-7.5M6.75 13.75v-3.5h2.5v3.5" />
+    </svg>
+  ),
+};
+
+// กดแล้วต้องไม่ไปเปิด Chrome (คลิกการ์ด) และไม่เริ่ม ⌥-drag
+const stop = (e) => e.stopPropagation();
+const ToggleButton = ({ m, on, dispatch }) => (
+  <div
+    title={`${on ? 'ซ่อน' : 'แสดง'}จุด ${m.label}`}
+    onMouseDown={stop}
+    onClick={(e) => { e.stopPropagation(); e.preventDefault(); dispatch({ type: 'TOGGLE', id: m.id }); }}
+    style={{
+      width: '22px', height: '22px', borderRadius: '50%', boxSizing: 'border-box',
+      display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer',
+      background: on ? 'rgba(255,255,255,0.16)' : 'transparent',
+      border: `1px solid ${on ? m.color : 'rgba(255,255,255,0.22)'}`,
+      opacity: on ? 1 : 0.55,
+    }}>
+    {ICONS[m.id](on ? m.color : 'rgba(255,255,255,0.7)')}
+  </div>
+);
 
 const Marker = ({ m }) => (
   <div style={{
@@ -142,7 +187,7 @@ const altDrag = (e) => {
   window.addEventListener('mouseup', up);
 };
 
-export const render = ({ meta, state, src }) => {
+export const render = ({ meta, state, src, show }, dispatch) => {
   if (!meta) return null;
 
   // ภาพเก่ากว่า 20 นาที = เตือนว่าค้าง
@@ -178,14 +223,17 @@ export const render = ({ meta, state, src }) => {
         <span style={{ fontSize: '11px', color: macos.secondary, fontWeight: '600', letterSpacing: '0.5px', textTransform: 'uppercase' }}>
           {meta.source}
         </span>
-        <span style={{ fontSize: '11px', color: stale ? macos.orange : macos.tertiary, fontWeight: stale ? '700' : '400' }}>
-          {stale ? '● ' : ''}{meta.last_update}{src === 'file' ? ' · file' : ''}
-        </span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+          {MARKERS.map((m) => <ToggleButton m={m} on={show[m.id]} dispatch={dispatch} key={m.id} />)}
+          <span style={{ marginLeft: '4px', fontSize: '11px', color: stale ? macos.orange : macos.tertiary, fontWeight: stale ? '700' : '400' }}>
+            {stale ? '● ' : ''}{meta.last_update}{src === 'file' ? ' · file' : ''}
+          </span>
+        </div>
       </div>
 
       <div style={{ position: 'relative', width: '100%', borderRadius: '14px', overflow: 'hidden', background: 'rgba(255, 255, 255, 0.1)', minHeight: '200px', display: 'flex', alignItems: 'center' }}>
         <img src={imgSrc} style={{ width: '100%', display: 'block' }} />
-        {MARKERS.map((m) => <Marker m={m} key={m.id} />)}
+        {MARKERS.filter((m) => show[m.id]).map((m) => <Marker m={m} key={m.id} />)}
         {me && <MeMarker pct={me} />}
       </div>
 

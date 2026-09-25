@@ -220,8 +220,12 @@ const load = dispatch => {
 
   locate().then(l => {
     // เว็บ: loc เปลี่ยนทุกครั้งที่ watch ได้ fix ใหม่ -- ยิงซ้ำเฉพาะตอนพิกัดขยับจริง (หรือเพิ่งได้ครั้งแรก)
-    const moved = l && (!known || l.lat !== known.lat || l.lon !== known.lon);
-    if (moved) fetchState(l).catch(() => {});else if (!l) dispatch({
+    const moved = l && (!known || l.lat !== known.lat || l.lon !== known.lon); // ต้องยิงทั้งสองตัว: เคยยิงแค่ /api/state -> จุดเขียวขึ้น แต่แถว "ตำแหน่งเครื่องนี้" ค้าง "รอพิกัด…"
+
+    if (moved) {
+      fetchState(l).catch(() => {});
+      fetchForecast();
+    } else if (!l) dispatch({
       type: 'LOC_ERR',
       locErr
     });
@@ -1102,7 +1106,8 @@ const ForecastRow = ({
     t0: fc.t0
   }));
 }; // ---- จุด custom: อ่านพิกัดจากข้อความที่พิมพ์/วาง (ในเบราว์เซอร์ล้วน ไม่ยิงไปไหน) ----
-// รับ "13.75, 100.50" / "13.75 100.50" / ลิงก์ Google Maps แบบเต็ม (!3d..!4d.. = หมุด, @lat,lon = กลางจอ,
+// รับ "13.75, 100.50" / "13.75 100.50" / องศา-ลิปดา-ฟิลิปดาแบบที่ Google Maps โชว์
+// (13°36'43.3"N 100°32'54.0"E, ลิปดาทศนิยมก็ได้) / ลิงก์ Google Maps แบบเต็ม (!3d..!4d.. = หมุด, @lat,lon = กลางจอ,
 // ?q= / query= / ll=) -- ลิงก์สั้น maps.app.goo.gl ต้องให้ server ไปถาม Google ซึ่งผู้ใช้เลือกไม่ทำ
 
 
@@ -1136,6 +1141,37 @@ const parseLatLon = text => {
         ll
       };
     }
+  } // DMS: ต้องมี ° ถึงจะนับ -- ซีกโลก N/S/E/W อยู่หน้าหรือหลังเลขก็ได้ ถ้ามีจะจับคู่ lat/lon ตามตัวอักษร
+
+
+  const DMS = /([NSEW])?\s*(-?\d+(?:\.\d+)?)\s*°\s*(?:(\d+(?:\.\d+)?)\s*['′’]\s*)?(?:(\d+(?:\.\d+)?)\s*(?:"|″|”|'')\s*)?([NSEW])?/gi;
+  const parts = [];
+  let m;
+
+  while ((m = DMS.exec(t)) && parts.length < 3) {
+    const deg = parseFloat(m[2]),
+          min = m[3] ? parseFloat(m[3]) : 0,
+          sec = m[4] ? parseFloat(m[4]) : 0;
+    if (min >= 60 || sec >= 60) return {
+      error: 'ลิปดา/ฟิลิปดาต้องน้อยกว่า 60'
+    };
+    const hemi = (m[5] || m[1] || '').toUpperCase();
+    let v = Math.abs(deg) + min / 60 + sec / 3600;
+    if (deg < 0 || hemi === 'S' || hemi === 'W') v = -v;
+    parts.push({
+      v,
+      hemi
+    });
+  }
+
+  if (parts.length === 2) {
+    let [a, b] = parts;
+    if ('EW'.includes(a.hemi) && a.hemi && 'NS'.includes(b.hemi) && b.hemi) [a, b] = [b, a]; // เขียนลองจิจูดก่อน
+
+    const ll = pick(a.v, b.v);
+    if (ll) return {
+      ll
+    };
   }
 
   return {
@@ -1216,7 +1252,7 @@ const CustomInput = ({
     value: text,
     onChange: e => setText(e.target.value),
     style: field,
-    placeholder: "lat, lon \u0E40\u0E0A\u0E48\u0E19 13.7563, 100.5018"
+    placeholder: '13.7563, 100.5018 หรือ 13°45\'22.7"N 100°30\'06.5"E'
   }), /*#__PURE__*/React.createElement("button", {
     type: "submit",
     style: btn
@@ -1233,7 +1269,7 @@ const CustomInput = ({
       color: error ? macos.orange : macos.tertiary,
       marginTop: '4px'
     }
-  }, error || 'หรือวางลิงก์ Google Maps แบบเต็ม · ไม่บันทึก reload แล้วหาย'));
+  }, error || 'ทศนิยม / องศา-ลิปดา-ฟิลิปดา / ลิงก์ Google Maps แบบเต็ม · ไม่บันทึก reload แล้วหาย'));
 }; // ---- ความแม่นย้อนหลัง (verify.py) ----
 
 
@@ -1574,7 +1610,7 @@ const WebPage = ({
     pending: !(fcById && fcById.custom),
     note: fcById && fcById.custom && !fcById.custom.in_coverage ? 'อยู่นอกวงเรดาร์ (120 กม. จากหนองจอก)' : null,
     fc: fcById && fcById.custom && fcById.custom.forecast,
-    dist: `${custom.lat}, ${custom.lon}${myLL ? ` · ห่างจากเครื่องนี้ ${kmBetween(myLL, custom).toFixed(1)} กม.` : ''}`
+    dist: `${+custom.lat.toFixed(7)}, ${+custom.lon.toFixed(7)}${myLL ? ` · ห่างจากเครื่องนี้ ${kmBetween(myLL, custom).toFixed(1)} กม.` : ''}`
   }), /*#__PURE__*/React.createElement(CustomInput, {
     custom: custom,
     dispatch: dispatch

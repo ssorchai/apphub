@@ -359,7 +359,10 @@ weekly ที่จับได้ช่วงเช้าหายไป ถู
     (install เต็มรูปก็ copy widget ให้ในตัว / uninstall ไม่ลบ widget ออกจากจอ)
   - โฟลเดอร์นั้นเหลือแต่ `gold-dashboard.jsx`, `radar-weather.jsx`, `.DS_Store`
 - ✅ ปรับ `docs/pipeline-notes.md` + `goldhub/README.md` ให้ตรงกับของจริงหลังย้าย (25 ก.ย. 26)
-- อัปเดต memory ของ session ให้ชี้ path ใหม่ทั้งหมด
+- ✅ อัปเดต memory ของ session ให้ชี้ path ใหม่ (25 ก.ย. 26) — บันทึกของ 23-25 ก.ย. เพิ่มครบ
+  (เฟส 3.5/4, series รายเดือน + ปฏิทินวันหยุด, atm_iv, termux standalone, เลิก repo Übersicht)
+  ⚠️ memory ผูกกับ working dir: `~/.claude/projects/-Users-sorachai-src-claude-code-cme-scraping/memory/`
+  ถ้าเปิด session ใหม่โดย cd เข้า apphub ตรงๆ memory ชุดนี้จะไม่ถูกโหลด
 
 ---
 

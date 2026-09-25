@@ -34,6 +34,7 @@ let locErr = null;                      // code ของ GeolocationPositionErr
 // ---- เว็บ: watchPosition ตัวเดียวตลอดอายุหน้า ----
 let watchId = null;
 let waiters = [];
+let onFix = null;          // load() ตั้งไว้: ได้ fix ใหม่ตอนไม่มีใครรอ (มาช้า/หลัง error) ก็ยิง API ซ้ำทันที
 const flush = (v) => { const w = waiters; waiters = []; w.forEach((f) => f(v)); };
 const locateWeb = (geo) => {
   if (watchId == null) {
@@ -41,9 +42,12 @@ const locateWeb = (geo) => {
       (p) => {
         const c = p && p.coords;
         if (!c || !isFinite(c.latitude) || !isFinite(c.longitude)) return;
+        const prev = loc;
         loc = { lat: c.latitude, lon: c.longitude, at: Date.now() };
         locErr = null;
+        const waiting = waiters.length > 0;
         flush(loc);
+        if (!waiting && onFix && (!prev || prev.lat !== loc.lat || prev.lon !== loc.lon)) onFix(loc);
       },
       (e) => {
         locErr = (e && e.code) || 'error';
@@ -101,6 +105,7 @@ const load = (dispatch) => {
   // ไม่รอพิกัดก่อนโหลด: ขอสิทธิ์ Location ครั้งแรก (ป้ายของเบราว์เซอร์/macOS ค้างรอคนกด)
   // เคยทำให้ทั้งการ์ดว่างเปล่าจนหมด LOC_TIMEOUT -- ยิงด้วยพิกัดที่มีอยู่ก่อน ได้พิกัดใหม่ค่อยยิงซ้ำ
   const known = loc;
+  if (WEB) onFix = (l) => fetchState(l).catch(() => {});
   const first = fetchState(known).catch(viaFile);
   locate().then((l) => {
     // เว็บ: loc เปลี่ยนทุกครั้งที่ watch ได้ fix ใหม่ -- ยิงซ้ำเฉพาะตอนพิกัดขยับจริง (หรือเพิ่งได้ครั้งแรก)

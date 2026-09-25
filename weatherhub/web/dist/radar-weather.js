@@ -47,6 +47,7 @@ let locErr = null; // code ของ GeolocationPositionError ล่าสุด
 
 let watchId = null;
 let waiters = [];
+let onFix = null; // load() ตั้งไว้: ได้ fix ใหม่ตอนไม่มีใครรอ (มาช้า/หลัง error) ก็ยิง API ซ้ำทันที
 
 const flush = v => {
   const w = waiters;
@@ -59,13 +60,16 @@ const locateWeb = geo => {
     watchId = geo.watchPosition(p => {
       const c = p && p.coords;
       if (!c || !isFinite(c.latitude) || !isFinite(c.longitude)) return;
+      const prev = loc;
       loc = {
         lat: c.latitude,
         lon: c.longitude,
         at: Date.now()
       };
       locErr = null;
+      const waiting = waiters.length > 0;
       flush(loc);
+      if (!waiting && onFix && (!prev || prev.lat !== loc.lat || prev.lon !== loc.lon)) onFix(loc);
     }, e => {
       locErr = e && e.code || 'error'; // ไม่อนุญาต = watch จบแล้ว ปล่อยให้รอบถัดไปเริ่มใหม่ (เผื่อผู้ใช้เพิ่งกด Allow)
 
@@ -164,6 +168,7 @@ const load = dispatch => {
 
 
   const known = loc;
+  if (WEB) onFix = l => fetchState(l).catch(() => {});
   const first = fetchState(known).catch(viaFile);
   locate().then(l => {
     // เว็บ: loc เปลี่ยนทุกครั้งที่ watch ได้ fix ใหม่ -- ยิงซ้ำเฉพาะตอนพิกัดขยับจริง (หรือเพิ่งได้ครั้งแรก)

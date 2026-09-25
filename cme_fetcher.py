@@ -159,6 +159,9 @@ WEEK_CODES = {
 WD_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
 
 # งบเวลารวม (แหล่งเดียวแล้ว) -- urllib นับ timeout ต่อ socket ไม่ใช่ต่อ request
+# วันหยุดพิเศษที่ CME ประกาศเพิ่มเป็นครั้งคราว (เช่นวันไว้อาลัยระดับชาติ) -- เติมเองเมื่อมีประกาศ
+EXTRA_HOLIDAYS = set()
+
 MAX_RUNTIME = 90
 _deadline = None
 
@@ -184,6 +187,68 @@ def _nth_weekday(year, month, weekday, n):
     d = date(year, month, 1)
     off = (weekday - d.weekday()) % 7
     return d + timedelta(days=off + (n - 1) * 7)
+
+
+def _easter(year):
+    """วันอีสเตอร์ (Gregorian) -- ใช้หา Good Friday ซึ่งเป็นวันเดียวที่ CME หยุดแบบไม่ตายตัว"""
+    a, b, c = year % 19, year // 100, year % 100
+    d_, e = b // 4, b % 4
+    f, g = (b + 8) // 25, (b - (b + 8) // 25 + 1) // 3
+    h = (19 * a + b - d_ - g + 15) % 30
+    i, k = c // 4, c % 4
+    l = (32 + 2 * e + 2 * i - h - k) % 7
+    m = (a + 11 * h + 22 * l) // 451
+    month = (h + l - 7 * m + 114) // 31
+    return date(year, month, (h + l - 7 * m + 114) % 31 + 1)
+
+
+def _observed(d):
+    """วันหยุดตรงเสาร์ -> ชดเชยวันศุกร์ / ตรงอาทิตย์ -> วันจันทร์ (แบบตลาดสหรัฐ)"""
+    if d.weekday() == 5:
+        return d - timedelta(days=1)
+    if d.weekday() == 6:
+        return d + timedelta(days=1)
+    return d
+
+
+_HOLIDAY_CACHE = {}
+
+
+def cme_holidays(year):
+    """วันที่ตลาด CME/COMEX ปิด (metals) -- ใช้กับการนับ business day ของวันหมดอายุ
+
+    ไม่รวมวันที่ปิดครึ่งวัน (เช่นก่อนคริสต์มาส) เพราะวันหยุดครึ่งวันยังนับเป็น business day
+    ปฏิทินนี้คำนวณเอง ไม่ต้องอัปเดตรายปี แต่ถ้า CME ประกาศหยุดพิเศษ (เช่น วันไว้อาลัย
+    ประธานาธิบดี) จะไม่รู้ -- ปีไหนมีต้องเติมใน EXTRA_HOLIDAYS"""
+    if year in _HOLIDAY_CACHE:
+        return _HOLIDAY_CACHE[year]
+    hs = {
+        _observed(date(year, 1, 1)),                 # ปีใหม่
+        _nth_weekday(year, 1, 0, 3),                 # MLK: จันทร์ที่ 3 ของ ม.ค.
+        _nth_weekday(year, 2, 0, 3),                 # Presidents: จันทร์ที่ 3 ของ ก.พ.
+        _easter(year) - timedelta(days=2),           # Good Friday
+        _nth_weekday(year, 5, 0, 5) if _nth_weekday(year, 5, 0, 5).month == 5
+        else _nth_weekday(year, 5, 0, 4),            # Memorial: จันทร์สุดท้ายของ พ.ค.
+        _observed(date(year, 6, 19)),                # Juneteenth
+        _observed(date(year, 7, 4)),                 # 4 ก.ค.
+        _nth_weekday(year, 9, 0, 1),                 # Labor: จันทร์แรกของ ก.ย.
+        _nth_weekday(year, 11, 3, 4),                # Thanksgiving: พฤหัสที่ 4 ของ พ.ย.
+        _observed(date(year, 12, 25)),               # คริสต์มาส
+    }
+    hs |= {d for d in EXTRA_HOLIDAYS if d.year == year}
+    _HOLIDAY_CACHE[year] = hs
+    return hs
+
+
+def is_business_day(d):
+    return d.weekday() < 5 and d not in cme_holidays(d.year)
+
+
+def prev_business_day(d):
+    d -= timedelta(days=1)
+    while not is_business_day(d):
+        d -= timedelta(days=1)
+    return d
 
 
 def us_dst(d):
@@ -224,7 +289,7 @@ def futures_expiry(sym):
     d = date(year, month, calendar.monthrange(year, month)[1])
     n = 0
     while True:
-        if d.weekday() < 5:
+        if is_business_day(d):
             n += 1
             if n == 3:
                 return d
@@ -232,17 +297,59 @@ def futures_expiry(sym):
 
 
 def month_option_expiry(year, month):
-    """monthly OPTION ของสัญญาเดือน M หมดอายุ ~4 business day ก่อนสิ้นเดือน M-1
-    (คนละตัวกับ futures_expiry ซึ่งเป็นการส่งมอบ futures ปลายเดือน M)"""
+    """monthly OPTION ของสัญญาเดือน M หมดอายุ "business day ที่ 4 นับจากท้ายเดือน M-1"
+    **และถ้าวันนั้นเป็นวันศุกร์ ให้เลื่อนขึ้นมาหนึ่งวันทำการ** (กฎของ CME)
+    (คนละตัวกับ futures_expiry ซึ่งเป็นการส่งมอบ futures ปลายเดือน M)
+
+    24 ก.ย. 26: เดิมไม่มีเงื่อนไขวันศุกร์ เลยได้ 25 ก.ย. (ศุกร์) แต่ CME โชว์ OGV6 เหลือ 0.65 DTE
+    ตั้งแต่เช้าวันพฤหัส = หมดอายุ 24 ก.ย. -- ผิดทั้งวันที่เลือก series และจังหวะ roll ของสัญญาอ้างอิง
+
+    ข้อจำกัดที่รู้ตัว: กฎเต็มของ CME มี "หรือวันก่อนวันหยุด" ด้วย แต่เราไม่มีปฏิทินวันหยุด
+    ถ้าเดือนไหน business day ที่ 4 ติดวันหยุด วันที่ที่ได้จะช้าไปหนึ่งวัน"""
     m, y = (month - 1, year) if month > 1 else (12, year - 1)
     d = date(y, m, calendar.monthrange(y, m)[1])
     n = 0
     while True:
-        if d.weekday() < 5:
+        if is_business_day(d):
             n += 1
             if n == 4:
+                # ศุกร์ หรือ "วันก่อนวันหยุด" -> ถอยไปวันทำการก่อนหน้า (วนซ้ำเผื่อเจอซ้อน)
+                while d.weekday() == 4 or (d + timedelta(days=1)) in cme_holidays((d + timedelta(days=1)).year):
+                    d = prev_business_day(d)
                 return d
         d -= timedelta(days=1)
+
+
+def check_monthly_expiry(points, log_fn):
+    """เทียบวันหมดอายุ option รายเดือนที่เราคำนวณ กับรายการวันหมดอายุจริงที่ QuikStrike ส่งมา
+
+    ทำไมต้องมี: สูตรวันหมดอายุ (business day ที่ 4 + เลี่ยงศุกร์/วันก่อนวันหยุด) พึ่งปฏิทินวันหยุด
+    ที่เราคำนวณเอง ถ้า CME ประกาศหยุดพิเศษหรือเราเข้าใจกฎผิดสำหรับบางเดือน จะรู้ตัวก็ต่อเมื่อ
+    ตัวเลขบนจอผิดแล้ว -- ตัวนี้ใช้ข้อมูลที่ดึงมาอยู่แล้วทุกชั่วโมง ไม่มี request เพิ่ม
+
+    EVC ลิสต์ทุกวันหมดอายุที่ซื้อขายได้ (รวม weekly) วันที่เราคำนวณจึง "ต้องมี" อยู่ในลิสต์
+    ถ้าไม่มี = วันนั้นไม่มีสัญญาหมดอายุเลย = สูตรเราผิด"""
+    try:
+        listed = {datetime.strptime(p["expires"], "%m/%d/%Y").date() for p in points}
+    except Exception:
+        return
+    if not listed:
+        return
+    horizon = max(listed)
+    today = date.today()
+    for k in range(14):
+        mm = (today.month + k - 1) % 12 + 1
+        yy = today.year + (today.month + k - 1) // 12
+        if mm not in GC_MONTHS:
+            continue
+        exp = month_option_expiry(yy, mm)
+        if exp < today or exp > horizon:
+            continue
+        if exp not in listed:
+            near = sorted(d for d in listed if abs((d - exp).days) <= 4)
+            log_fn("⚠️ วันหมดอายุรายเดือนที่คำนวณได้ {} (สัญญา {}/{}) ไม่มีในลิสต์ของ CME "
+                   "-- วันใกล้เคียงที่มีจริง: {}".format(exp, mm, yy,
+                   ", ".join(str(d) for d in near) or "ไม่มีเลย"))
 
 
 def underlying_for(series_expiry):
@@ -276,6 +383,23 @@ def gc_front_months(n=CURVE_N):
     return out
 
 
+def monthly_option_symbol(d):
+    """ถ้า d เป็นวันหมดอายุ option "รายเดือน" คืนสัญลักษณ์ chain ของ barchart -- ซึ่งคือสัญลักษณ์
+    ของ futures เอง เช่น 25 ก.ย. 26 -> GCV26 (CME เรียก OGV6) ไม่ใช่ก็คืน None
+
+    24 ก.ย. 26: วันหมดอายุรายเดือนมี **ทั้ง weekly และ monthly** หมดอายุวันเดียวกัน
+    (IG4U26 "Gold Friday Week 4" OI ~10,500 กับ GCV26 "Gold Oct '26" OI ~205,000)
+    ตัวหลักที่ CME โชว์และที่สภาพคล่องอยู่จริงคือรายเดือน -- ของเดิมสร้างแต่รหัส weekly
+    เลยหยิบตัวเล็กมาใช้ทั้งวัน"""
+    for k in range(14):
+        mm = (d.month + k - 1) % 12 + 1
+        yy = d.year + (d.month + k - 1) // 12
+        if mm in GC_MONTHS and month_option_expiry(yy, mm) == d:
+            code = [c for c, v in MONTH_CODE.items() if v == mm][0]
+            return "GC{}{}".format(code, str(yy)[-2:])
+    return None
+
+
 def weekly_candidates(now_utc, horizon=9):
     """[(expiry_date, series_code)] ของ series ที่ยังไม่หมดอายุ เรียงใกล้->ไกล
     (เริ่มจากเมื่อวานตามเวลา UTC: ช่วง 00:00-00:30 ไทย series ของ "เมื่อวาน" ยังเทรดอยู่)"""
@@ -285,7 +409,10 @@ def weekly_candidates(now_utc, horizon=9):
         d = start + timedelta(days=k)
         if d.weekday() >= 5 or expiry_utc(d) <= now_utc:
             continue
-        out.append((d, series_codes(d)))
+        # วันหมดอายุรายเดือน: ให้ chain รายเดือนมาก่อน weekly ที่หมดอายุวันเดียวกัน
+        monthly = monthly_option_symbol(d)
+        codes = series_codes(d)
+        out.append((d, ([monthly] + codes) if monthly else codes))
     return out
 
 
@@ -507,6 +634,13 @@ def probe_series_expiry(sym):
     return None
 
 
+# รหัส series ที่ยืนยันแล้วต่อวันหมดอายุ -- WEEK_CODES เดาผิดได้ทั้งสัปดาห์ (22 ก.ย. 26 วันอังคาร
+# เดา I0DU26 แต่ของจริง I0EU26) ถ้าไม่จำ รอบ 5 นาทีจะโหลด chain ผิดตัวเต็มๆ ทิ้งทุกรอบ
+# จำใน process เดียว (daemon) พอ -- รันครั้งเดียวจบแบบ cron/ปุ่ม refresh ก็แค่เดาใหม่เหมือนเดิม
+# ตัวตรวจชื่อ series ยังทำงานทุกรอบ รหัสที่จำไว้ผิดเมื่อไหร่ก็ตกไปลองตัวอื่นตามปกติ
+_series_memo = {}
+
+
 def snapshot_barchart():
     """ดึงทุกอย่างจาก barchart ผ่าน core-api ล้วน (ห้ามโหลดหน้า HTML -- โดน WAF)"""
     today = date.today()
@@ -529,10 +663,16 @@ def snapshot_barchart():
     legs = {}
     tried = []
     for exp_guess, syms in weekly_candidates(now_utc)[:5]:
+        memo = _series_memo.get(exp_guess)
+        if memo in syms:
+            syms = [memo] + [x for x in syms if x != memo]
         tried.append(syms[0])
         got = fetch_chain(syms[0])
         named = series_name_expiry(got) if got else None
-        if got and (named is None or named[0] == exp_guess):
+        # ตัวแรกเป็น chain รายเดือน (สร้างจากปฏิทิน ไม่ใช่เดา) ชื่อมันไม่มีวันหมดอายุให้ตรวจ
+        trusted = syms[0] == monthly_option_symbol(exp_guess)
+        if got and (named is None or named[0] == exp_guess) and (trusted or named is not None
+                                                                 or syms[0] in series_codes(exp_guess)):
             series, expiry, legs = syms[0], exp_guess, got
             break
         for alt in syms[1:]:
@@ -545,6 +685,7 @@ def snapshot_barchart():
             break
     if series is None:
         raise SourceDown("barchart: ทุก candidate ว่าง ({})".format(",".join(tried)))
+    _series_memo[expiry] = series
 
     dte = round(max((expiry_utc(expiry) - now_utc).total_seconds(), 0) / 86400, 3)
 
@@ -1399,7 +1540,14 @@ def chart_html(snap, now, ev=None):
     return CHART_TMPL.replace("__DATA__", json.dumps(payload))
 
 
-def main():
+def main(use_qs=True, baseline=True):
+    """หนึ่งรอบ snapshot -- คืน dict ข้อมูลรายสไตรค์ให้ ticker ใช้ต่อในหน่วยความจำ
+
+    use_qs=False (เฟส 3, รอบ 5 นาทีของ daemon): **ไม่แตะ QuikStrike เลย** ใช้ event vol /
+    Vol2Vol / settle จาก cache ล้วน -- request ไป CME ต้องเท่าเดิม (ชั่วโมงละรอบ)
+    baseline=False: ไม่เขียน PREV_STATE ทับ ให้ "Δ CHANGES SINCE" ยังเทียบกับรอบรายชั่วโมง
+    (ไม่งั้นจะกลายเป็นเทียบ 5 นาทีก่อนโดยไม่ตั้งใจ)
+    ค่า default = พฤติกรรมเดิมทุกอย่าง (cron เก่า / ปุ่ม refresh ของ widget)"""
     global _deadline
     now = datetime.now()
     _deadline = time.monotonic() + MAX_RUNTIME
@@ -1436,23 +1584,33 @@ def main():
             return True                      # ไม่มีของให้ตรวจ -> ปล่อยผ่าน
         return abs(min(v for _, v in e["vs"]) - e["atm"]) <= QS_SMILE_TOL
     ev0 = None
+    ev_fresh = False
     qs_sym = cache.get("qs_sym")
 
     def qlog(msg):
         print("[{:%Y-%m-%d %H:%M:%S}] {}".format(now, msg), file=sys.stderr)
 
-    if now_ts < st.get("paused_until", 0):
+    if not use_qs:
+        # รอบ Barchart-only: event vol ล่าสุดของ series นี้จาก cache (ดึงไว้รอบรายชั่วโมง)
+        e = cache.get("ev")
+        if e and now_ts - e.get("ts", 0) < QS_CACHE_MAX_AGE:
+            ev0 = e.get("point")
+    elif now_ts < st.get("paused_until", 0):
         qlog("QuikStrike paused ถึง {:%d %b %H:%M} ({}) -- ใช้ cache".format(
             datetime.fromtimestamp(st["paused_until"]), st.get("pause_reason")))
     else:
         qs = QSClient()
         try:
             try:
-                for p in fetch_eventvol(qs):
+                pts = list(fetch_eventvol(qs))
+                for p in pts:
                     if datetime.strptime(p["expires"], "%m/%d/%Y").date() == snap["expiry"]:
                         ev0, qs_sym = p, p["sym"]
+                        ev_fresh = True
+                        cache["ev"] = {"ts": now_ts, "point": p}
                         break
                 qlog("eventvol 0DTE {}".format(ev0))
+                check_monthly_expiry(pts, qlog)
             except QS_ESCALATE:
                 raise
             except Exception as e:
@@ -1505,10 +1663,12 @@ def main():
                 st["paused_until"] = now_ts + QS_PAUSE_OUTAGE
                 st["pause_reason"] = "ต่อไม่ได้ {} รอบติด".format(st["net_fail"])
                 qlog("⚠️ หยุดยิง QuikStrike {} ชม.".format(QS_PAUSE_OUTAGE // 3600))
-    if qs_sym:
-        cache["qs_sym"] = qs_sym
-    st["cache"] = cache
-    qs_state_save(st)
+    if use_qs:
+        # รอบ Barchart-only ไม่เขียน state ของ QuikStrike (ไม่ได้แตะอะไร จะได้ไม่ชนกับ process อื่น)
+        if qs_sym:
+            cache["qs_sym"] = qs_sym
+        st["cache"] = cache
+        qs_state_save(st)
     qs_paused = now_ts < st.get("paused_until", 0)
 
     # ค่าที่ใช้ มาจาก cache เสมอ (รอบนี้เพิ่งดึง หรือของเดิมของ series เดียวกัน)
@@ -1663,11 +1823,13 @@ def main():
         "oi": {str(s): [p, c] for s, p, c in oi_rows},
     })
     writes = [(JSON_OUT, json.dumps(data, ensure_ascii=False)),
-              (CLIP_OUT, clip), (PREV_STATE, new_state),
+              (CLIP_OUT, clip),
               (CHART_OUT, chart_html(snap, now, ev0))]
+    if baseline:
+        writes.append((PREV_STATE, new_state))
     if curve:
         writes.append((CURVE_OUT, json.dumps(curve)))
-    if ev0:
+    if ev_fresh:          # ts ของไฟล์นี้ = เวลาที่ดึงจาก QuikStrike จริง ไม่ใช่เวลาที่ยืม cache
         writes.append((EVENTVOL_OUT, json.dumps({"ts": now.timestamp(), "point": ev0})))
     for path, content in writes:
         tmp = path + ".tmp"
@@ -1687,6 +1849,12 @@ def main():
               data["oi"]["put"], data["oi"]["call"],
               meta["iv"], snap.get("iv_src"),
               len(id_rows), len(oi_rows), len(vs_rows), len(clip)))
+    return {
+        "ts": now.timestamp(), "series": meta["series"], "und_sym": snap.get("und_sym"),
+        "F": meta["F"], "dte": meta["dte"], "iv_settle_chg": snap.get("iv_settle_chg"),
+        "id_rows": id_rows, "oi_rows": oi_rows,
+        "iv_live_rows": snap.get("iv_live_rows") or [],
+    }
 
 
 if __name__ == "__main__":

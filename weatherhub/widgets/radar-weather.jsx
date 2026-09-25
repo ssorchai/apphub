@@ -476,25 +476,6 @@ const Switch = ({ on, color, onClick }) => (
   </span>
 );
 
-const PlaceRow = ({ m, on, sub, note, dispatch }) => (
-  <div style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '8px 0',
-                borderTop: `0.5px solid ${wash(0.1)}` }}>
-    <span style={{ width: '28px', height: '28px', borderRadius: '8px', flex: '0 0 auto',
-                   display: 'flex', alignItems: 'center', justifyContent: 'center', background: wash(0.08) }}>
-      {ICONS[m.icon](btnColor(m))}
-    </span>
-    <span style={{ flex: '1 1 auto', minWidth: 0 }}>
-      <div style={{ fontSize: '14px', fontWeight: '600' }}>{m.label}</div>
-      {(sub || note) && (
-        <div style={{ fontSize: '12px', color: note ? macos.orange : macos.tertiary, marginTop: '2px' }}>
-          {note || sub}
-        </div>
-      )}
-    </span>
-    <Switch on={on} color={btnColor(m)} onClick={() => dispatch({ type: 'TOGGLE', id: m.id })} />
-  </div>
-);
-
 const PlayButton = ({ playing, onClick }) => (
   <button onClick={onClick} title={playing ? 'หยุด' : 'เล่น'} style={{
     width: '36px', height: '36px', borderRadius: '50%', border: 'none', cursor: 'pointer', flex: '0 0 auto',
@@ -547,23 +528,37 @@ const Timeline = ({ steps, t0 }) => (
   </div>
 );
 
-const ForecastRow = ({ m, fc }) => {
-  const t = fcText(fc);
+// แถวเดียวรวมทุกอย่างของสถานที่นั้น: ชื่อ + ระยะ / สถานะฝน / สวิตช์จุดบนแผนที่ / timeline
+// สวิตช์เปิด-ปิดแค่ "จุดบนภาพเรดาร์" -- ผลทายยังแสดงเสมอ
+const ForecastRow = ({ m, fc, on, dispatch, dist, note, pending }) => {
+  const t = pending ? { main: 'รอผล…', sub: null } : note ? { main: '—', sub: null } : fcText(fc);
   const wet = fc && fc.raining_now;
   return (
     <div style={{ padding: '10px 0', borderTop: `0.5px solid ${wash(0.1)}` }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-        <span style={{ width: '24px', height: '24px', borderRadius: '7px', flex: '0 0 auto', display: 'flex',
-                       alignItems: 'center', justifyContent: 'center', background: wash(0.08) }}>
+        <span style={{ width: '28px', height: '28px', borderRadius: '8px', flex: '0 0 auto', display: 'flex',
+                       alignItems: 'center', justifyContent: 'center', background: wash(0.08),
+                       opacity: on ? 1 : 0.45 }}>
           {ICONS[m.icon](btnColor(m))}
         </span>
-        <span style={{ flex: '1 1 auto', fontSize: '14px', fontWeight: '600' }}>{m.label}</span>
-        <span style={{ fontSize: '14px', fontWeight: '700', color: wet || (fc && fc.start_at) ? macos.orange : macos.secondary }}>
+        <span style={{ flex: '1 1 auto', minWidth: 0 }}>
+          <div style={{ fontSize: '14px', fontWeight: '600' }}>{m.label}</div>
+          {dist && <div style={{ fontSize: '11px', color: macos.tertiary, marginTop: '1px' }}>{dist}</div>}
+        </span>
+        <span style={{ fontSize: '14px', fontWeight: '700', textAlign: 'right',
+                       color: wet || (fc && fc.start_at) ? macos.orange : macos.secondary }}>
           {t.main}
         </span>
+        <span title={`${on ? 'ซ่อน' : 'แสดง'}จุดนี้บนแผนที่`} style={{ display: 'flex' }}>
+          <Switch on={on} color={btnColor(m)} onClick={() => dispatch({ type: 'TOGGLE', id: m.id })} />
+        </span>
       </div>
-      {t.sub && <div style={{ fontSize: '12px', color: macos.tertiary, marginTop: '3px', textAlign: 'right' }}>{t.sub}</div>}
-      {fc && fc.predictable && <Timeline steps={fc.timeline} t0={fc.t0} />}
+      {(t.sub || note) && (
+        <div style={{ fontSize: '12px', color: note ? macos.orange : macos.tertiary, marginTop: '4px', textAlign: note ? 'left' : 'right' }}>
+          {note || t.sub}
+        </div>
+      )}
+      {fc && fc.predictable && !note && <Timeline steps={fc.timeline} t0={fc.t0} />}
     </div>
   );
 };
@@ -676,41 +671,33 @@ const WebPage = ({ meta, state, src, located, locErr, show, theme, frames, forec
         </section>
 
         <aside style={{ flex: '0 1 340px', minWidth: '280px' }}>
-          <Panel title="ฝนรายจุด · 1 ชม. ข้างหน้า">
-            {!forecast || !forecast.basis
-              ? <div style={{ fontSize: '14px', color: macos.secondary }}>กำลังรอผลวิเคราะห์เฟรมแรก…</div>
-              : (
-                <React.Fragment>
-                  {MARKERS.map((m, i) => <ForecastRow key={m.id} m={m} fc={forecast.points[i] && forecast.points[i].forecast} />)}
-                  {forecastWithMe && forecast.points[MARKERS.length]
-                    ? <ForecastRow m={ME} fc={forecast.points[MARKERS.length].forecast} />
-                    : <div style={{ fontSize: '12px', color: macos.tertiary, padding: '8px 0', borderTop: `0.5px solid ${wash(0.1)}` }}>
-                        ตำแหน่งเครื่องนี้: {meNote || 'รอพิกัด…'}
-                      </div>}
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10px', color: macos.tertiary, marginTop: '4px' }}>
-                    <span>แถบสี: ทุก 5 นาที · 1 ชม. ข้างหน้า</span>
-                    <span><span style={{ color: LEVEL_COLOR[1] }}>■</span> ฝน <span style={{ color: LEVEL_COLOR[2] }}>■</span> ฝนหนัก</span>
-                  </div>
-                  <div style={{ fontSize: '12px', color: macos.tertiary, marginTop: '10px', lineHeight: 1.5 }}>
-                    อิงภาพเรดาร์ ~{hhmm(forecast.basis.observed_at)}
-                    {!forecast.basis.motion ? ' · ยังไม่รู้ทิศทางฝน'
-                      : forecast.basis.motion.speed_kmh < 3 ? ' · ฝนแทบอยู่กับที่'
-                      : ` · ฝนเคลื่อนจากทิศ${forecast.basis.motion.from_dir} ~${Math.round(forecast.basis.motion.speed_kmh)} กม./ชม.`}
-                    <br />ฉายฝนตามทิศเดิม + แนวโน้มเบาลง/แรงขึ้น 30 นาทีล่าสุด (ฝนที่ก่อตัวใหม่ทายไม่ได้) รัศมีจุด {forecast.basis.radius_km} กม.
-                  </div>
-                </React.Fragment>
-              )}
-            {rain && <div style={{ fontSize: '12px', color: macos.orange, marginTop: '10px' }}>แจ้งเตือน 16:xx: {rain}</div>}
-          </Panel>
-
-          <Panel title="สถานที่บนแผนที่">
-            {MARKERS.map((m) => (
-              <PlaceRow key={m.id} m={m} on={show[m.id]} dispatch={dispatch}
-                sub={myLL ? `ห่างจากเครื่องนี้ ${kmBetween(myLL, m).toFixed(1)} กม.` : null} />
+          <Panel title="สถานที่ · ฝน 1 ชม. ข้างหน้า">
+            {MARKERS.map((m, i) => (
+              <ForecastRow key={m.id} m={m} on={show[m.id]} dispatch={dispatch}
+                pending={!forecast || !forecast.basis}
+                fc={forecast && forecast.points[i] && forecast.points[i].forecast}
+                dist={myLL ? `ห่างจากเครื่องนี้ ${kmBetween(myLL, m).toFixed(1)} กม.` : null} />
             ))}
-            <PlaceRow m={ME} on={show.me} dispatch={dispatch}
-              note={show.me ? meNote : null}
-              sub={point && !point.default ? `ห่างสถานีเรดาร์ ${point.distance_km} กม. (ปัดกริด ~5 กม.)` : null} />
+            <ForecastRow m={ME} on={show.me} dispatch={dispatch}
+              pending={!forecast || !forecast.basis}
+              note={!forecastWithMe || !forecast || !forecast.points[MARKERS.length] ? (meNote || 'รอพิกัด…') : null}
+              fc={forecastWithMe && forecast && forecast.points[MARKERS.length] && forecast.points[MARKERS.length].forecast}
+              dist={point && !point.default ? `ห่างสถานีเรดาร์ ${point.distance_km} กม.` : null} />
+
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10px', color: macos.tertiary, marginTop: '6px' }}>
+              <span>แถบสี: ทุก 5 นาที · สวิตช์ = จุดบนแผนที่</span>
+              <span><span style={{ color: LEVEL_COLOR[1] }}>■</span> ฝน <span style={{ color: LEVEL_COLOR[2] }}>■</span> ฝนหนัก</span>
+            </div>
+            {forecast && forecast.basis && (
+              <div style={{ fontSize: '12px', color: macos.tertiary, marginTop: '10px', lineHeight: 1.5 }}>
+                อิงภาพเรดาร์ ~{hhmm(forecast.basis.observed_at)}
+                {!forecast.basis.motion ? ' · ยังไม่รู้ทิศทางฝน'
+                  : forecast.basis.motion.speed_kmh < 3 ? ' · ฝนแทบอยู่กับที่'
+                  : ` · ฝนเคลื่อนจากทิศ${forecast.basis.motion.from_dir} ~${Math.round(forecast.basis.motion.speed_kmh)} กม./ชม.`}
+                <br />ฉายฝนตามทิศเดิม + แนวโน้มเบาลง/แรงขึ้น 30 นาทีล่าสุด (ฝนที่ก่อตัวใหม่ทายไม่ได้) รัศมีจุด {forecast.basis.radius_km} กม.
+              </div>
+            )}
+            {rain && <div style={{ fontSize: '12px', color: macos.orange, marginTop: '10px' }}>แจ้งเตือน 16:xx: {rain}</div>}
           </Panel>
 
           <div style={{ fontSize: '12px', color: macos.tertiary, lineHeight: 1.6, padding: '0 4px' }}>

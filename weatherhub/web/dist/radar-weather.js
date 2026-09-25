@@ -31,7 +31,10 @@ const FILE_CMD = 'cat /tmp/weather_meta.json'; // พิกัดเครื่
 // มาตรฐาน (strings ในตัวแอป) -- อ่าน p.coords ตรงๆ = undefined แล้วหมดเวลาทุกรอบ
 // (API ใช้จุด default) และไม่วาดจุด "ฉัน" / เก็บพิกัดไว้ในหน่วยความจำเท่านั้น
 
-const LOC_TIMEOUT = 8000;
+const LOC_TIMEOUT = 8000; // เว็บ: Mac ไม่มี GPS หาตำแหน่งจาก Wi-Fi fix แรกของ Chrome ใช้เกิน 8 วิได้ (ผู้ใช้เจอ "หมดเวลา"
+// ทั้งที่อนุญาตแล้ว 25 ก.ย.) -> ใช้ watchPosition ค้างไว้ ได้ fix เมื่อไหร่ใช้เลย + รอนานขึ้น
+
+const LOC_TIMEOUT_WEB = 30000;
 const LOC_MAX_AGE = 10 * 60 * 1000; // ขอพิกัดใหม่ทุก 10 นาที
 
 const NOWCAST_MAX_AGE = 3600; // ผล nowcast เก่ากว่านี้ไม่โชว์ (เช็คเฉพาะ 16:xx)
@@ -40,11 +43,57 @@ let loc = null; // { lat, lon, at }
 
 let locPending = null;
 let locErr = null; // code ของ GeolocationPositionError ล่าสุด / 'timeout' / 'none'
+// ---- เว็บ: watchPosition ตัวเดียวตลอดอายุหน้า ----
+
+let watchId = null;
+let waiters = [];
+
+const flush = v => {
+  const w = waiters;
+  waiters = [];
+  w.forEach(f => f(v));
+};
+
+const locateWeb = geo => {
+  if (watchId == null) {
+    watchId = geo.watchPosition(p => {
+      const c = p && p.coords;
+      if (!c || !isFinite(c.latitude) || !isFinite(c.longitude)) return;
+      loc = {
+        lat: c.latitude,
+        lon: c.longitude,
+        at: Date.now()
+      };
+      locErr = null;
+      flush(loc);
+    }, e => {
+      locErr = e && e.code || 'error'; // ไม่อนุญาต = watch จบแล้ว ปล่อยให้รอบถัดไปเริ่มใหม่ (เผื่อผู้ใช้เพิ่งกด Allow)
+
+      if (locErr === 1) {
+        geo.clearWatch(watchId);
+        watchId = null;
+      }
+
+      flush(null);
+    }, {
+      timeout: LOC_TIMEOUT_WEB,
+      maximumAge: LOC_MAX_AGE
+    });
+  }
+
+  if (loc) return Promise.resolve(loc); // watch อัปเดต loc เองอยู่แล้ว
+
+  return Promise.race([new Promise(res => waiters.push(res)), new Promise(res => setTimeout(() => {
+    if (!loc) locErr = locErr || 'timeout';
+    res(null);
+  }, LOC_TIMEOUT_WEB))]).then(() => loc);
+};
 
 const locate = () => {
+  const geo = typeof navigator !== 'undefined' && navigator.geolocation;
+  if (WEB && geo) return locateWeb(geo);
   if (loc && Date.now() - loc.at < LOC_MAX_AGE) return Promise.resolve(loc);
   if (locPending) return locPending;
-  const geo = typeof navigator !== 'undefined' && navigator.geolocation;
 
   if (!geo) {
     locErr = 'none';
@@ -117,7 +166,9 @@ const load = dispatch => {
   const known = loc;
   const first = fetchState(known).catch(viaFile);
   locate().then(l => {
-    if (l && l !== known) fetchState(l).catch(() => {});else if (!l) dispatch({
+    // เว็บ: loc เปลี่ยนทุกครั้งที่ watch ได้ fix ใหม่ -- ยิงซ้ำเฉพาะตอนพิกัดขยับจริง (หรือเพิ่งได้ครั้งแรก)
+    const moved = l && (!known || l.lat !== known.lat || l.lon !== known.lon);
+    if (moved) fetchState(l).catch(() => {});else if (!l) dispatch({
       type: 'LOC_ERR',
       locErr
     });
@@ -547,7 +598,7 @@ const locReason = err => {
   if (!WEB) return 'ยังไม่ได้พิกัด -- เช็คสิทธิ์ Location ของ Übersicht';
   if (err === 1) return 'เบราว์เซอร์ไม่อนุญาตให้หน้านี้ใช้ตำแหน่ง -- กดไอคอนข้าง URL → Location → Allow แล้ว reload';
   if (err === 2) return 'เบราว์เซอร์หาตำแหน่งไม่ได้ -- เปิด System Settings → Privacy & Security → Location Services ให้เบราว์เซอร์นี้';
-  if (err === 3 || err === 'timeout') return 'หาตำแหน่งไม่ทันเวลา (รอกด Allow อยู่หรือเปล่า?) -- จะลองใหม่ทุก 1 นาที';
+  if (err === 3 || err === 'timeout') return 'ยังหาตำแหน่งไม่ได้ (รอต่อเรื่อยๆ) -- ถ้านานเกิน 1-2 นาที เช็ค System Settings → Privacy & Security → Location Services ว่าเปิดให้เบราว์เซอร์นี้แล้ว และ Wi-Fi เปิดอยู่';
   if (err === 'none') return 'เบราว์เซอร์นี้ไม่มี geolocation';
   return 'กำลังขอตำแหน่ง…';
 };

@@ -121,8 +121,7 @@ def _age(v):
 point_snap = FileCache(pn.SNAP_PATH, pn.load_snapshot)
 # /api/forecast ไม่ปัดพิกัด (เดิมปัด 0.01° ~1.1 กม. ทำให้จุด custom บนภาพคลาดได้ ~550 ม. -- ผู้ใช้เห็น 25 ก.ย.)
 # จุดที่ส่งมาเป็นสถานที่ประจำ/จุดที่พิมพ์เอง ไม่ใช่ตำแหน่งติดตามตัว และ API ไม่เก็บ/ไม่ log พิกัดอยู่แล้ว
-# ตัดทศนิยมที่ 6 หลัก (~0.1 ม.) พอ -- mask ฝนละเอียดแค่ ~0.6 กม./ช่อง
-FORECAST_DECIMALS = 6
+# ใช้ค่าตามที่ส่งมาทุกหลัก (ส่งกลับให้หน้าเว็บแสดงตรงกับที่ผู้ใช้กรอก)
 FORECAST_MAX_POINTS = 8
 
 
@@ -141,7 +140,7 @@ def r_forecast(query):
             return 400, JSON, json_body({"error": "pts = lat,lon;lat,lon"})
         if not (-90 <= la <= 90 and -180 <= lo <= 180):
             return 400, JSON, json_body({"error": "lat/lon อยู่นอกช่วง"})
-        pts.append((round(la, FORECAST_DECIMALS), round(lo, FORECAST_DECIMALS)))
+        pts.append((la, lo))
     if len(pts) > FORECAST_MAX_POINTS:
         return 400, JSON, json_body({"error": "สูงสุด {} จุด".format(FORECAST_MAX_POINTS)})
     snap, _ = point_snap.get()

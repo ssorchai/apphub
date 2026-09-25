@@ -116,7 +116,7 @@ const load = (dispatch) => {
     const items = MARKERS.map((m) => [m.id, m.lat, m.lon])
       .concat(loc ? [['me', loc.lat, loc.lon]] : [])
       .concat(customLL ? [['custom', customLL.lat, customLL.lon]] : []);
-    const pts = items.map(([, la, lo]) => `${la.toFixed(6)},${lo.toFixed(6)}`);   // ไม่ปัด -- จุดบนภาพต้องตรงที่กรอก
+    const pts = items.map(([, la, lo]) => `${la},${lo}`);   // ส่งตามที่กรอกทุกหลัก ไม่ปัด (ผู้ใช้ขอ 25 ก.ย.)
     fetchJson(API + '/api/forecast?pts=' + encodeURIComponent(pts.join(';')))
       .then((f) => {
         const byId = {};

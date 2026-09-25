@@ -43,8 +43,12 @@ let customLL = null;
 let refreshForecast = null;  // load() ตั้งไว้ ให้ปุ่ม "แสดง" ยิงผลทายของจุดใหม่ได้ทันที
 const flush = (v) => { const w = waiters; waiters = []; w.forEach((f) => f(v)); };
 // สถานะไว้โชว์บนหน้าเว็บ ให้รู้ว่าติดตรงไหน (ผู้ใช้เจอ "ไม่ขึ้น" ทั้งที่ Chrome อนุญาตแล้ว 25 ก.ย.)
-const geoDiag = { startedAt: null, fixAt: null, accuracy: null, errCode: null, errAt: null, restarts: 0 };
+const geoDiag = { startedAt: null, fixAt: null, accuracy: null, posAge: null, errCode: null, errAt: null, restarts: 0 };
 const WATCH_RESTART_MS = 60000;           // ยังไม่ได้ fix นานเท่านี้ -> เริ่ม watch ใหม่
+// ⚠️ ต้อง enableHighAccuracy: true -- Chrome บน Mac เครื่องนี้ โหมดปกติ (network provider) ไม่ตอบเลย
+// หมดเวลาทุกครั้งทั้งที่สิทธิ์ granted ส่วนโหมดแม่นยำสูงวิ่งผ่าน CoreLocation ตอบทันที ±235 ม.
+// (ทดสอบใน Chrome ของผู้ใช้ 25 ก.ย. -- Google Maps ใช้โหมดนี้เลยได้ปกติ)
+const GEO_OPTS = { enableHighAccuracy: true, maximumAge: LOC_MAX_AGE };
 const onPos = (p) => {
   const c = p && p.coords;
   if (!c || !isFinite(c.latitude) || !isFinite(c.longitude)) return;
@@ -53,6 +57,7 @@ const onPos = (p) => {
   locErr = null;
   geoDiag.fixAt = Date.now();
   geoDiag.accuracy = isFinite(c.accuracy) ? Math.round(c.accuracy) : null;
+  geoDiag.posAge = isFinite(p.timestamp) ? Math.round((Date.now() - p.timestamp) / 1000) : null;
   const waiting = waiters.length > 0;
   flush(loc);
   if (!waiting && onFix && (!prev || prev.lat !== loc.lat || prev.lon !== loc.lon)) onFix(loc);
@@ -68,9 +73,9 @@ const startWatch = (geo) => {
     // ไม่อนุญาต = watch จบแล้ว ปล่อยให้รอบถัดไปเริ่มใหม่ (เผื่อผู้ใช้เพิ่งกด Allow)
     if (locErr === 1) { geo.clearWatch(watchId); watchId = null; }
     flush(null);
-  }, { maximumAge: LOC_MAX_AGE });
+  }, GEO_OPTS);
   // ขอพิกัดที่เบราว์เซอร์จำไว้แล้ว (ถ้ามี) มาใช้ก่อน ระหว่างรอ fix ใหม่
-  try { geo.getCurrentPosition(onPos, () => {}, { maximumAge: Infinity, timeout: 5000 }); } catch (e) { /* ไม่มีก็รอ watch */ }
+  try { geo.getCurrentPosition(onPos, () => {}, { ...GEO_OPTS, maximumAge: Infinity, timeout: 5000 }); } catch (e) { /* ไม่มีก็รอ watch */ }
 };
 const locateWeb = (geo) => {
   if (watchId == null) startWatch(geo);
@@ -402,7 +407,7 @@ const altDrag = (e) => {
 const geoDiagText = () => {
   const ago = (t) => (t ? `${Math.round((Date.now() - t) / 1000)} วิที่แล้ว` : '-');
   const parts = [`ขอพิกัดมา ${geoDiag.startedAt ? Math.round((Date.now() - geoDiag.startedAt) / 1000) : 0} วิ`];
-  parts.push(geoDiag.fixAt ? `fix ล่าสุด ${ago(geoDiag.fixAt)}${geoDiag.accuracy != null ? ` ±${geoDiag.accuracy} ม.` : ''}` : 'ยังไม่เคยได้ fix');
+  parts.push(geoDiag.fixAt ? `fix ล่าสุด ${ago(geoDiag.fixAt)}${geoDiag.accuracy != null ? ` ±${geoDiag.accuracy} ม.` : ''}${geoDiag.posAge != null ? ` (พิกัดอายุ ${Math.round(geoDiag.posAge / 60)} นาที)` : ''}` : 'ยังไม่เคยได้ fix');
   if (geoDiag.errCode) parts.push(`error ${geoDiag.errCode} (${ago(geoDiag.errAt)})`);
   if (geoDiag.restarts) parts.push(`เริ่มใหม่ ${geoDiag.restarts} ครั้ง`);
   return parts.join(' · ');

@@ -20,8 +20,8 @@ crontab (รายชั่วโมง นาทีที่ 7)
 
 | ไฟล์ในโฟลเดอร์นี้ | ตำแหน่ง deploy จริง |
 |---|---|
-| `fetchers/*.py` | `~/src/my-cronjob/` (git repo) |
-| `widgets/*.jsx` | `~/Library/Application Support/Übersicht/widgets/` (git repo) |
+| `fetchers/*.py` | เลิกใช้แล้ว — ตัวจริงคือ `goldhub/service/*.py` รันเป็น LaunchAgent (cron ปิด 24 ก.ย. 26) |
+| `widgets/*.jsx` | `~/Library/Application Support/Übersicht/widgets/` — ปลายทางเฉยๆ ไม่ใช่ git repo แล้ว (25 ก.ย. 26) copy ด้วย `bash goldhub/deploy/install.sh widgets` |
 | `old/` | เวอร์ชันแรกก่อนปรับปรุง (Playwright) เก็บไว้อ้างอิง |
 
 crontab ปัจจุบัน:

@@ -346,7 +346,19 @@ weekly ที่จับได้ช่วงเช้าหายไป ถู
 
 - ลบ cron ทั้งสามบรรทัด (หลังจากทุกอย่างอยู่ใน launchd แล้ว)
 - `~/src/my-cronjob/` เหลือเป็นประวัติ ใส่ README ชี้มา apphub เหมือนสามโฟลเดอร์ก่อนหน้า
-- ปรับ `docs/pipeline-notes.md` ให้ตรงกับของจริงหลังย้าย
+- ✅ **โฟลเดอร์ widget ของ Übersicht เลิกเป็น git repo (25 ก.ย. 26)**
+  - เดิม `~/Library/Application Support/Übersicht/widgets/` เป็น git repo แยก (37 commit,
+    branch master + tag save-2/3/4) ทำให้มีต้นทาง 2 ที่ ต้อง sync มือทุกครั้ง
+  - เช็คก่อนลบ: `radar-weather.jsx` กับ `gold-update.jsx` ตรงกับใน apphub ทุก byte,
+    `cme-putcall.jsx` ใน apphub ใหม่กว่า (มีโค้ดเฟส 2), save-2/3/4 เป็น ancestor ของ master
+    (ไม่มี commit ที่ไม่อยู่ใน master) -> ไม่มีเนื้อหาไหนหายจากการลบ
+  - ประวัติเก็บไว้เป็น branch `archive/ubersicht-widgets` ของ repo นี้ (fetch เข้ามาทั้ง 37 commit
+    แล้ว push ขึ้น GitHub) ไม่ใช่ไฟล์ bundle ให้ดูย้อนหลังใน GitHub ได้ตรงๆ
+    tag `save-2/3/4` ถอดออก (commit ยังอยู่: 78bf717, 78bf717, 1c800af)
+  - deploy widget กลายเป็นคำสั่งเดียว `bash <hub>/deploy/install.sh widgets`
+    (install เต็มรูปก็ copy widget ให้ในตัว / uninstall ไม่ลบ widget ออกจากจอ)
+  - โฟลเดอร์นั้นเหลือแต่ `gold-dashboard.jsx`, `radar-weather.jsx`, `.DS_Store`
+- ✅ ปรับ `docs/pipeline-notes.md` + `goldhub/README.md` ให้ตรงกับของจริงหลังย้าย (25 ก.ย. 26)
 - อัปเดต memory ของ session ให้ชี้ path ใหม่ทั้งหมด
 
 ---

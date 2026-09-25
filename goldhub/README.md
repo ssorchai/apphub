@@ -47,10 +47,17 @@ goldhub/
 └── deploy/      launchd plist / Dockerfile
 ```
 
-## ของที่ยังรันอยู่จริงตอนนี้ (ยังไม่ย้าย)
+## ต้นทาง / ปลายทาง
 
-- cron รัน `~/src/my-cronjob/cme_fetcher.py` + `gold_fetcher.py`
-- Übersicht โหลด widget จาก `~/Library/Application Support/Übersicht/widgets/`
+repo นี้เป็น **ต้นทางเดียว** แก้ที่นี่ที่เดียวแล้ว deploy ออกไป ไม่มี repo อื่นให้ sync
+(cron ปิดหมดแล้ว 24 ก.ย. 26 / โฟลเดอร์ widgets ของ Übersicht เลิกเป็น git repo 25 ก.ย. 26
+ประวัติเก่า 37 commit ย้ายมาอยู่ branch `archive/ubersicht-widgets` ของ repo นี้)
 
-ไฟล์ใน repo นี้คือ **ต้นทางที่ทางการ** แก้ที่นี่ที่เดียว แล้วค่อย deploy ออกไป
-(ระหว่างเฟสย้าย ยังต้อง copy ไปทับของเดิมเหมือนที่ทำอยู่)
+| ของ | ปลายทาง | คำสั่ง deploy |
+|---|---|---|
+| service | LaunchAgent `com.apphub.goldhub` | `bash deploy/install.sh` |
+| `widgets/gold-dashboard.jsx` | `~/Library/Application Support/Übersicht/widgets/` | `bash deploy/install.sh widgets` |
+| `web/dist/gold-dashboard.js` | เสิร์ฟจาก repo ตรงๆ | api.py build เองเมื่อ `.jsx` ใหม่กว่า |
+
+`install.sh` เต็มรูป = ลง LaunchAgent + copy widget ให้ในตัว ส่วน `install.sh widgets`
+คือ copy widget อย่างเดียว (ใช้ตอนแก้หน้าตา ไม่ต้องรีสตาร์ท daemon)

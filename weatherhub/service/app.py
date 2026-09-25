@@ -18,6 +18,7 @@ sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.dirname(os.path.dirname(HERE)))
 
 import api  # noqa: E402
+import frames  # noqa: E402
 import rain_nowcast  # noqa: E402
 import weather_fetcher  # noqa: E402
 from common.hub import (Health, Job, Scheduler, Store, err, holder_pid,  # noqa: E402
@@ -47,6 +48,10 @@ def job_radar():
             store.append_history("radar", summary)
     except Exception as e:
         err("radar: เก็บสรุปลง store ไม่ได้ ({})", type(e).__name__)
+    try:
+        frames.save(store.path("frames"), m)      # ให้หน้าเว็บเล่นเป็นภาพเคลื่อนไหว
+    except Exception as e:
+        err("radar: เก็บเฟรมไม่ได้ ({})", type(e).__name__)
 
 
 def job_nowcast():

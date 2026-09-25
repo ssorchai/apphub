@@ -17,9 +17,10 @@ import os
 import threading
 import time
 
+import frames
 import rain_nowcast as rn
 import weather_fetcher
-from common.hub import JSON, TEXT, Api, FileCache, WebWidget, config, json_body
+from common.hub import JSON, TEXT, Api, FileCache, Store, WebWidget, config, json_body
 
 SCHEMA_VERSION = 1
 PORT = 8788
@@ -115,6 +116,35 @@ def _age(v):
     return round(time.time() - ts) if isinstance(ts, (int, float)) else None
 
 
+FRAME_DIR = Store("weatherhub").path("frames")
+FRAMES_DEFAULT = 12            # 1 ชั่วโมง เท่า loop GIF ของ กทม.
+
+
+def r_frames(query):
+    """รายการเฟรมย้อนหลัง (เก่า -> ใหม่) ให้หน้าเว็บเล่นเป็นภาพเคลื่อนไหว"""
+    try:
+        n = max(1, min(frames.MAX_FRAMES, int((query.get("n") or [FRAMES_DEFAULT])[0])))
+    except ValueError:
+        return 400, JSON, json_body({"error": "n ต้องเป็นตัวเลข"})
+    items = frames.listing(FRAME_DIR)[-n:]
+    return 200, JSON, json_body({
+        "schema_version": SCHEMA_VERSION,
+        "frame_minutes": rn.FRAME_MINUTES,
+        "frames": [{"ts": ts, "image": "/api/frame?ts={}".format(ts)} for ts, _ in items],
+    })
+
+
+def r_frame(query):
+    ts = (query.get("ts") or [""])[0]
+    if not ts.isdigit():
+        return 400, TEXT, "ts ต้องเป็นตัวเลข\n"
+    for t, name in frames.listing(FRAME_DIR):
+        if str(t) == ts:
+            with open(os.path.join(FRAME_DIR, name), "rb") as f:
+                return 200, frames.MIME[name.rsplit(".", 1)[1]], f.read()
+    return 404, TEXT, "ไม่มีเฟรมนี้ (เก่าเกิน {} ชม. หรือถูกลบแล้ว)\n".format(frames.KEEP_SEC // 3600)
+
+
 def build(health):
     cfg = config.load()
     default = tuple((cfg.get("weather") or {}).get("default") or DEFAULT_LATLON)
@@ -150,6 +180,8 @@ def build(health):
               extra_binds=cfg.get("bind"), extra_hosts=cfg.get("hosts"))
     api.route("/api/state", r_state)
     api.route("/api/radar", r_radar)
+    api.route("/api/frames", r_frames)
+    api.route("/api/frame", r_frame)
     api.route("/api/health", lambda q: (200, JSON, json_body(health.snapshot())))
     dash.mount(api)
     api.route("/", lambda q: (200, JSON, json_body({"service": "weatherhub",

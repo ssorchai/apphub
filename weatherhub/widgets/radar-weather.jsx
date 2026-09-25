@@ -4,14 +4,16 @@ import { run } from 'uebersicht';
 // ค่อยถอยไปอ่าน /tmp แบบเดิม (footer ขึ้น "· file") เหมือนการ์ด gold
 //
 // ไฟล์เดียวกันนี้เป็นหน้าเว็บ /dashboard ของ weatherhub ด้วย (common/web/build.js, 25 ก.ย.)
-// การ์ดบน desktop: คลิก = เปิดหน้าเว็บ (ใหญ่กว่า มีปุ่ม toggle ครบ) / ⌥-drag = ย้ายการ์ด
-// หน้าเว็บ: ดับเบิลคลิก = เปิดเรดาร์ loop ของ กทม. (เดิมเป็นคลิกเดียวบนการ์ด)
+// โหมด WEB วาดเป็นหน้าเว็บเต็มรูป (WebPage -- ไม่ใช่การ์ดขยาย) ใช้ข้อมูล/พิกัด/จุดชุดเดียวกัน
+// การ์ดบน desktop: คลิก = เปิดหน้าเว็บ / ⌥-drag = ย้ายการ์ด
+// หน้าเว็บ: เล่นเฟรมย้อนหลังเป็นภาพเคลื่อนไหว (/api/frames) / ดับเบิลคลิกภาพ = เรดาร์ loop ของ กทม.
 const WEB = typeof window !== 'undefined' && !!window.APPHUB_WEB;
 const API = WEB ? '' : 'http://127.0.0.1:8788';   // เว็บ = origin เดียวกับ API
 const DASHBOARD_URL = 'http://127.0.0.1:8788/dashboard';
 const BMA_URL = 'https://weather.tmd.go.th/bma_ncLoop.php';
-const S = WEB ? 1.6 : 1;                          // ขนาดปุ่ม/จุดบนหน้าเว็บ
+const S = WEB ? 1.5 : 1;                          // ขนาดจุดบนภาพใหญ่ของหน้าเว็บ
 const API_TIMEOUT = 2000;
+const FRAME_COUNT = 12;                           // 1 ชม. ย้อนหลัง เท่า loop GIF ของ กทม.
 const FILE_CMD = 'cat /tmp/weather_meta.json';
 
 // พิกัดเครื่อง: Übersicht ต่อ navigator.geolocation เข้ากับ CoreLocation ของแอปเอง
@@ -107,6 +109,12 @@ const load = (dispatch) => {
   const known = loc;
   if (WEB) onFix = (l) => fetchState(l).catch(() => {});
   const first = fetchState(known).catch(viaFile);
+  // เฟรมย้อนหลังสำหรับภาพเคลื่อนไหว (เฉพาะหน้าเว็บ) -- พังก็แค่เล่นไม่ได้ ภาพล่าสุดยังขึ้น
+  if (WEB) {
+    fetchJson(API + '/api/frames?n=' + FRAME_COUNT)
+      .then((f) => dispatch({ type: 'FRAMES', frames: f.frames || [], frameMinutes: f.frame_minutes }))
+      .catch(() => {});
+  }
   locate().then((l) => {
     // เว็บ: loc เปลี่ยนทุกครั้งที่ watch ได้ fix ใหม่ -- ยิงซ้ำเฉพาะตอนพิกัดขยับจริง (หรือเพิ่งได้ครั้งแรก)
     const moved = l && (!known || l.lat !== known.lat || l.lon !== known.lon);
@@ -184,7 +192,7 @@ const savedShow = () => {
 };
 
 export const initialState = {
-  meta: null, state: null, src: null, located: false, show: savedShow(),
+  meta: null, state: null, src: null, located: false, show: savedShow(), frames: [],
   theme: WEB ? readTheme() : 'dark',
 };
 export const updateState = (event, prev) => {
@@ -194,6 +202,7 @@ export const updateState = (event, prev) => {
              locErr: event.located ? null : (event.locErr || prev.locErr) };
   }
   if (event.type === 'LOC_ERR') return { ...prev, locErr: event.locErr };
+  if (event.type === 'FRAMES') return { ...prev, frames: event.frames, frameMinutes: event.frameMinutes };
   if (event.type === 'OFFLINE') return { ...prev, src: 'offline' };
   if (event.type === 'THEME') return { ...prev, theme: applyTheme(event.name) };
   if (event.type === 'TOGGLE') {
@@ -208,10 +217,10 @@ export const updateState = (event, prev) => {
 // (เรดาร์หนองจอก 13.8348127,100.8463349 = px(483,400), สเกล 0.3008 กม./px)
 // (คำนวณด้วยสูตรเดียวกับ geometry() ใน weatherhub/service/api.py)
 const MARKERS = [
-  { id: 'office', icon: 'office', n: 1, label: 'Office 1', left: '38.74%', top: '52.84%', color: '#64d2ff', ink: '#1a86b8' },  // 13.7733, 100.5426
-  { id: 'office2', icon: 'office', n: 2, label: 'Office 2', left: '38.47%', top: '51.32%', color: '#bf8cff', ink: '#7c4dd1' }, // 13.8062486, 100.5352885
-  { id: 'home', icon: 'home', n: 1, label: 'Home 1', left: '40.98%', top: '47.58%', color: '#ffb340', ink: '#c2710a' },        // 13.8873269, 100.6026284
-  { id: 'home2', icon: 'home', n: 2, label: 'Home 2', left: '42.72%', top: '48.22%', color: '#ff6b6b', ink: '#d03a3a' },       // 13.873365, 100.6494155
+  { id: 'office', icon: 'office', n: 1, label: 'Office 1', lat: 13.7733, lon: 100.5426, left: '38.74%', top: '52.84%', color: '#64d2ff', ink: '#1a86b8' },  // 13.7733, 100.5426
+  { id: 'office2', icon: 'office', n: 2, label: 'Office 2', lat: 13.8062486, lon: 100.5352885, left: '38.47%', top: '51.32%', color: '#bf8cff', ink: '#7c4dd1' }, // 13.8062486, 100.5352885
+  { id: 'home', icon: 'home', n: 1, label: 'Home 1', lat: 13.8873269, lon: 100.6026284, left: '40.98%', top: '47.58%', color: '#ffb340', ink: '#c2710a' },        // 13.8873269, 100.6026284
+  { id: 'home2', icon: 'home', n: 2, label: 'Home 2', lat: 13.873365, lon: 100.6494155, left: '42.72%', top: '48.22%', color: '#ff6b6b', ink: '#d03a3a' },       // 13.873365, 100.6494155
 ];
 const ME = { id: 'me', icon: 'me', label: 'ตำแหน่งเครื่องนี้', color: '#30d158', ink: '#1b8a3a' };
 // สีของปุ่ม: ธีมสว่างใช้โทนเข้ม (`ink`) สีอ่อนเดิมจางบนพื้นครีม / จุดบนภาพเรดาร์ใช้ `color` เสมอ
@@ -350,16 +359,11 @@ const locReason = (err) => {
   return 'กำลังขอตำแหน่ง…';
 };
 
-export const render = ({ meta, state, src, located, locErr, show, theme }, dispatch) => {
-  if (!meta) {
-    // เว็บ: บอกว่ากำลังโหลด (หรือเรียก API ไม่ได้) แทนหน้าว่าง / desktop: ยังไม่วาดการ์ด
-    if (!WEB) return null;
-    return (
-      <div style={{ padding: '40px', color: macos.tertiary, fontFamily: macos.font, fontSize: '13px' }}>
-        {src === 'offline' ? 'เรียก API ของ weatherhub ไม่ได้ -- daemon รันอยู่ไหม?' : 'กำลังโหลดเรดาร์…'}
-      </div>
-    );
-  }
+export const render = (props, dispatch) => (WEB ? <WebPage {...props} dispatch={dispatch} /> : <Card {...props} dispatch={dispatch} />);
+
+// ======================= การ์ดบน desktop =======================
+const Card = ({ meta, state, src, located, locErr, show, dispatch }) => {
+  if (!meta) return null;
 
   // ภาพเก่ากว่า 20 นาที = เตือนว่าค้าง
   const stale = meta.ts && Date.now() / 1000 - meta.ts > 1200;
@@ -374,11 +378,8 @@ export const render = ({ meta, state, src, located, locErr, show, theme }, dispa
   const rain = rainLine(state && state.nowcast);
 
   const container = {
-    ...(WEB
-      // หน้าเว็บ: การ์ดใหญ่กลางจอ (ภาพเรดาร์ 965x800 -> กว้างสุด 980px)
-      ? { position: 'relative', margin: '24px auto', width: 'min(980px, calc(100vw - 32px))', padding: '20px' }
-      // 344px = ความกว้าง medium widget ของ macOS (วัดจากหน้าจอจริง)
-      : { position: 'fixed', top: savedPos().top || '390px', left: savedPos().left || '35px', width: '344px', padding: '16px' }),
+    // 344px = ความกว้าง medium widget ของ macOS (วัดจากหน้าจอจริง)
+    position: 'fixed', top: savedPos().top || '390px', left: savedPos().left || '35px', width: '344px', padding: '16px',
     borderRadius: macos.radius,
     color: macos.label, fontFamily: macos.font,
     background: macos.material,
@@ -388,32 +389,25 @@ export const render = ({ meta, state, src, located, locErr, show, theme }, dispa
     userSelect: 'none',
   };
 
-  // desktop: คลิกเดียว = เปิดหน้าเว็บของการ์ดนี้ / เว็บ: ดับเบิลคลิก = เว็บเรดาร์ กทม.
+  // คลิกเดียว = เปิดหน้าเว็บ (ใหญ่กว่า มีภาพเคลื่อนไหว) -- ⌥ ค้างไว้คือการลากย้ายการ์ด
   const handleClick = (e) => {
-    if (WEB || e.altKey) return;
+    if (e.altKey) return;
     e.preventDefault();
     run(`open '${DASHBOARD_URL}'`);
   };
-  const handleDoubleClick = (e) => {
-    if (!WEB) return;
-    e.preventDefault();
-    window.open(BMA_URL, '_blank');
-  };
-  const fs = (px) => `${px * (WEB ? 1.25 : 1)}px`;
 
   return (
-    <div style={container} onClick={handleClick} onDoubleClick={handleDoubleClick}
-      onMouseDown={WEB ? undefined : altDrag}
-      title={WEB ? 'ดับเบิลคลิก → เรดาร์ loop ของ กทม.' : 'คลิก → เปิดหน้าเว็บ · ⌥-drag ย้ายการ์ด'}>
+    <div style={container} onClick={handleClick} onMouseDown={altDrag}
+      title="คลิก → เปิดหน้าเว็บ · ⌥-drag ย้ายการ์ด">
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
         {/* หัวการ์ด = แถวปุ่มเปิด/ปิดจุด (แทนชื่อแหล่ง "BMA Radar" เดิม -- ผู้ใช้ขอ 25 ก.ย.) */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: `${8 * S}px` }} title={meta.source}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }} title={meta.source}>
           {MARKERS.map((m) => <ToggleButton m={m} on={show[m.id]} dispatch={dispatch} key={m.id} />)}
           <div style={{ width: '1px', height: '14px', background: wash(0.18), margin: '0 2px' }} />
           <ToggleButton m={ME} on={show.me} dispatch={dispatch} note={show.me ? meNote : null} />
         </div>
-        <span style={{ fontSize: fs(11), color: stale || src === 'offline' ? macos.orange : macos.tertiary, fontWeight: stale ? '700' : '400' }}>
-          {stale ? '● ' : ''}{meta.last_update}{src === 'file' ? ' · file' : ''}{src === 'offline' ? ' · offline' : ''}
+        <span style={{ fontSize: '11px', color: stale ? macos.orange : macos.tertiary, fontWeight: stale ? '700' : '400' }}>
+          {stale ? '● ' : ''}{meta.last_update}{src === 'file' ? ' · file' : ''}
         </span>
       </div>
 
@@ -424,26 +418,219 @@ export const render = ({ meta, state, src, located, locErr, show, theme }, dispa
       </div>
 
       {rain && (
-        <div style={{ marginTop: '10px', fontSize: fs(12), fontWeight: '600', color: macos.orange }}>
+        <div style={{ marginTop: '10px', fontSize: '12px', fontWeight: '600', color: macos.orange }}>
           🌧 {rain}
         </div>
       )}
-      {WEB && (
-        <div style={{ marginTop: '10px', display: 'flex', alignItems: 'center', gap: '10px' }}>
-          <span style={{ display: 'flex', gap: '6px' }}>
-            <ThemePill label="◐ Dark" on={theme !== 'light'} onPick={() => dispatch({ type: 'THEME', name: 'dark' })} />
-            <ThemePill label="◑ Light" on={theme === 'light'} onPick={() => dispatch({ type: 'THEME', name: 'light' })} />
-          </span>
-          <span style={{ fontSize: fs(10), color: macos.tertiary }}>
-            {meta.source} · via {meta.via || '?'} · ดับเบิลคลิก → เรดาร์ loop ของ กทม.
-          </span>
+    </div>
+  );
+};
+
+// ======================= หน้าเว็บ =======================
+// หน้าเว็บจริง ไม่ใช่การ์ดขยาย: แถบหัว / ภาพเรดาร์ใหญ่ + ตัวเล่นเฟรม / แผงข้าง (สถานที่ + ฝน)
+// จอแคบ (มือถือ) แผงข้างตกลงไปอยู่ใต้ภาพเอง (flex-wrap)
+const hhmm = (ts) => {
+  const d = new Date(ts * 1000);
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+};
+const kmBetween = (a, b) => {                      // haversine พอสำหรับระยะในเมือง
+  const R = 6371, rad = Math.PI / 180;
+  const dLat = (b.lat - a.lat) * rad, dLon = (b.lon - a.lon) * rad;
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(a.lat * rad) * Math.cos(b.lat * rad) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+};
+const PLAY_MS = 500;                               // ต่อเฟรม
+const HOLD_LAST = 4;                               // ค้างเฟรมล่าสุดไว้กี่จังหวะก่อนวนใหม่
+
+const Panel = ({ title, children }) => (
+  <div style={{
+    background: macos.material, border: macos.border, boxShadow: macos.shadow,
+    borderRadius: '16px', padding: '16px 18px', marginBottom: '16px',
+  }}>
+    <div style={{ fontSize: '11px', fontWeight: '700', letterSpacing: '0.6px', textTransform: 'uppercase',
+                  color: macos.tertiary, marginBottom: '10px' }}>{title}</div>
+    {children}
+  </div>
+);
+
+const Switch = ({ on, color, onClick }) => (
+  <span onClick={onClick} style={{
+    width: '34px', height: '20px', borderRadius: '10px', flex: '0 0 auto', cursor: 'pointer',
+    position: 'relative', background: on ? color : wash(0.18), transition: 'background .15s',
+  }}>
+    <span style={{
+      position: 'absolute', top: '2px', left: on ? '16px' : '2px', width: '16px', height: '16px',
+      borderRadius: '50%', background: '#fff', boxShadow: '0 1px 2px rgba(0,0,0,0.3)', transition: 'left .15s',
+    }} />
+  </span>
+);
+
+const PlaceRow = ({ m, on, sub, note, dispatch }) => (
+  <div style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '8px 0',
+                borderTop: `0.5px solid ${wash(0.1)}` }}>
+    <span style={{ width: '28px', height: '28px', borderRadius: '8px', flex: '0 0 auto',
+                   display: 'flex', alignItems: 'center', justifyContent: 'center', background: wash(0.08) }}>
+      {ICONS[m.icon](btnColor(m))}
+    </span>
+    <span style={{ flex: '1 1 auto', minWidth: 0 }}>
+      <div style={{ fontSize: '14px', fontWeight: '600' }}>{m.label}</div>
+      {(sub || note) && (
+        <div style={{ fontSize: '12px', color: note ? macos.orange : macos.tertiary, marginTop: '2px' }}>
+          {note || sub}
         </div>
       )}
-      {WEB && show.me && meNote && (
-        <div style={{ marginTop: '6px', fontSize: fs(10), color: macos.orange }}>
-          ⌖ {meNote}
+    </span>
+    <Switch on={on} color={btnColor(m)} onClick={() => dispatch({ type: 'TOGGLE', id: m.id })} />
+  </div>
+);
+
+const PlayButton = ({ playing, onClick }) => (
+  <button onClick={onClick} title={playing ? 'หยุด' : 'เล่น'} style={{
+    width: '36px', height: '36px', borderRadius: '50%', border: 'none', cursor: 'pointer', flex: '0 0 auto',
+    background: macos.pillOn, color: macos.label, fontSize: '14px', lineHeight: '36px', padding: 0,
+  }}>{playing ? '❚❚' : '▶'}</button>
+);
+
+const WebPage = ({ meta, state, src, located, locErr, show, theme, frames, dispatch }) => {
+  const [idx, setIdx] = React.useState(null);      // null = ตามเฟรมล่าสุด
+  const [playing, setPlaying] = React.useState(true);
+  const holdRef = React.useRef(0);
+  const list = frames || [];
+  const canPlay = list.length > 1;
+
+  // เล่นวน: เดินทีละเฟรม ถึงเฟรมล่าสุดค้างไว้ HOLD_LAST จังหวะแล้วเริ่มใหม่
+  React.useEffect(() => {
+    if (!playing || !canPlay) return undefined;
+    const t = setInterval(() => {
+      setIdx((i) => {
+        const cur = i == null ? list.length - 1 : Math.min(i, list.length - 1);
+        if (cur >= list.length - 1) {
+          if (holdRef.current < HOLD_LAST) { holdRef.current += 1; return cur; }
+          holdRef.current = 0;
+          return 0;
+        }
+        return cur + 1;
+      });
+    }, PLAY_MS);
+    return () => clearInterval(t);
+  }, [playing, canPlay, list.length]);
+
+  // โหลดเฟรมล่วงหน้า ไม่งั้นรอบแรกภาพกระพริบ
+  React.useEffect(() => { list.forEach((f) => { const im = new Image(); im.src = API + f.image; }); }, [list]);
+
+  if (!meta) {
+    return (
+      <div style={{ padding: '40px', color: macos.tertiary, fontFamily: macos.font, fontSize: '14px' }}>
+        {src === 'offline' ? 'เรียก API ของ weatherhub ไม่ได้ -- daemon รันอยู่ไหม?' : 'กำลังโหลดเรดาร์…'}
+      </div>
+    );
+  }
+
+  const cur = canPlay ? (idx == null ? list.length - 1 : Math.min(idx, list.length - 1)) : null;
+  const frame = cur != null ? list[cur] : null;
+  const imgSrc = frame ? API + frame.image : `${API}/api/radar?t=${meta.ts}`;
+  const frameTs = frame ? frame.ts : meta.ts;
+  const latestTs = list.length ? list[list.length - 1].ts : meta.ts;
+  const behind = Math.round((latestTs - frameTs) / 60);
+  const stale = meta.ts && Date.now() / 1000 - meta.ts > 1200;
+
+  const point = state && state.point;
+  const me = point && !point.default && point.img_pct;
+  const meNote = !located ? locReason(locErr) : !me ? 'อยู่นอกวงเรดาร์' : null;
+  const myLL = located && point && !point.default ? { lat: point.lat, lon: point.lon } : null;
+  const rain = rainLine(state && state.nowcast);
+  const nc = state && state.nowcast;
+
+  const page = {
+    maxWidth: '1320px', margin: '0 auto', padding: '24px 20px 40px', boxSizing: 'border-box',
+    color: macos.label, fontFamily: macos.font,
+  };
+  const link = {
+    fontSize: '13px', fontWeight: '600', color: macos.label, textDecoration: 'none',
+    padding: '6px 12px', borderRadius: '999px', background: wash(0.12),
+  };
+
+  return (
+    <div style={page}>
+      <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end',
+                       flexWrap: 'wrap', gap: '12px', marginBottom: '18px' }}>
+        <div>
+          <div style={{ fontSize: '26px', fontWeight: '700', letterSpacing: '-0.3px' }}>เรดาร์ฝน กรุงเทพฯ</div>
+          <div style={{ fontSize: '13px', color: stale || src === 'offline' ? macos.orange : macos.tertiary, marginTop: '4px' }}>
+            {meta.source} · อัปเดต {meta.last_update} · via {meta.via || '?'}
+            {stale ? ' · ภาพค้างเกิน 20 นาที' : ''}{src === 'offline' ? ' · offline' : ''}
+          </div>
         </div>
-      )}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <ThemePill label="◐ Dark" on={theme !== 'light'} onPick={() => dispatch({ type: 'THEME', name: 'dark' })} />
+          <ThemePill label="◑ Light" on={theme === 'light'} onPick={() => dispatch({ type: 'THEME', name: 'light' })} />
+          <a href={BMA_URL} target="_blank" rel="noopener" style={link}>เว็บ กทม. ↗</a>
+        </div>
+      </header>
+
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '20px', alignItems: 'flex-start' }}>
+        <section style={{ flex: '1 1 640px', minWidth: 0 }}>
+          <div onDoubleClick={() => window.open(BMA_URL, '_blank')} title="ดับเบิลคลิก → เรดาร์ loop ของ กทม."
+            style={{ position: 'relative', borderRadius: '16px', overflow: 'hidden', background: wash(0.08),
+                     boxShadow: macos.shadow, lineHeight: 0 }}>
+            <img src={imgSrc} style={{ width: '100%', display: 'block' }} />
+            {MARKERS.filter((m) => show[m.id]).map((m) => <Marker m={m} key={m.id} />)}
+            {me && show.me && <MeMarker pct={me} />}
+            <span style={{
+              position: 'absolute', top: '12px', right: '12px', lineHeight: 1.2,
+              padding: '5px 10px', borderRadius: '999px', fontSize: '13px', fontWeight: '700',
+              background: 'rgba(20,22,28,0.72)', color: '#fff',
+            }}>
+              {hhmm(frameTs)}{behind > 0 ? ` · −${behind} นาที` : ' · ล่าสุด'}
+            </span>
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginTop: '12px' }}>
+            <PlayButton playing={playing && canPlay} onClick={() => { if (canPlay) setPlaying(!playing); }} />
+            <input type="range" min={0} max={Math.max(0, list.length - 1)} value={cur == null ? 0 : cur}
+              disabled={!canPlay}
+              onChange={(e) => { setPlaying(false); setIdx(Number(e.target.value)); }}
+              style={{ flex: '1 1 auto', accentColor: macos.blue }} />
+            <span style={{ fontSize: '12px', color: macos.tertiary, whiteSpace: 'nowrap' }}>
+              {canPlay
+                ? `${list.length} เฟรม · ${hhmm(list[0].ts)}–${hhmm(latestTs)}`
+                : 'กำลังสะสมเฟรม (ทุก 5 นาที)'}
+            </span>
+          </div>
+        </section>
+
+        <aside style={{ flex: '0 1 340px', minWidth: '280px' }}>
+          <Panel title="ฝนหนัก (nowcast)">
+            {rain
+              ? <div style={{ fontSize: '15px', fontWeight: '600', color: macos.orange }}>🌧 {rain}</div>
+              : <div style={{ fontSize: '14px', color: nc && nc.age != null && nc.age <= NOWCAST_MAX_AGE ? macos.label : macos.secondary }}>
+                  {!nc ? 'ยังไม่มีผลการเช็ค'
+                    : nc.age != null && nc.age > NOWCAST_MAX_AGE ? 'ผลล่าสุดเก่าเกิน 1 ชม. -- ไม่ใช้ตัดสิน'
+                    : 'ไม่มีฝนหนักเข้าใกล้ตำแหน่งนี้'}
+                </div>}
+            <div style={{ fontSize: '12px', color: macos.tertiary, marginTop: '6px' }}>
+              {nc && nc.ts
+                ? `เช็คล่าสุด ${hhmm(nc.ts)} · รัศมี ${nc.radius_km} กม. · มองล่วงหน้า ${nc.lookahead_min} นาที`
+                : 'ยังไม่มีผล -- ระบบเช็คเฉพาะ 16:00–16:45'}
+            </div>
+          </Panel>
+
+          <Panel title="สถานที่บนแผนที่">
+            {MARKERS.map((m) => (
+              <PlaceRow key={m.id} m={m} on={show[m.id]} dispatch={dispatch}
+                sub={myLL ? `ห่างจากเครื่องนี้ ${kmBetween(myLL, m).toFixed(1)} กม.` : null} />
+            ))}
+            <PlaceRow m={ME} on={show.me} dispatch={dispatch}
+              note={show.me ? meNote : null}
+              sub={point && !point.default ? `ห่างสถานีเรดาร์ ${point.distance_km} กม. (ปัดกริด ~5 กม.)` : null} />
+          </Panel>
+
+          <div style={{ fontSize: '12px', color: macos.tertiary, lineHeight: 1.6, padding: '0 4px' }}>
+            ภาพเคลื่อนไหว = ภาพนิ่งที่ดึงทุก 5 นาทีย้อนหลัง 1 ชม. (ไม่ยิงเว็บ กทม. เพิ่ม)
+            · ดับเบิลคลิกที่ภาพ = เปิด loop ของ กทม.
+          </div>
+        </aside>
+      </div>
     </div>
   );
 };

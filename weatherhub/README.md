@@ -17,7 +17,9 @@ daemon `com.apphub.weatherhub` (ย้ายจาก cron 21 ก.ย.) + API �
   `bearing_deg`, `img_pct` = ตำแหน่งบนภาพเรดาร์เป็น %), `radar` (meta ของภาพล่าสุด),
   `nowcast` (ETA ฝนหนักเข้ารัศมี 10 กม. ของจุดนั้น จากรอบเช็ค 16:xx ล่าสุด หรือ null)
 - `GET /api/radar` -> ภาพเรดาร์ล่าสุด (jpeg) / `GET /api/health`
-- `GET /dashboard` -> หน้าเว็บของการ์ดเรดาร์ (radar-weather.jsx ตัวเดียวกัน build ด้วย common/web/build.js)
+- `GET /api/frames?n=12` + `GET /api/frame?ts=` -> เฟรมย้อนหลัง (ภาพนิ่งที่งาน radar ดึงอยู่แล้ว เก็บ 2 ชม.
+  ใน <store>/frames/ ภาพซ้ำไม่เก็บ -- ดู service/frames.py) ให้หน้าเว็บเล่นเป็นภาพเคลื่อนไหว ไม่ยิง กทม. เพิ่ม
+- `GET /dashboard` -> หน้าเว็บเรดาร์ (radar-weather.jsx ตัวเดียวกัน โหมด WEB วาดเป็นหน้าเว็บเต็มรูป: ภาพใหญ่ + ตัวเล่นเฟรม + แผงสถานที่/ฝน)
   การ์ดบน desktop คลิกเดียว = เปิดหน้านี้ / บนหน้าเว็บดับเบิลคลิก = เรดาร์ loop ของ กทม.
 - ค่ารายจุดคิดจากเรดาร์ที่มีอยู่แล้วล้วนๆ ไม่มีแหล่งอื่น และ API ไม่ยิง upstream เอง
 - widget `radar-weather.jsx` ขอพิกัดผ่าน geolocation ของ Übersicht แล้วเรียก API (ถอยไปอ่าน /tmp ถ้า API ล่ม)

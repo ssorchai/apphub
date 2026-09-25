@@ -66,6 +66,63 @@ const load = (dispatch) => {
 export const command = load;
 export const refreshFrequency = 60000;
 
+// ---- palette: dark (เดิม) / light (เฉพาะหน้าเว็บ 25 ก.ย. 26 -- ชุดเดียวกับการ์ด gold) ----
+// ไม่ใช้ backdrop-filter เพราะใน Übersicht มันกระพริบตอน re-render ทุกรอบ refresh
+// ⚠️ ต้องอยู่เหนือ initialState (อ่าน readTheme ตอนโมดูลรัน -- บทเรียนจาก gold-dashboard.jsx)
+// `ink` = สีฐานของแผ่นโปร่ง (พื้นปุ่ม/เส้นคั่น) -- ธีมสว่างต้องเป็นหมึกดำ ไม่งั้นขาวบนขาวหาย
+const DARK = {
+  // ฉากหลังโทนเข้มโปร่ง: ตัวหนังสือขาวต้องอ่านออกทั้งบน wallpaper สว่างและมืด
+  // (พื้นขาวโปร่งเดิมจมหายเมื่อ wallpaper เป็นโทนส้ม/สว่าง) — ปรับความทึบที่ค่านี้ค่าเดียว
+  material: 'rgba(24, 26, 33, 0.55)',
+  border: '0.5px solid rgba(255, 255, 255, 0.16)',
+  shadow: '0 10px 28px rgba(0, 0, 0, 0.32)',
+  label: '#ffffff',
+  secondary: 'rgba(255, 255, 255, 0.78)',
+  tertiary: 'rgba(255, 255, 255, 0.58)',
+  ink: '255, 255, 255',
+  badgeBg: 'rgba(24, 26, 33, 0.9)',
+  pillOn: 'rgba(100, 210, 255, 0.35)',
+  orange: '#ffb340',
+  blue: '#64d2ff',
+  green: '#30d158',
+};
+const LIGHT = {
+  // ขาวนวล (ครีม) ไม่ใช่ขาวจ้า -- เหมือนธีมสว่างของหน้าเว็บ gold
+  material: 'rgba(252, 249, 243, 0.94)',
+  border: '0.5px solid rgba(0, 0, 0, 0.08)',
+  shadow: '0 10px 28px rgba(0, 0, 0, 0.14)',
+  label: '#14161c',
+  secondary: 'rgba(0, 0, 0, 0.72)',
+  tertiary: 'rgba(0, 0, 0, 0.50)',
+  ink: '0, 0, 0',
+  badgeBg: 'rgba(252, 249, 243, 0.95)',
+  pillOn: 'rgba(10, 126, 164, 0.20)',
+  orange: '#d9820b',
+  blue: '#4a80e8',
+  green: '#1b8a3a',
+};
+// component ทุกตัวอ่าน macos.* ตอน render -- สลับธีมด้วยการเขียนทับ object นี้แล้ว render ใหม่
+const macos = {
+  radius: '22px',
+  font: '-apple-system, "SF Pro Display", "SF Pro Text", "Helvetica Neue", sans-serif',
+  ...DARK,
+};
+const wash = (a) => `rgba(${macos.ink}, ${a})`;   // แผ่นโปร่งตามธีม
+
+const THEME_KEY = 'radar-weather.theme';
+const readTheme = () => {
+  try { return localStorage.getItem(THEME_KEY) === 'light' ? 'light' : 'dark'; } catch (e) { return 'dark'; }
+};
+const applyTheme = (name) => {
+  Object.assign(macos, name === 'light' ? LIGHT : DARK);
+  if (WEB) { try { localStorage.setItem(THEME_KEY, name); } catch (e) { /* ไม่จำก็ไม่เป็นไร */ } }
+  // พื้นหลังของหน้าเว็บอยู่ใน dashboard.html -- บอกผ่าน data-theme ให้ CSS เปลี่ยนตาม
+  if (WEB && document.body) document.body.dataset.theme = name;
+  return name;
+};
+// การ์ดบน desktop ลอยอยู่บน wallpaper -- คงธีมมืดเสมอ ปุ่มสลับมีเฉพาะหน้าเว็บ
+applyTheme(WEB ? readTheme() : 'dark');
+
 // ปุ่มเปิด/ปิดจุด (Office/Home 1-2 + ตำแหน่งเครื่องนี้) -- จำไว้ใน localStorage ข้าม reboot
 const SHOW_KEY = 'radar-weather.markers';
 const SHOW_DEFAULT = { office: true, home: true, office2: true, home2: true, me: true };
@@ -73,13 +130,17 @@ const savedShow = () => {
   try { return { ...SHOW_DEFAULT, ...JSON.parse(localStorage.getItem(SHOW_KEY)) }; } catch (e) { return SHOW_DEFAULT; }
 };
 
-export const initialState = { meta: null, state: null, src: null, located: false, show: savedShow() };
+export const initialState = {
+  meta: null, state: null, src: null, located: false, show: savedShow(),
+  theme: WEB ? readTheme() : 'dark',
+};
 export const updateState = (event, prev) => {
   // command เป็นฟังก์ชัน Übersicht จะยิง UB/COMMAND_RAN เองแบบไม่มี output -- ไม่ใช้ event นั้นเลย
   if (event.type === 'DATA') {
     return { ...prev, meta: event.meta, state: event.state, src: event.src, located: !!event.located };
   }
   if (event.type === 'OFFLINE') return { ...prev, src: 'offline' };
+  if (event.type === 'THEME') return { ...prev, theme: applyTheme(event.name) };
   if (event.type === 'TOGGLE') {
     const show = { ...prev.show, [event.id]: !prev.show[event.id] };
     try { localStorage.setItem(SHOW_KEY, JSON.stringify(show)); } catch (e) {}
@@ -88,34 +149,18 @@ export const updateState = (event, prev) => {
   return prev;
 };
 
-// ---- macOS system palette (shared theme กับ gold-update.jsx) ----
-// ไม่ใช้ backdrop-filter เพราะใน Übersicht มันกระพริบตอน re-render ทุกรอบ refresh
-const macos = {
-  // ฉากหลังโทนเข้มโปร่ง: ตัวหนังสือขาวต้องอ่านออกทั้งบน wallpaper สว่างและมืด
-  // (พื้นขาวโปร่งเดิมจมหายเมื่อ wallpaper เป็นโทนส้ม/สว่าง) — ปรับความทึบที่ค่านี้ค่าเดียว
-  material: 'rgba(24, 26, 33, 0.55)',
-  border: '0.5px solid rgba(255, 255, 255, 0.16)',
-  radius: '22px',
-  shadow: '0 10px 28px rgba(0, 0, 0, 0.32)',
-  font: '-apple-system, "SF Pro Display", "SF Pro Text", "Helvetica Neue", sans-serif',
-  label: '#ffffff',
-  secondary: 'rgba(255, 255, 255, 0.78)',
-  tertiary: 'rgba(255, 255, 255, 0.58)',
-  orange: '#ffb340',
-  blue: '#64d2ff',
-  green: '#30d158',
-};
-
 // ตำแหน่ง Office/บ้าน เป็น % ของภาพเรดาร์ 965x800
 // (เรดาร์หนองจอก 13.8348127,100.8463349 = px(483,400), สเกล 0.3008 กม./px)
 // (คำนวณด้วยสูตรเดียวกับ geometry() ใน weatherhub/service/api.py)
 const MARKERS = [
-  { id: 'office', icon: 'office', n: 1, label: 'Office 1', left: '38.74%', top: '52.84%', color: '#64d2ff' },  // 13.7733, 100.5426
-  { id: 'office2', icon: 'office', n: 2, label: 'Office 2', left: '38.47%', top: '51.32%', color: '#bf8cff' }, // 13.8062486, 100.5352885
-  { id: 'home', icon: 'home', n: 1, label: 'Home 1', left: '40.98%', top: '47.58%', color: '#ffb340' },        // 13.8873269, 100.6026284
-  { id: 'home2', icon: 'home', n: 2, label: 'Home 2', left: '42.72%', top: '48.22%', color: '#ff6b6b' },       // 13.873365, 100.6494155
+  { id: 'office', icon: 'office', n: 1, label: 'Office 1', left: '38.74%', top: '52.84%', color: '#64d2ff', ink: '#1a86b8' },  // 13.7733, 100.5426
+  { id: 'office2', icon: 'office', n: 2, label: 'Office 2', left: '38.47%', top: '51.32%', color: '#bf8cff', ink: '#7c4dd1' }, // 13.8062486, 100.5352885
+  { id: 'home', icon: 'home', n: 1, label: 'Home 1', left: '40.98%', top: '47.58%', color: '#ffb340', ink: '#c2710a' },        // 13.8873269, 100.6026284
+  { id: 'home2', icon: 'home', n: 2, label: 'Home 2', left: '42.72%', top: '48.22%', color: '#ff6b6b', ink: '#d03a3a' },       // 13.873365, 100.6494155
 ];
-const ME = { id: 'me', icon: 'me', label: 'ตำแหน่งเครื่องนี้', color: '#30d158' };
+const ME = { id: 'me', icon: 'me', label: 'ตำแหน่งเครื่องนี้', color: '#30d158', ink: '#1b8a3a' };
+// สีของปุ่ม: ธีมสว่างใช้โทนเข้ม (`ink`) สีอ่อนเดิมจางบนพื้นครีม / จุดบนภาพเรดาร์ใช้ `color` เสมอ
+const btnColor = (m) => (macos.ink === LIGHT.ink && m.ink) || m.color;
 
 // ไอคอนของปุ่ม toggle (SVG วาดเอง ไม่พึ่งฟอนต์/ไฟล์ภายนอก)
 const ICONS = {
@@ -151,16 +196,16 @@ const ToggleButton = ({ m, on, dispatch, note }) => (
     style={{
       position: 'relative', width: `${22 * S}px`, height: `${22 * S}px`, borderRadius: '50%', boxSizing: 'border-box',
       display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer',
-      background: on ? 'rgba(255,255,255,0.16)' : 'transparent',
+      background: on ? wash(0.16) : 'transparent',
       // ปุ่มเปิดอยู่แต่ยังวาดจุดไม่ได้ (เช่นยังไม่ได้พิกัด) = ขอบเส้นประ
-      border: `1px ${note ? 'dashed' : 'solid'} ${on ? m.color : 'rgba(255,255,255,0.22)'}`,
+      border: `1px ${note ? 'dashed' : 'solid'} ${on ? btnColor(m) : wash(0.22)}`,
       opacity: on ? 1 : 0.55,
     }}>
-    {ICONS[m.icon](on ? m.color : 'rgba(255,255,255,0.7)')}
+    {ICONS[m.icon](on ? btnColor(m) : wash(0.7))}
     {m.n && (
       <span style={{
         position: 'absolute', right: '-3px', bottom: '-3px', minWidth: `${10 * S}px`, height: `${10 * S}px`,
-        borderRadius: `${5 * S}px`, background: 'rgba(24,26,33,0.9)', color: on ? m.color : 'rgba(255,255,255,0.7)',
+        borderRadius: `${5 * S}px`, background: macos.badgeBg, color: on ? btnColor(m) : wash(0.7),
         fontSize: `${8 * S}px`, fontWeight: '700', lineHeight: `${10 * S}px`, textAlign: 'center',
       }}>{m.n}</span>
     )}
@@ -187,6 +232,20 @@ const MeMarker = ({ pct }) => (
     boxShadow: '0 0 0 2px rgba(0,0,0,0.35), 0 0 8px rgba(48,209,88,0.9)',
     boxSizing: 'border-box',
   }} />
+);
+
+// ปุ่มเลือกธีม (เฉพาะหน้าเว็บ) -- แบบเดียวกับ ModePill ของการ์ด gold
+const ThemePill = ({ label, on, onPick }) => (
+  <span
+    onClick={(e) => { e.stopPropagation(); onPick(); }}
+    onDoubleClick={stop}
+    style={{
+      fontSize: '12px', fontWeight: '700', padding: '3px 10px', borderRadius: '999px', cursor: 'pointer',
+      color: on ? macos.label : macos.secondary,
+      background: on ? macos.pillOn : wash(0.12),
+    }}>
+    {label}
+  </span>
 );
 
 // บรรทัดฝนของจุดนี้ -- เฉพาะตอนมีผล nowcast สดและฝนหนักจะถึงภายใน lookahead
@@ -226,7 +285,7 @@ const altDrag = (e) => {
   window.addEventListener('mouseup', up);
 };
 
-export const render = ({ meta, state, src, located, show }, dispatch) => {
+export const render = ({ meta, state, src, located, show, theme }, dispatch) => {
   if (!meta) return null;
 
   // ภาพเก่ากว่า 20 นาที = เตือนว่าค้าง
@@ -280,7 +339,7 @@ export const render = ({ meta, state, src, located, show }, dispatch) => {
         {/* หัวการ์ด = แถวปุ่มเปิด/ปิดจุด (แทนชื่อแหล่ง "BMA Radar" เดิม -- ผู้ใช้ขอ 25 ก.ย.) */}
         <div style={{ display: 'flex', alignItems: 'center', gap: `${8 * S}px` }} title={meta.source}>
           {MARKERS.map((m) => <ToggleButton m={m} on={show[m.id]} dispatch={dispatch} key={m.id} />)}
-          <div style={{ width: '1px', height: '14px', background: 'rgba(255,255,255,0.18)', margin: '0 2px' }} />
+          <div style={{ width: '1px', height: '14px', background: wash(0.18), margin: '0 2px' }} />
           <ToggleButton m={ME} on={show.me} dispatch={dispatch} note={show.me ? meNote : null} />
         </div>
         <span style={{ fontSize: fs(11), color: stale || src === 'offline' ? macos.orange : macos.tertiary, fontWeight: stale ? '700' : '400' }}>
@@ -288,7 +347,7 @@ export const render = ({ meta, state, src, located, show }, dispatch) => {
         </span>
       </div>
 
-      <div style={{ position: 'relative', width: '100%', borderRadius: '14px', overflow: 'hidden', background: 'rgba(255, 255, 255, 0.1)', minHeight: '200px', display: 'flex', alignItems: 'center' }}>
+      <div style={{ position: 'relative', width: '100%', borderRadius: '14px', overflow: 'hidden', background: wash(0.1), minHeight: '200px', display: 'flex', alignItems: 'center' }}>
         <img src={imgSrc} style={{ width: '100%', display: 'block' }} />
         {MARKERS.filter((m) => show[m.id]).map((m) => <Marker m={m} key={m.id} />)}
         {me && show.me && <MeMarker pct={me} />}
@@ -300,8 +359,14 @@ export const render = ({ meta, state, src, located, show }, dispatch) => {
         </div>
       )}
       {WEB && (
-        <div style={{ marginTop: '10px', fontSize: fs(10), color: macos.tertiary }}>
-          {meta.source} · via {meta.via || '?'} · ดับเบิลคลิก → เรดาร์ loop ของ กทม.
+        <div style={{ marginTop: '10px', display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <span style={{ display: 'flex', gap: '6px' }}>
+            <ThemePill label="◐ Dark" on={theme !== 'light'} onPick={() => dispatch({ type: 'THEME', name: 'dark' })} />
+            <ThemePill label="◑ Light" on={theme === 'light'} onPick={() => dispatch({ type: 'THEME', name: 'light' })} />
+          </span>
+          <span style={{ fontSize: fs(10), color: macos.tertiary }}>
+            {meta.source} · via {meta.via || '?'} · ดับเบิลคลิก → เรดาร์ loop ของ กทม.
+          </span>
         </div>
       )}
     </div>

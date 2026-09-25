@@ -93,9 +93,82 @@ const load = dispatch => {
 
 const command = load;
 exports.command = command;
-const refreshFrequency = 60000; // ปุ่มเปิด/ปิดจุด (Office/Home 1-2 + ตำแหน่งเครื่องนี้) -- จำไว้ใน localStorage ข้าม reboot
+const refreshFrequency = 60000; // ---- palette: dark (เดิม) / light (เฉพาะหน้าเว็บ 25 ก.ย. 26 -- ชุดเดียวกับการ์ด gold) ----
+// ไม่ใช้ backdrop-filter เพราะใน Übersicht มันกระพริบตอน re-render ทุกรอบ refresh
+// ⚠️ ต้องอยู่เหนือ initialState (อ่าน readTheme ตอนโมดูลรัน -- บทเรียนจาก gold-dashboard.jsx)
+// `ink` = สีฐานของแผ่นโปร่ง (พื้นปุ่ม/เส้นคั่น) -- ธีมสว่างต้องเป็นหมึกดำ ไม่งั้นขาวบนขาวหาย
 
 exports.refreshFrequency = refreshFrequency;
+const DARK = {
+  // ฉากหลังโทนเข้มโปร่ง: ตัวหนังสือขาวต้องอ่านออกทั้งบน wallpaper สว่างและมืด
+  // (พื้นขาวโปร่งเดิมจมหายเมื่อ wallpaper เป็นโทนส้ม/สว่าง) — ปรับความทึบที่ค่านี้ค่าเดียว
+  material: 'rgba(24, 26, 33, 0.55)',
+  border: '0.5px solid rgba(255, 255, 255, 0.16)',
+  shadow: '0 10px 28px rgba(0, 0, 0, 0.32)',
+  label: '#ffffff',
+  secondary: 'rgba(255, 255, 255, 0.78)',
+  tertiary: 'rgba(255, 255, 255, 0.58)',
+  ink: '255, 255, 255',
+  badgeBg: 'rgba(24, 26, 33, 0.9)',
+  pillOn: 'rgba(100, 210, 255, 0.35)',
+  orange: '#ffb340',
+  blue: '#64d2ff',
+  green: '#30d158'
+};
+const LIGHT = {
+  // ขาวนวล (ครีม) ไม่ใช่ขาวจ้า -- เหมือนธีมสว่างของหน้าเว็บ gold
+  material: 'rgba(252, 249, 243, 0.94)',
+  border: '0.5px solid rgba(0, 0, 0, 0.08)',
+  shadow: '0 10px 28px rgba(0, 0, 0, 0.14)',
+  label: '#14161c',
+  secondary: 'rgba(0, 0, 0, 0.72)',
+  tertiary: 'rgba(0, 0, 0, 0.50)',
+  ink: '0, 0, 0',
+  badgeBg: 'rgba(252, 249, 243, 0.95)',
+  pillOn: 'rgba(10, 126, 164, 0.20)',
+  orange: '#d9820b',
+  blue: '#4a80e8',
+  green: '#1b8a3a'
+}; // component ทุกตัวอ่าน macos.* ตอน render -- สลับธีมด้วยการเขียนทับ object นี้แล้ว render ใหม่
+
+const macos = {
+  radius: '22px',
+  font: '-apple-system, "SF Pro Display", "SF Pro Text", "Helvetica Neue", sans-serif',
+  ...DARK
+};
+
+const wash = a => `rgba(${macos.ink}, ${a})`; // แผ่นโปร่งตามธีม
+
+
+const THEME_KEY = 'radar-weather.theme';
+
+const readTheme = () => {
+  try {
+    return localStorage.getItem(THEME_KEY) === 'light' ? 'light' : 'dark';
+  } catch (e) {
+    return 'dark';
+  }
+};
+
+const applyTheme = name => {
+  Object.assign(macos, name === 'light' ? LIGHT : DARK);
+
+  if (WEB) {
+    try {
+      localStorage.setItem(THEME_KEY, name);
+    } catch (e) {
+      /* ไม่จำก็ไม่เป็นไร */
+    }
+  } // พื้นหลังของหน้าเว็บอยู่ใน dashboard.html -- บอกผ่าน data-theme ให้ CSS เปลี่ยนตาม
+
+
+  if (WEB && document.body) document.body.dataset.theme = name;
+  return name;
+}; // การ์ดบน desktop ลอยอยู่บน wallpaper -- คงธีมมืดเสมอ ปุ่มสลับมีเฉพาะหน้าเว็บ
+
+
+applyTheme(WEB ? readTheme() : 'dark'); // ปุ่มเปิด/ปิดจุด (Office/Home 1-2 + ตำแหน่งเครื่องนี้) -- จำไว้ใน localStorage ข้าม reboot
+
 const SHOW_KEY = 'radar-weather.markers';
 const SHOW_DEFAULT = {
   office: true,
@@ -120,7 +193,8 @@ const initialState = {
   state: null,
   src: null,
   located: false,
-  show: savedShow()
+  show: savedShow(),
+  theme: WEB ? readTheme() : 'dark'
 };
 exports.initialState = initialState;
 
@@ -138,6 +212,9 @@ const updateState = (event, prev) => {
   if (event.type === 'OFFLINE') return { ...prev,
     src: 'offline'
   };
+  if (event.type === 'THEME') return { ...prev,
+    theme: applyTheme(event.name)
+  };
 
   if (event.type === 'TOGGLE') {
     const show = { ...prev.show,
@@ -154,29 +231,12 @@ const updateState = (event, prev) => {
   }
 
   return prev;
-}; // ---- macOS system palette (shared theme กับ gold-update.jsx) ----
-// ไม่ใช้ backdrop-filter เพราะใน Übersicht มันกระพริบตอน re-render ทุกรอบ refresh
-
-
-exports.updateState = updateState;
-const macos = {
-  // ฉากหลังโทนเข้มโปร่ง: ตัวหนังสือขาวต้องอ่านออกทั้งบน wallpaper สว่างและมืด
-  // (พื้นขาวโปร่งเดิมจมหายเมื่อ wallpaper เป็นโทนส้ม/สว่าง) — ปรับความทึบที่ค่านี้ค่าเดียว
-  material: 'rgba(24, 26, 33, 0.55)',
-  border: '0.5px solid rgba(255, 255, 255, 0.16)',
-  radius: '22px',
-  shadow: '0 10px 28px rgba(0, 0, 0, 0.32)',
-  font: '-apple-system, "SF Pro Display", "SF Pro Text", "Helvetica Neue", sans-serif',
-  label: '#ffffff',
-  secondary: 'rgba(255, 255, 255, 0.78)',
-  tertiary: 'rgba(255, 255, 255, 0.58)',
-  orange: '#ffb340',
-  blue: '#64d2ff',
-  green: '#30d158'
 }; // ตำแหน่ง Office/บ้าน เป็น % ของภาพเรดาร์ 965x800
 // (เรดาร์หนองจอก 13.8348127,100.8463349 = px(483,400), สเกล 0.3008 กม./px)
 // (คำนวณด้วยสูตรเดียวกับ geometry() ใน weatherhub/service/api.py)
 
+
+exports.updateState = updateState;
 const MARKERS = [{
   id: 'office',
   icon: 'office',
@@ -184,7 +244,8 @@ const MARKERS = [{
   label: 'Office 1',
   left: '38.74%',
   top: '52.84%',
-  color: '#64d2ff'
+  color: '#64d2ff',
+  ink: '#1a86b8'
 }, // 13.7733, 100.5426
 {
   id: 'office2',
@@ -193,7 +254,8 @@ const MARKERS = [{
   label: 'Office 2',
   left: '38.47%',
   top: '51.32%',
-  color: '#bf8cff'
+  color: '#bf8cff',
+  ink: '#7c4dd1'
 }, // 13.8062486, 100.5352885
 {
   id: 'home',
@@ -202,7 +264,8 @@ const MARKERS = [{
   label: 'Home 1',
   left: '40.98%',
   top: '47.58%',
-  color: '#ffb340'
+  color: '#ffb340',
+  ink: '#c2710a'
 }, // 13.8873269, 100.6026284
 {
   id: 'home2',
@@ -211,15 +274,20 @@ const MARKERS = [{
   label: 'Home 2',
   left: '42.72%',
   top: '48.22%',
-  color: '#ff6b6b'
+  color: '#ff6b6b',
+  ink: '#d03a3a'
 } // 13.873365, 100.6494155
 ];
 const ME = {
   id: 'me',
   icon: 'me',
   label: 'ตำแหน่งเครื่องนี้',
-  color: '#30d158'
-}; // ไอคอนของปุ่ม toggle (SVG วาดเอง ไม่พึ่งฟอนต์/ไฟล์ภายนอก)
+  color: '#30d158',
+  ink: '#1b8a3a'
+}; // สีของปุ่ม: ธีมสว่างใช้โทนเข้ม (`ink`) สีอ่อนเดิมจางบนพื้นครีม / จุดบนภาพเรดาร์ใช้ `color` เสมอ
+
+const btnColor = m => macos.ink === LIGHT.ink && m.ink || m.color; // ไอคอนของปุ่ม toggle (SVG วาดเอง ไม่พึ่งฟอนต์/ไฟล์ภายนอก)
+
 
 const ICONS = {
   office: c => /*#__PURE__*/React.createElement("svg", {
@@ -306,12 +374,12 @@ const ToggleButton = ({
     alignItems: 'center',
     justifyContent: 'center',
     cursor: 'pointer',
-    background: on ? 'rgba(255,255,255,0.16)' : 'transparent',
+    background: on ? wash(0.16) : 'transparent',
     // ปุ่มเปิดอยู่แต่ยังวาดจุดไม่ได้ (เช่นยังไม่ได้พิกัด) = ขอบเส้นประ
-    border: `1px ${note ? 'dashed' : 'solid'} ${on ? m.color : 'rgba(255,255,255,0.22)'}`,
+    border: `1px ${note ? 'dashed' : 'solid'} ${on ? btnColor(m) : wash(0.22)}`,
     opacity: on ? 1 : 0.55
   }
-}, ICONS[m.icon](on ? m.color : 'rgba(255,255,255,0.7)'), m.n && /*#__PURE__*/React.createElement("span", {
+}, ICONS[m.icon](on ? btnColor(m) : wash(0.7)), m.n && /*#__PURE__*/React.createElement("span", {
   style: {
     position: 'absolute',
     right: '-3px',
@@ -319,8 +387,8 @@ const ToggleButton = ({
     minWidth: `${10 * S}px`,
     height: `${10 * S}px`,
     borderRadius: `${5 * S}px`,
-    background: 'rgba(24,26,33,0.9)',
-    color: on ? m.color : 'rgba(255,255,255,0.7)',
+    background: macos.badgeBg,
+    color: on ? btnColor(m) : wash(0.7),
     fontSize: `${8 * S}px`,
     fontWeight: '700',
     lineHeight: `${10 * S}px`,
@@ -364,7 +432,29 @@ const MeMarker = ({
     boxShadow: '0 0 0 2px rgba(0,0,0,0.35), 0 0 8px rgba(48,209,88,0.9)',
     boxSizing: 'border-box'
   }
-}); // บรรทัดฝนของจุดนี้ -- เฉพาะตอนมีผล nowcast สดและฝนหนักจะถึงภายใน lookahead
+}); // ปุ่มเลือกธีม (เฉพาะหน้าเว็บ) -- แบบเดียวกับ ModePill ของการ์ด gold
+
+
+const ThemePill = ({
+  label,
+  on,
+  onPick
+}) => /*#__PURE__*/React.createElement("span", {
+  onClick: e => {
+    e.stopPropagation();
+    onPick();
+  },
+  onDoubleClick: stop,
+  style: {
+    fontSize: '12px',
+    fontWeight: '700',
+    padding: '3px 10px',
+    borderRadius: '999px',
+    cursor: 'pointer',
+    color: on ? macos.label : macos.secondary,
+    background: on ? macos.pillOn : wash(0.12)
+  }
+}, label); // บรรทัดฝนของจุดนี้ -- เฉพาะตอนมีผล nowcast สดและฝนหนักจะถึงภายใน lookahead
 
 
 const rainLine = n => {
@@ -419,7 +509,8 @@ const render = ({
   state,
   src,
   located,
-  show
+  show,
+  theme
 }, dispatch) => {
   if (!meta) return null; // ภาพเก่ากว่า 20 นาที = เตือนว่าค้าง
 
@@ -499,7 +590,7 @@ const render = ({
     style: {
       width: '1px',
       height: '14px',
-      background: 'rgba(255,255,255,0.18)',
+      background: wash(0.18),
       margin: '0 2px'
     }
   }), /*#__PURE__*/React.createElement(ToggleButton, {
@@ -519,7 +610,7 @@ const render = ({
       width: '100%',
       borderRadius: '14px',
       overflow: 'hidden',
-      background: 'rgba(255, 255, 255, 0.1)',
+      background: wash(0.1),
       minHeight: '200px',
       display: 'flex',
       alignItems: 'center'
@@ -545,10 +636,35 @@ const render = ({
   }, "\uD83C\uDF27 ", rain), WEB && /*#__PURE__*/React.createElement("div", {
     style: {
       marginTop: '10px',
+      display: 'flex',
+      alignItems: 'center',
+      gap: '10px'
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      display: 'flex',
+      gap: '6px'
+    }
+  }, /*#__PURE__*/React.createElement(ThemePill, {
+    label: "\u25D0 Dark",
+    on: theme !== 'light',
+    onPick: () => dispatch({
+      type: 'THEME',
+      name: 'dark'
+    })
+  }), /*#__PURE__*/React.createElement(ThemePill, {
+    label: "\u25D1 Light",
+    on: theme === 'light',
+    onPick: () => dispatch({
+      type: 'THEME',
+      name: 'light'
+    })
+  })), /*#__PURE__*/React.createElement("span", {
+    style: {
       fontSize: fs(10),
       color: macos.tertiary
     }
-  }, meta.source, " \xB7 via ", meta.via || '?', " \xB7 \u0E14\u0E31\u0E1A\u0E40\u0E1A\u0E34\u0E25\u0E04\u0E25\u0E34\u0E01 \u2192 \u0E40\u0E23\u0E14\u0E32\u0E23\u0E4C loop \u0E02\u0E2D\u0E07 \u0E01\u0E17\u0E21."));
+  }, meta.source, " \xB7 via ", meta.via || '?', " \xB7 \u0E14\u0E31\u0E1A\u0E40\u0E1A\u0E34\u0E25\u0E04\u0E25\u0E34\u0E01 \u2192 \u0E40\u0E23\u0E14\u0E32\u0E23\u0E4C loop \u0E02\u0E2D\u0E07 \u0E01\u0E17\u0E21.")));
 };
 
 exports.render = render;

@@ -8,14 +8,11 @@ cme_fetcher เป็น process แยก ถ้า API จำแค่ผล�
 schema_version: เพิ่ม field ได้โดยไม่ต้องขยับ / เปลี่ยนความหมายหรือลบ field = ขยับเลข
 """
 import os
-import platform
-import subprocess
-import threading
 import time
 
 import cme_fetcher
 import gold_fetcher as gf
-from common.hub import HTML, JS, JSON, TEXT, Api, FileCache, config, err, json_body, log
+from common.hub import HTML, JS, JSON, TEXT, Api, FileCache, WebWidget, config, json_body
 
 SCHEMA_VERSION = 1
 PORT = 8787
@@ -40,48 +37,11 @@ chart = FileCache(cme_fetcher.CHART_OUT, _text)
 live_js = FileCache(gf.LIVE_JS_PATH, _text)
 tick = FileCache("/tmp/cme_ticker.json", _json)       # ticker.OUT (ไม่ import กันวงวน)
 
-# หน้าเว็บ dashboard = หน้า host + widget ไฟล์เดียวกับที่ Übersicht ใช้ ที่ build เป็น .js แล้ว
-# ไม่พึ่ง CDN / ไม่มี Babel ในเบราว์เซอร์ (22 ก.ย. 26) ทุกไฟล์อ่านจาก repo ตาม mtime
+# หน้าเว็บ dashboard = widget ไฟล์เดียวกับที่ Übersicht ใช้ (ดู common/hub/webwidget.py)
 _GOLDHUB = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-_WEB = os.path.join(_GOLDHUB, "web")
-DASH_JSX = os.path.join(_GOLDHUB, "widgets", "gold-dashboard.jsx")
-DASH_JS = os.path.join(_WEB, "dist", "gold-dashboard.js")
-dash_html = FileCache(os.path.join(_WEB, "dashboard.html"), _text)
-dash_js = FileCache(DASH_JS, _text)
-vendor = {n: FileCache(os.path.join(_WEB, "vendor", n), _text)
-          for n in ("react.production.min.js", "react-dom.production.min.js")}
-
-# ตัว build = node + Babel ที่มากับ Übersicht.app (ไม่ต้องติดตั้งอะไร) -- ไม่มี (cloud) ก็เสิร์ฟ dist
-# ที่ commit ไว้แทน / build เฉพาะตอน .jsx ใหม่กว่า dist แก้ .jsx แล้ว reload หน้าเว็บได้เลย
-_UB = "/Applications/Übersicht.app/Contents/Resources"
-_NODE = os.path.join(_UB, "node-arm64" if platform.machine() == "arm64" else "node-x64")
-_build_lock = threading.Lock()
-_build_err = {"msg": None}
-
-
-def ensure_built():
-    with _build_lock:
-        try:
-            if os.stat(DASH_JSX).st_mtime <= os.stat(DASH_JS).st_mtime:
-                return
-        except OSError:
-            pass                                   # dist ยังไม่มี -> build
-        if not os.path.exists(_NODE):
-            return                                 # ไม่มี Übersicht: ใช้ dist เดิม
-        try:
-            subprocess.run([_NODE, os.path.join(_WEB, "build.js"), DASH_JSX, DASH_JS],
-                           env={"UB_NODE_MODULES": os.path.join(_UB, "node_modules")},
-                           capture_output=True, text=True, timeout=30, check=True)
-            log("dashboard: build widget ใหม่จาก {}", os.path.basename(DASH_JSX))
-            _build_err["msg"] = None
-        except Exception as e:                     # .jsx พัง -> ใช้ dist ตัวล่าสุดที่ดีต่อ
-            m = (getattr(e, "stderr", None) or str(e)).strip()
-            if m != _build_err["msg"]:
-                # stderr ของ Babel ปิดท้ายด้วย code frame -- หยิบบรรทัดที่บอกชนิด error + ตำแหน่งมาแทน
-                lines = m.splitlines()
-                why = next((ln for ln in lines if "Error" in ln), lines[0] if lines else type(e).__name__)
-                err("dashboard: build ไม่ผ่าน ใช้ตัวเดิม ({})", why.strip()[:200])
-                _build_err["msg"] = m
+dash = WebWidget(os.path.join(_GOLDHUB, "widgets", "gold-dashboard.jsx"),
+                 os.path.join(_GOLDHUB, "web", "dist", "gold-dashboard.js"),
+                 os.path.join(_GOLDHUB, "web", "dashboard.html"))
 
 
 def _age(v):
@@ -134,12 +94,6 @@ def r_flat(query):
     return 200, TEXT, "\n".join(lines) + "\n"
 
 
-def r_widget(query):
-    ensure_built()
-    v, _ = dash_js.get()
-    return (200, JS, v) if v is not None else (503, TEXT, "widget ยังไม่ได้ build\n")
-
-
 def r_ticker(query):
     v, _ = tick.get()
     if v is None:
@@ -169,11 +123,7 @@ def build(health):
     api.route("/api/chart", _file_route(chart, HTML, "chart"))
     # หน้ากราฟโหลด "gold_live.js" แบบ relative -- เปิดผ่าน /api/chart จะขอ /api/gold_live.js
     api.route("/api/gold_live.js", _file_route(live_js, JS, "gold_live.js"))
-    api.route("/dashboard", _file_route(dash_html, HTML, "dashboard.html"))
-    api.route("/dashboard/widget.js", r_widget)
-    for n, fc in vendor.items():
-        api.route("/dashboard/vendor/" + n, _file_route(fc, JS, n))
-    ensure_built()
+    dash.mount(api)
     api.route("/", lambda q: (200, JSON, json_body({"service": "goldhub",
                                                      "schema_version": SCHEMA_VERSION,
                                                      "routes": sorted(api.routes)})))

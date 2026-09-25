@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Radar Weather</title>
+<style>
+  /* การ์ดออกแบบมาให้ลอยบน wallpaper -- หน้าเว็บใส่พื้นมืดไล่เฉดแทน ให้ความโปร่งของการ์ดยังดูเหมือนเดิม */
+  html, body { margin: 0; min-height: 100%; }
+  body {
+    color-scheme: dark;
+    background: radial-gradient(1200px 700px at 20% 10%, #2a3a78 0%, transparent 60%),
+                radial-gradient(1000px 600px at 90% 90%, #5b2a6e 0%, transparent 55%),
+                #0f1220;
+    color: #fff; overflow-x: auto;
+    font-family: -apple-system, "SF Pro Text", "Helvetica Neue", sans-serif;
+    transition: background-color .2s ease;
+  }
+  #boot { padding: 40px; color: rgba(128,128,128,.9); font-size: 13px; }
+  #boot.err { color: #ff8a80; white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<div id="root"><div id="boot">กำลังโหลดเรดาร์…</div></div>
+
+<!-- ทุกอย่างมาจาก weatherhub เอง ไม่มี CDN: React 16.13.1 ตัวเดียวกับที่ Übersicht ใช้ (common/web/vendor)
+     + widget ที่ build ไว้แล้ว (web/dist) ไม่มี Babel ในเบราว์เซอร์ -->
+<script src="/dashboard/vendor/react.production.min.js"></script>
+<script src="/dashboard/vendor/react-dom.production.min.js"></script>
+<script>window.APPHUB_WEB = true;</script>
+<script src="/dashboard/widget.js"></script>
+<script>
+// ---------------------------------------------------------------------------
+// host ขั้นต่ำที่ทำตัวแบบ Übersicht: รัน widget ตัวเดียวกับบน desktop (radar-weather.jsx)
+// วน initialState -> command(dispatch) -> updateState -> render / หน้านี้ไม่มี UI ของตัวเอง
+// ---------------------------------------------------------------------------
+
+// โมดูล 'uebersicht' ปลอม: บนเว็บไม่มี shell -- widget เช็ค WEB แล้วไม่เรียก run() เอง
+// ถ้ามีจุดไหนหลุดมาเรียก ให้พังดังๆ ใน console ดีกว่าเงียบ
+const uebersicht = {
+  run: (cmd) => Promise.reject(new Error('run() ใช้บนเว็บไม่ได้: ' + cmd)),
+};
+
+function boot(msg) {
+  const el = document.getElementById('boot');
+  if (el) { el.textContent = msg; el.className = 'err'; }
+}
+
+try {
+  const factory = (window.APPHUB_WIDGETS || {})['radar-weather'];
+  if (!factory) throw new Error('โหลด /dashboard/widget.js ไม่ได้');
+  const w = {};
+  factory((name) => {
+    if (name === 'uebersicht') return uebersicht;
+    throw new Error('ไม่รู้จักโมดูล ' + name);
+  }, w, React);
+
+  const rootEl = document.getElementById('root');
+  let state = w.initialState || {};
+  const paint = () => ReactDOM.render(w.render(state, dispatch), rootEl);   // React 16: ยังไม่มี createRoot
+  function dispatch(ev) {
+    state = w.updateState ? w.updateState(ev, state) : state;
+    paint();
+  }
+  paint();
+  const tick = () => { try { w.command(dispatch); } catch (e) { console.error(e); } };
+  tick();
+  setInterval(tick, w.refreshFrequency || 5000);
+} catch (e) {
+  console.error(e);
+  boot('เปิด dashboard ไม่ได้\n' + e.message);
+}
+</script>
+</body>
+</html>

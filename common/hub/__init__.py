@@ -8,7 +8,8 @@ from .log import err, log
 from .scheduler import Job, Scheduler
 from .server import HTML, JS, JSON, TEXT, Api, json_body
 from .store import Store
+from .webwidget import WebWidget
 
 __all__ = ["Health", "Job", "Scheduler", "Store", "log", "err",
            "single_instance", "holder_pid",
-           "config", "FileCache", "Api", "json_body", "JSON", "TEXT", "HTML", "JS"]
+           "config", "FileCache", "WebWidget", "Api", "json_body", "JSON", "TEXT", "HTML", "JS"]

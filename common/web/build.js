@@ -4,7 +4,7 @@
 // ใช้ node + @babel ที่มากับ Übersicht.app (ไม่ต้องติดตั้งอะไรเพิ่ม):
 //   UB_NODE_MODULES=".../Übersicht.app/Contents/Resources/node_modules" \
 //     ".../Übersicht.app/Contents/Resources/node-arm64" build.js <in.jsx> <out.js>
-// goldhub (api.py) เรียกให้เองเมื่อ .jsx ใหม่กว่า dist -- ไฟล์ dist ถูก commit ไว้ด้วย
+// api.py ของแต่ละบริการ (common/hub/webwidget.py) เรียกให้เองเมื่อ .jsx ใหม่กว่า dist -- dist ถูก commit ไว้ด้วย
 // เครื่องที่ไม่มี Übersicht (cloud) ก็ยังเสิร์ฟได้
 const fs = require('fs');
 const path = require('path');

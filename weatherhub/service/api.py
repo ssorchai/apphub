@@ -13,12 +13,13 @@ schema_version: เพิ่ม field ได้โดยไม่ต้องข
 import base64
 import json
 import math
+import os
 import threading
 import time
 
 import rain_nowcast as rn
 import weather_fetcher
-from common.hub import JSON, TEXT, Api, FileCache, config, json_body
+from common.hub import JSON, TEXT, Api, FileCache, WebWidget, config, json_body
 
 SCHEMA_VERSION = 1
 PORT = 8788
@@ -41,6 +42,12 @@ def _nowcast(txt):
 
 
 radar = FileCache(weather_fetcher.JSON_PATH, _radar)
+
+# หน้าเว็บ /dashboard = widget ไฟล์เดียวกับการ์ดบน desktop (ดู common/hub/webwidget.py)
+_HUB = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+dash = WebWidget(os.path.join(_HUB, "widgets", "radar-weather.jsx"),
+                 os.path.join(_HUB, "web", "dist", "radar-weather.js"),
+                 os.path.join(_HUB, "web", "dashboard.html"))
 nowcast = FileCache(rn.NOWCAST_PATH, _nowcast)
 
 # ETA ต่อช่องกริด: คิดใหม่เฉพาะตอน snapshot ของ nowcast เปลี่ยน
@@ -144,6 +151,7 @@ def build(health):
     api.route("/api/state", r_state)
     api.route("/api/radar", r_radar)
     api.route("/api/health", lambda q: (200, JSON, json_body(health.snapshot())))
+    dash.mount(api)
     api.route("/", lambda q: (200, JSON, json_body({"service": "weatherhub",
                                                      "schema_version": SCHEMA_VERSION,
                                                      "routes": sorted(api.routes)})))

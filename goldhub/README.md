@@ -43,7 +43,7 @@ goldhub/
 │                cme_ticker.py.old = ต้นฉบับ ก.ค. 2026 รันไม่ได้ ใช้เป็นต้นแบบ logic
 ├── widgets/     gold-dashboard.jsx = การ์ดที่ใช้จริง (รวม 3 การ์ดเดิม)
 │                cme-putcall.jsx / cme-ticker.jsx / gold-update.jsx = สามตัวเดิม เลิกใช้
-├── web/         หน้าเว็บของ dashboard (build.js + dist/ + vendor/ ไม่พึ่ง CDN)
+├── web/         หน้าเว็บของ dashboard (dashboard.html + dist/ -- build.js กับ React อยู่ common/web/)
 ├── indicator/   oi_block.pine — ฝั่ง TradingView ที่กิน /api/clip
 ├── mobile/      termux/ — สคริปต์บน Android แบบ standalone (ไม่พึ่ง API)
 ├── research/    backtest ของกรอบ SD — ที่มาของกฎ fade 2σ/3σ SL 25$

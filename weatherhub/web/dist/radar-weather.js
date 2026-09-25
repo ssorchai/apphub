@@ -447,7 +447,7 @@ const MARKERS = [{
   id: 'office',
   icon: 'office',
   n: 1,
-  label: 'Office 1',
+  label: 'Forth',
   lat: 13.7733,
   lon: 100.5426,
   left: '38.74%',
@@ -459,7 +459,7 @@ const MARKERS = [{
   id: 'office2',
   icon: 'office',
   n: 2,
-  label: 'Office 2',
+  label: 'SCG',
   lat: 13.8062486,
   lon: 100.5352885,
   left: '38.47%',
@@ -471,7 +471,7 @@ const MARKERS = [{
   id: 'home',
   icon: 'home',
   n: 1,
-  label: 'Home 1',
+  label: "Loon's Home",
   lat: 13.8873269,
   lon: 100.6026284,
   left: '40.98%',
@@ -483,7 +483,7 @@ const MARKERS = [{
   id: 'home2',
   icon: 'home',
   n: 2,
-  label: 'Home 2',
+  label: "Pum's Home",
   lat: 13.873365,
   lon: 100.6494155,
   left: '42.72%',
@@ -993,7 +993,7 @@ const fcText = fc => {
     sub: null
   };
   if (fc.reason === 'stale') return {
-    main: 'ไม่มีข้อมูลสด',
+    main: 'no live data',
     sub: `ภาพเรดาร์ล่าสุดเก่า ${fc.age_min} นาที -- ไม่คาดการณ์`
   };
   const nowTxt = fc.level_now === 2 ? 'ฝนหนักตกอยู่' : fc.level_now === 1 ? 'ฝนตกอยู่' : 'ไม่มีฝน';
@@ -1516,7 +1516,7 @@ const WebPage = ({
       fontWeight: '700',
       letterSpacing: '-0.3px'
     }
-  }, "\u0E40\u0E23\u0E14\u0E32\u0E23\u0E4C\u0E1D\u0E19 \u0E01\u0E23\u0E38\u0E07\u0E40\u0E17\u0E1E\u0E2F"), /*#__PURE__*/React.createElement("div", {
+  }, "Bangkok Radar"), /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: '13px',
       color: stale || src === 'offline' ? macos.orange : macos.tertiary,

@@ -144,6 +144,8 @@ def r_forecast(query):
     if len(pts) > FORECAST_MAX_POINTS:
         return 400, JSON, json_body({"error": "สูงสุด {} จุด".format(FORECAST_MAX_POINTS)})
     snap, _ = point_snap.get()
+    meta, _ = radar.get()
+    stale_min = pn.stale_limit((meta or {}).get("via"))
     basis = None
     if snap is not None:
         basis = {"ts": snap["ts"], "ref_ts": snap.get("ref_ts"), "age": _age(snap),
@@ -151,11 +153,11 @@ def r_forecast(query):
                  "motion": ({"from_dir": snap.get("from_dir"), "speed_kmh": snap.get("speed_kmh")}
                             if snap.get("motion") else None),
                  "step_min": pn.STEP_MIN, "lookahead_min": pn.LOOKAHEAD_MIN,
-                 "radius_km": pn.POINT_RADIUS_KM}
+                 "radius_km": pn.POINT_RADIUS_KM, "stale_min": stale_min}
     out = []
     for la, lo in pts:
         geo = geometry(la, lo)
-        fc = pn.forecast(snap, la, lo) if snap is not None and geo["in_coverage"] else None
+        fc = pn.forecast(snap, la, lo, stale_min=stale_min) if snap is not None and geo["in_coverage"] else None
         out.append({"lat": la, "lon": lo, "in_coverage": geo["in_coverage"], "img_pct": geo["img_pct"],
                     "forecast": fc})
     return 200, JSON, json_body({"schema_version": SCHEMA_VERSION, "basis": basis, "points": out})

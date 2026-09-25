@@ -37,6 +37,14 @@ MOTION_WINDOW_KM = 60          # หน้าต่างรอบ AOI สำห
 # ภาพหาย/ต้นทางล่ม: เฟรมล่าสุดเก่ากว่านี้ (นับจากเวลาในภาพ) = ไม่ทาย -- ฉายต่อจากภาพเก่าเรื่อยๆ
 # จะดูเหมือนข้อมูลสดทั้งที่ไม่ใช่ (ปกติภาพช้า 5-10 นาที -> 20 นาที = หายไปแล้ว ~2 รอบ)
 STALE_MIN = 20
+# ตอน BMA ล่มแล้วใช้ภาพจาก TMD: TMD อัปเดตแค่ ~15 นาที + ช้า ~13 นาที -> 20 นาทีเกือบทุกรอบ (25 ก.ย. คืน)
+# ยอมให้เก่ากว่านี้ได้ แลกกับช่วงต้นของแถบทายที่เป็นอดีตไปแล้ว
+STALE_MIN_TMD = 30
+
+
+def stale_limit(via):
+    """เกณฑ์ภาพเก่า (นาที) ตามต้นทางของภาพล่าสุด -- via จาก weather_meta.json"""
+    return STALE_MIN_TMD if via == "TMD" else STALE_MIN
 TREND_WINDOW_MIN = 30          # ใช้เฟรมย้อนหลังเท่านี้หาแนวโน้ม
 TREND_MIN_SPAN = 10            # ต้องมีข้อมูลห่างกันอย่างน้อยเท่านี้ถึงเชื่อแนวโน้ม
 TREND_RADIUS_KM = 10           # วัดสัดส่วนฝนรอบๆ ในรัศมีนี้
@@ -177,7 +185,7 @@ def _offsets():
     return _OFFSETS
 
 
-def forecast(snap, lat, lon, now=None, use_trend=True):
+def forecast(snap, lat, lon, now=None, use_trend=True, stale_min=STALE_MIN):
     """timeline ของจุดนี้: level ทุก STEP_MIN นาที (0 ไม่มี / 1 ฝน / 2 ฝนหนัก) นับจาก "ตอนนี้"
 
     ตำแหน่งของฝนที่เวลา t = mask ล่าสุดเลื่อนไป v*t -> จุด p มีฝนที่ t ถ้า mask มีฝนที่ p - v*t
@@ -215,7 +223,7 @@ def forecast(snap, lat, lon, now=None, use_trend=True):
         return None
 
     at = lambda i: None if i is None else int(now + i * STEP_MIN * 60)
-    if lead0 > STALE_MIN:
+    if lead0 > stale_min:
         return {"predictable": False, "reason": "stale", "age_min": int(lead0), "t0": int(now),
                 "raining_now": None, "level_now": None, "start_at": None, "start_min": None,
                 "stop_at": None, "stop_min": None, "heavy_at": None, "timeline": []}

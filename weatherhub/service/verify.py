@@ -42,22 +42,24 @@ def _level_at(snap, lat, lon):
     return 1 if any(c in snap["rain"] for c in cells) else 0
 
 
-def record(store, snap, now=None):
-    """บันทึก observed + forecast ของรอบนี้ -- snap = แบบที่ load_snapshot คืน (mask เป็น set)"""
+def record(store, snap, now=None, via=None):
+    """บันทึก observed + forecast ของรอบนี้ -- snap = แบบที่ load_snapshot คืน (mask เป็น set)
+    via = ต้นทางภาพ (เกณฑ์ภาพเก่าเดียวกับที่หน้าเว็บใช้)"""
     now = now or time.time()
+    stale_min = pn.stale_limit(via)
     obs = snap["ts"]
     t0 = obs + FRAME_SEC * max(0, math.ceil((now - obs) / FRAME_SEC))
     n = 0
     for place, (la, lo) in PLACES.items():
         lv = _level_at(snap, la, lo)
         store.append_history("observed", {"ts": obs, "place": place, "level": lv})
-        if (now - obs) / 60 > pn.STALE_MIN:
+        if (now - obs) / 60 > stale_min:
             continue                          # ภาพเก่า ตัวทายจริงก็ไม่ทาย -- ไม่นับ
         steps = pn.LOOKAHEAD_MIN // pn.STEP_MIN + 1
         store.append_history("forecast", {"made": int(now), "obs": obs, "t0": t0, "place": place,
                                           "model": "persist", "timeline": [lv] * steps})
         for model, use_trend in (("trend", True), ("advect", False)):
-            fc = pn.forecast(snap, la, lo, now=t0, use_trend=use_trend)
+            fc = pn.forecast(snap, la, lo, now=t0, use_trend=use_trend, stale_min=stale_min)
             if fc.get("predictable"):
                 store.append_history("forecast", {"made": int(now), "obs": obs, "t0": t0, "place": place,
                                                   "model": model, "timeline": fc["timeline"]})

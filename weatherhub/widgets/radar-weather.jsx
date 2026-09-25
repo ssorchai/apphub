@@ -265,10 +265,10 @@ export const updateState = (event, prev) => {
 // (เรดาร์หนองจอก 13.8348127,100.8463349 = px(483,400), สเกล 0.3008 กม./px)
 // (คำนวณด้วยสูตรเดียวกับ geometry() ใน weatherhub/service/api.py)
 const MARKERS = [
-  { id: 'office', icon: 'office', n: 1, label: 'Office 1', lat: 13.7733, lon: 100.5426, left: '38.74%', top: '52.84%', color: '#64d2ff', ink: '#1a86b8' },  // 13.7733, 100.5426
-  { id: 'office2', icon: 'office', n: 2, label: 'Office 2', lat: 13.8062486, lon: 100.5352885, left: '38.47%', top: '51.32%', color: '#bf8cff', ink: '#7c4dd1' }, // 13.8062486, 100.5352885
-  { id: 'home', icon: 'home', n: 1, label: 'Home 1', lat: 13.8873269, lon: 100.6026284, left: '40.98%', top: '47.58%', color: '#ffb340', ink: '#c2710a' },        // 13.8873269, 100.6026284
-  { id: 'home2', icon: 'home', n: 2, label: 'Home 2', lat: 13.873365, lon: 100.6494155, left: '42.72%', top: '48.22%', color: '#ff6b6b', ink: '#d03a3a' },       // 13.873365, 100.6494155
+  { id: 'office', icon: 'office', n: 1, label: 'Forth', lat: 13.7733, lon: 100.5426, left: '38.74%', top: '52.84%', color: '#64d2ff', ink: '#1a86b8' },  // 13.7733, 100.5426
+  { id: 'office2', icon: 'office', n: 2, label: 'SCG', lat: 13.8062486, lon: 100.5352885, left: '38.47%', top: '51.32%', color: '#bf8cff', ink: '#7c4dd1' }, // 13.8062486, 100.5352885
+  { id: 'home', icon: 'home', n: 1, label: "Loon's Home", lat: 13.8873269, lon: 100.6026284, left: '40.98%', top: '47.58%', color: '#ffb340', ink: '#c2710a' },        // 13.8873269, 100.6026284
+  { id: 'home2', icon: 'home', n: 2, label: "Pum's Home", lat: 13.873365, lon: 100.6494155, left: '42.72%', top: '48.22%', color: '#ff6b6b', ink: '#d03a3a' },       // 13.873365, 100.6494155
 ];
 const ME = { id: 'me', icon: 'me', label: 'ตำแหน่งเครื่องนี้', color: '#30d158', ink: '#1b8a3a' };
 const CUSTOM = { id: 'custom', icon: 'pin', label: 'จุดที่กรอก', color: '#ff5fd2', ink: '#c2189b' };
@@ -540,7 +540,7 @@ const PlayButton = ({ playing, onClick }) => (
 const LEVEL_COLOR = ['transparent', '#30d158', '#ff9f0a'];     // ไม่มี / ฝน / ฝนหนัก
 const fcText = (fc) => {
   if (!fc) return { main: 'นอกวงเรดาร์', sub: null };
-  if (fc.reason === 'stale') return { main: 'ไม่มีข้อมูลสด', sub: `ภาพเรดาร์ล่าสุดเก่า ${fc.age_min} นาที -- ไม่คาดการณ์` };
+  if (fc.reason === 'stale') return { main: 'no live data', sub: `ภาพเรดาร์ล่าสุดเก่า ${fc.age_min} นาที -- ไม่คาดการณ์` };
   const nowTxt = fc.level_now === 2 ? 'ฝนหนักตกอยู่' : fc.level_now === 1 ? 'ฝนตกอยู่' : 'ไม่มีฝน';
   if (!fc.predictable) return { main: nowTxt, sub: 'ยังคาดเริ่ม/หยุดไม่ได้ (รอเฟรมย้อนหลังพอหาทิศทางฝน)' };
   // แนวโน้มของกลุ่มฝนเหนือจุดนี้ (สัดส่วนฝนในรัศมี 10 กม. เปลี่ยนต่อ 10 นาที)
@@ -809,7 +809,7 @@ const WebPage = ({ meta, state, src, located, locErr, show, theme, frames, basis
       <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end',
                        flexWrap: 'wrap', gap: '12px', marginBottom: '18px' }}>
         <div>
-          <div style={{ fontSize: '26px', fontWeight: '700', letterSpacing: '-0.3px' }}>เรดาร์ฝน กรุงเทพฯ</div>
+          <div style={{ fontSize: '26px', fontWeight: '700', letterSpacing: '-0.3px' }}>Bangkok Radar</div>
           <div style={{ fontSize: '13px', color: stale || src === 'offline' ? macos.orange : macos.tertiary, marginTop: '4px' }}>
             {meta.source} · ภาพเวลา {meta.observed_at ? hhmm(meta.observed_at) : '?'} (ดึงเมื่อ {meta.last_update}) · via {meta.via || '?'}
             {stale ? ' · ภาพค้างเกิน 20 นาที' : ''}{src === 'offline' ? ' · offline' : ''}

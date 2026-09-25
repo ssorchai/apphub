@@ -72,7 +72,7 @@ def job_radar():
                 # เก็บผลทาย + ฝนจริงของรอบนี้ไว้วัดความแม่น (verify.py) -- ไม่ขวางงานหลักถ้าพัง
                 try:
                     with open(point_nowcast.SNAP_PATH) as f:
-                        verify.record(store, point_nowcast.load_snapshot(f.read()))
+                        verify.record(store, point_nowcast.load_snapshot(f.read()), via=m.get("via"))
                 except Exception as e:
                     err("verify: บันทึกไม่ได้ {}: {}", type(e).__name__, str(e)[:160])
             if res:

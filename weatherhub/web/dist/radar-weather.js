@@ -39,20 +39,40 @@ const NOWCAST_MAX_AGE = 3600; // ผล nowcast เก่ากว่านี�
 let loc = null; // { lat, lon, at }
 
 let locPending = null;
+let locErr = null; // code ของ GeolocationPositionError ล่าสุด / 'timeout' / 'none'
 
 const locate = () => {
   if (loc && Date.now() - loc.at < LOC_MAX_AGE) return Promise.resolve(loc);
   if (locPending) return locPending;
   const geo = typeof navigator !== 'undefined' && navigator.geolocation;
-  if (!geo) return Promise.resolve(loc);
+
+  if (!geo) {
+    locErr = 'none';
+    return Promise.resolve(loc);
+  }
+
   locPending = Promise.race([new Promise(res => geo.getCurrentPosition(p => {
     const c = p && p.position && p.position.coords || p && p.coords;
-    res(c && isFinite(c.latitude) && isFinite(c.longitude) ? {
-      lat: c.latitude,
-      lon: c.longitude,
-      at: Date.now()
-    } : null);
-  }, () => res(null))), new Promise(res => setTimeout(() => res(null), LOC_TIMEOUT))]).then(got => {
+
+    if (c && isFinite(c.latitude) && isFinite(c.longitude)) {
+      locErr = null;
+      res({
+        lat: c.latitude,
+        lon: c.longitude,
+        at: Date.now()
+      });
+    } else res(null);
+  }, // เบราว์เซอร์จริงเรียกอันนี้ (shim ของ Übersicht ไม่เรียก): 1 = ไม่อนุญาต, 2 = หาไม่ได้, 3 = หมดเวลา
+  e => {
+    locErr = e && e.code || 'error';
+    res(null);
+  }, {
+    timeout: LOC_TIMEOUT,
+    maximumAge: LOC_MAX_AGE
+  })), new Promise(res => setTimeout(() => {
+    if (!loc) locErr = locErr || 'timeout';
+    res(null);
+  }, LOC_TIMEOUT))]).then(got => {
     if (got) loc = got;
     locPending = null;
     return loc;
@@ -87,7 +107,8 @@ const load = dispatch => {
       meta: s.radar,
       state: s,
       src: 'api',
-      located: !!l
+      located: !!l,
+      locErr
     });
   }); // ไม่รอพิกัดก่อนโหลด: ขอสิทธิ์ Location ครั้งแรก (ป้ายของเบราว์เซอร์/macOS ค้างรอคนกด)
   // เคยทำให้ทั้งการ์ดว่างเปล่าจนหมด LOC_TIMEOUT -- ยิงด้วยพิกัดที่มีอยู่ก่อน ได้พิกัดใหม่ค่อยยิงซ้ำ
@@ -96,7 +117,10 @@ const load = dispatch => {
   const known = loc;
   const first = fetchState(known).catch(viaFile);
   locate().then(l => {
-    if (l && l !== known) fetchState(l).catch(() => {});
+    if (l && l !== known) fetchState(l).catch(() => {});else if (!l) dispatch({
+      type: 'LOC_ERR',
+      locErr
+    });
   });
   return first;
 };
@@ -215,10 +239,14 @@ const updateState = (event, prev) => {
       meta: event.meta,
       state: event.state,
       src: event.src,
-      located: !!event.located
+      located: !!event.located,
+      locErr: event.located ? null : event.locErr || prev.locErr
     };
   }
 
+  if (event.type === 'LOC_ERR') return { ...prev,
+    locErr: event.locErr
+  };
   if (event.type === 'OFFLINE') return { ...prev,
     src: 'offline'
   };
@@ -512,6 +540,16 @@ const altDrag = e => {
 
   window.addEventListener('mousemove', move);
   window.addEventListener('mouseup', up);
+}; // เหตุผลที่ยังไม่มีจุด "เครื่องนี้" -- บอกให้รู้ว่าต้องไปแก้ที่ไหน
+
+
+const locReason = err => {
+  if (!WEB) return 'ยังไม่ได้พิกัด -- เช็คสิทธิ์ Location ของ Übersicht';
+  if (err === 1) return 'เบราว์เซอร์ไม่อนุญาตให้หน้านี้ใช้ตำแหน่ง -- กดไอคอนข้าง URL → Location → Allow แล้ว reload';
+  if (err === 2) return 'เบราว์เซอร์หาตำแหน่งไม่ได้ -- เปิด System Settings → Privacy & Security → Location Services ให้เบราว์เซอร์นี้';
+  if (err === 3 || err === 'timeout') return 'หาตำแหน่งไม่ทันเวลา (รอกด Allow อยู่หรือเปล่า?) -- จะลองใหม่ทุก 1 นาที';
+  if (err === 'none') return 'เบราว์เซอร์นี้ไม่มี geolocation';
+  return 'กำลังขอตำแหน่ง…';
 };
 
 const render = ({
@@ -519,6 +557,7 @@ const render = ({
   state,
   src,
   located,
+  locErr,
   show,
   theme
 }, dispatch) => {
@@ -542,7 +581,7 @@ const render = ({
   const point = state && state.point;
   const me = point && !point.default && point.img_pct; // ปุ่มจุด "ฉัน" เปิดอยู่แต่วาดไม่ได้ -> บอกเหตุผลใน tooltip
 
-  const meNote = !located ? WEB ? 'ยังไม่ได้พิกัด -- อนุญาต Location ให้หน้านี้ (ต้องเปิดผ่าน localhost/https)' : 'ยังไม่ได้พิกัด -- เช็คสิทธิ์ Location ของ Übersicht' : !me ? 'อยู่นอกวงเรดาร์' : null;
+  const meNote = !located ? locReason(locErr) : !me ? 'อยู่นอกวงเรดาร์' : null;
   const rain = rainLine(state && state.nowcast);
   const container = { ...(WEB // หน้าเว็บ: การ์ดใหญ่กลางจอ (ภาพเรดาร์ 965x800 -> กว้างสุด 980px)
     ? {
@@ -686,7 +725,13 @@ const render = ({
       fontSize: fs(10),
       color: macos.tertiary
     }
-  }, meta.source, " \xB7 via ", meta.via || '?', " \xB7 \u0E14\u0E31\u0E1A\u0E40\u0E1A\u0E34\u0E25\u0E04\u0E25\u0E34\u0E01 \u2192 \u0E40\u0E23\u0E14\u0E32\u0E23\u0E4C loop \u0E02\u0E2D\u0E07 \u0E01\u0E17\u0E21.")));
+  }, meta.source, " \xB7 via ", meta.via || '?', " \xB7 \u0E14\u0E31\u0E1A\u0E40\u0E1A\u0E34\u0E25\u0E04\u0E25\u0E34\u0E01 \u2192 \u0E40\u0E23\u0E14\u0E32\u0E23\u0E4C loop \u0E02\u0E2D\u0E07 \u0E01\u0E17\u0E21.")), WEB && show.me && meNote && /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: '6px',
+      fontSize: fs(10),
+      color: macos.orange
+    }
+  }, "\u2316 ", meNote));
 };
 
 exports.render = render;

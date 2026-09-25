@@ -418,7 +418,7 @@ const Card = ({ meta, state, src, located, locErr, show, dispatch }) => {
           <ToggleButton m={ME} on={show.me} dispatch={dispatch} note={show.me ? meNote : null} />
         </div>
         <span style={{ fontSize: '11px', color: stale ? macos.orange : macos.tertiary, fontWeight: stale ? '700' : '400' }}>
-          {stale ? '● ' : ''}{meta.last_update}{src === 'file' ? ' · file' : ''}
+          {stale ? '● ' : ''}{meta.observed_at ? hhmm(meta.observed_at) : meta.last_update}{src === 'file' ? ' · file' : ''}
         </span>
       </div>
 
@@ -506,6 +506,7 @@ const PlayButton = ({ playing, onClick }) => (
 const LEVEL_COLOR = ['transparent', '#30d158', '#ff9f0a'];     // ไม่มี / ฝน / ฝนหนัก
 const fcText = (fc) => {
   if (!fc) return { main: 'นอกวงเรดาร์', sub: null };
+  if (fc.reason === 'stale') return { main: 'ไม่มีข้อมูลสด', sub: `ภาพเรดาร์ล่าสุดเก่า ${fc.age_min} นาที -- ไม่คาดการณ์` };
   const nowTxt = fc.level_now === 2 ? 'ฝนหนักตกอยู่' : fc.level_now === 1 ? 'ฝนตกอยู่' : 'ไม่มีฝน';
   if (!fc.predictable) return { main: nowTxt, sub: 'ยังคาดเริ่ม/หยุดไม่ได้ (รอเฟรมย้อนหลังพอหาทิศทางฝน)' };
   if (fc.raining_now) {
@@ -519,14 +520,27 @@ const fcText = (fc) => {
   return { main: 'ไม่มีฝนใน 1 ชม.', sub: null };
 };
 
-const Timeline = ({ steps }) => (
-  <div style={{ display: 'flex', gap: '2px', marginTop: '6px' }}>
-    {steps.map((lv, i) => (
-      <span key={i} title={`+${i * 5} นาที`} style={{
-        flex: '1 1 0', height: '6px', borderRadius: '2px',
-        background: lv ? LEVEL_COLOR[lv] : wash(0.1),
-      }} />
-    ))}
+// แถบ 13 ช่อง ช่องละ 5 นาที เริ่มที่ t0 (เวลาที่ API คิด ≈ ตอนนี้) + เวลากำกับทุก 15 นาที
+const Timeline = ({ steps, t0 }) => (
+  <div style={{ marginTop: '6px' }}>
+    <div style={{ display: 'flex', gap: '2px' }}>
+      {steps.map((lv, i) => (
+        <span key={i} title={`${hhmm(t0 + i * 300)} · ${['ไม่มีฝน', 'ฝน', 'ฝนหนัก'][lv]}`} style={{
+          flex: '1 1 0', height: '6px', borderRadius: '2px',
+          background: lv ? LEVEL_COLOR[lv] : wash(0.1),
+        }} />
+      ))}
+    </div>
+    {/* ป้ายวางตรงกึ่งกลางช่องที่ 0, 3, 6, 9, 12 (ทุก 15 นาที) */}
+    <div style={{ position: 'relative', height: '13px', marginTop: '2px', fontSize: '10px', color: macos.tertiary }}>
+      {[0, 3, 6, 9, 12].map((i) => (
+        <span key={i} style={{
+          position: 'absolute', top: 0, left: `${((i + 0.5) / steps.length) * 100}%`,
+          transform: i === 0 ? 'translateX(-25%)' : i === 12 ? 'translateX(-75%)' : 'translateX(-50%)',
+          whiteSpace: 'nowrap',
+        }}>{hhmm(t0 + i * 300)}</span>
+      ))}
+    </div>
   </div>
 );
 
@@ -546,7 +560,7 @@ const ForecastRow = ({ m, fc }) => {
         </span>
       </div>
       {t.sub && <div style={{ fontSize: '12px', color: macos.tertiary, marginTop: '3px', textAlign: 'right' }}>{t.sub}</div>}
-      {fc && fc.predictable && <Timeline steps={fc.timeline} />}
+      {fc && fc.predictable && <Timeline steps={fc.timeline} t0={fc.t0} />}
     </div>
   );
 };
@@ -616,7 +630,7 @@ const WebPage = ({ meta, state, src, located, locErr, show, theme, frames, forec
         <div>
           <div style={{ fontSize: '26px', fontWeight: '700', letterSpacing: '-0.3px' }}>เรดาร์ฝน กรุงเทพฯ</div>
           <div style={{ fontSize: '13px', color: stale || src === 'offline' ? macos.orange : macos.tertiary, marginTop: '4px' }}>
-            {meta.source} · อัปเดต {meta.last_update} · via {meta.via || '?'}
+            {meta.source} · ภาพเวลา {meta.observed_at ? hhmm(meta.observed_at) : '?'} (ดึงเมื่อ {meta.last_update}) · via {meta.via || '?'}
             {stale ? ' · ภาพค้างเกิน 20 นาที' : ''}{src === 'offline' ? ' · offline' : ''}
           </div>
         </div>
@@ -671,7 +685,7 @@ const WebPage = ({ meta, state, src, located, locErr, show, theme, frames, forec
                         ตำแหน่งเครื่องนี้: {meNote || 'รอพิกัด…'}
                       </div>}
                   <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10px', color: macos.tertiary, marginTop: '4px' }}>
-                    <span>แถบสี: ตอนนี้ → +60 นาที</span>
+                    <span>แถบสี: ทุก 5 นาที · 1 ชม. ข้างหน้า</span>
                     <span><span style={{ color: LEVEL_COLOR[1] }}>■</span> ฝน <span style={{ color: LEVEL_COLOR[2] }}>■</span> ฝนหนัก</span>
                   </div>
                   <div style={{ fontSize: '12px', color: macos.tertiary, marginTop: '10px', lineHeight: 1.5 }}>

@@ -145,7 +145,7 @@ def r_forecast(query):
     basis = None
     if snap is not None:
         basis = {"ts": snap["ts"], "ref_ts": snap.get("ref_ts"), "age": _age(snap),
-                 "observed_at": snap["ts"] - pn.PRODUCT_LAG_MIN * 60,
+                 "observed_at": snap["ts"],
                  "motion": ({"from_dir": snap.get("from_dir"), "speed_kmh": snap.get("speed_kmh")}
                             if snap.get("motion") else None),
                  "step_min": pn.STEP_MIN, "lookahead_min": pn.LOOKAHEAD_MIN,
@@ -202,6 +202,9 @@ def build(health):
         if m is not None:
             radar_obj = {k: m.get(k) for k in ("ts", "last_update", "source", "via", "mime")}
             radar_obj["image"] = "/api/radar"
+            # เวลาในภาพ (OCR) ของเฟรมล่าสุด -- ภาพที่ /api/radar คือเฟรมนี้ถ้าเก็บทันแล้ว
+            fr = frames.listing(FRAME_DIR)
+            radar_obj["observed_at"] = fr[-1][0] if fr else None
         return 200, JSON, json_body({
             "schema_version": SCHEMA_VERSION,
             "service": "weatherhub",

@@ -8,8 +8,8 @@
   - ยังเป็น advection ล้วน (ฝนเคลื่อนตามทิศเดิม ไม่เกิดใหม่/ไม่สลาย) เหมือนตัวเดิม
     ฝน convective ที่ก่อตัวกับที่จะทายไม่ได้ -- ความแม่นลดลงเร็วหลัง ~30 นาที
 
-เวลา: t=0 = เวลาที่ดึงเฟรมล่าสุดได้ (ครั้งแรกที่ภาพเปลี่ยน) ภาพเรดาร์จริงช้ากว่านั้น
-(เห็นบนภาพ 15:35 ตอนดึง 15:42 วันที่ 25 ก.ย.) -> ชดเชยด้วย PRODUCT_LAG_MIN
+เวลา: ts ของเฟรม = เวลาในภาพ (frames.py อ่านด้วย OCR) -- ภาพออกช้ากว่านั้น 5-7 นาที
+จึงต้องฉายจากเวลาในภาพไปถึง "ตอนนี้" ก่อน แล้วค่อยนับ 60 นาทีข้างหน้า
 
 snapshot (/tmp/weather_point_nowcast.json) เก็บ mask ฝนแบบ run-length ต่อแถว ให้ API
 คิดพิกัดไหนก็ได้เองโดยไม่ต้องเปิดภาพ
@@ -31,8 +31,10 @@ LOOKAHEAD_MIN = 60
 REF_TARGET_MIN = 30            # หา motion เทียบกับเฟรมราว 30 นาทีก่อน
 REF_MIN_MIN, REF_MAX_MIN = 10, 50
 MOTION_WINDOW_KM = 60          # หน้าต่างรอบ AOI สำหรับหา motion
+# ภาพหาย/ต้นทางล่ม: เฟรมล่าสุดเก่ากว่านี้ (นับจากเวลาในภาพ) = ไม่ทาย -- ฉายต่อจากภาพเก่าเรื่อยๆ
+# จะดูเหมือนข้อมูลสดทั้งที่ไม่ใช่ (ปกติภาพช้า 5-10 นาที -> 20 นาที = หายไปแล้ว ~2 รอบ)
+STALE_MIN = 20
 AOI = rn.LOCATIONS["Office"]   # ศูนย์กลางพื้นที่ที่สนใจ (กรุงเทพฯ)
-PRODUCT_LAG_MIN = 7            # ภาพเรดาร์ช้ากว่าเวลาที่ดึงได้ (วัดจากเวลาบนภาพ 1 ครั้ง -- ปรับได้)
 
 
 def _window(pts, cx, cy, r):
@@ -120,7 +122,7 @@ def forecast(snap, lat, lon, now=None):
     ตำแหน่งของฝนที่เวลา t = mask ล่าสุดเลื่อนไป v*t -> จุด p มีฝนที่ t ถ้า mask มีฝนที่ p - v*t
     """
     now = now or time.time()
-    obs = snap["ts"] - PRODUCT_LAG_MIN * 60          # เวลาจริงของภาพ (โดยประมาณ)
+    obs = snap["ts"]                                  # เวลาในภาพ
     v = snap.get("motion") or (0.0, 0.0)             # ไม่มี motion = ถือว่าฝนอยู่กับที่ (persistence)
     px, py = rn.latlon_to_ds_px(lat, lon)
     rain, heavy = snap["rain"], snap["heavy"]
@@ -143,9 +145,13 @@ def forecast(snap, lat, lon, now=None):
         return None
 
     at = lambda i: None if i is None else int(now + i * STEP_MIN * 60)
+    if lead0 > STALE_MIN:
+        return {"predictable": False, "reason": "stale", "age_min": int(lead0), "t0": int(now),
+                "raining_now": None, "level_now": None, "start_at": None, "start_min": None,
+                "stop_at": None, "stop_min": None, "heavy_at": None, "timeline": []}
     if not snap.get("motion"):
         # ยังไม่รู้ทิศ (เฟรมอ้างอิงไม่พอ / ฝนไม่มีทิศชัด) -- บอกได้แค่ "ตอนนี้" อย่าเดาเริ่ม/หยุด
-        return {"predictable": False, "raining_now": steps[0] > 0, "level_now": steps[0],
+        return {"predictable": False, "reason": "no_motion", "t0": int(now), "raining_now": steps[0] > 0, "level_now": steps[0],
                 "start_at": None, "start_min": None, "stop_at": None, "stop_min": None,
                 "heavy_at": None, "timeline": steps[:1]}
     raining = steps[0] > 0
@@ -153,7 +159,7 @@ def forecast(snap, lat, lon, now=None):
     stop = first(lambda lv: lv == 0) if raining else (first(lambda lv: lv == 0, start) if start is not None else None)
     heavy_i = first(lambda lv: lv == 2)
     return {
-        "predictable": True, "raining_now": raining, "level_now": steps[0],
+        "predictable": True, "t0": int(now), "raining_now": raining, "level_now": steps[0],
         "start_at": at(start), "start_min": None if start is None else start * STEP_MIN,
         "stop_at": at(stop), "stop_min": None if stop is None else stop * STEP_MIN,
         "heavy_at": at(heavy_i), "timeline": steps,

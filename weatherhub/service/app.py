@@ -10,6 +10,8 @@ API อ่านอย่างเดียวที่พอร์ต 8788 (เ
 จนหลุดหน้าต่างไปทั้งวันโดยไม่มีใครรู้ -- align ยึดนาฬิกาจริงเหมือน cron */5
 """
 import json
+import threading
+import time
 import os
 import sys
 
@@ -27,6 +29,10 @@ from common.hub import (Health, Job, Scheduler, Store, err, holder_pid,  # noqa:
 
 SERVICE = "weatherhub"
 RADAR_INTERVAL = 300       # เท่าบรรทัด cron เดิม (*/5)
+# ดึงภาพที่ :02:30 :07:30 … ไม่ใช่ :00 :05 -- ภาพของ กทม. ออกช้ากว่าเวลาในภาพ 5-7 นาที
+# ดึงตรง :00 พอดีอยู่บนขอบ: 25 ก.ย. 16:00:00 ภาพ 15:55 ยังไม่ออก พอ 16:05 ภาพ 16:00 ทับไปแล้ว
+# (เห็นในภาพ 15:50 แล้วโดดไป 16:00) -- จำนวน request เท่าเดิม แค่ย้ายจังหวะ
+RADAR_OFFSET = 150
 RADAR_TIMEOUT = 60
 HOUSEKEEPING_INTERVAL = 24 * 3600
 RETENTION_DAYS = 7
@@ -50,7 +56,10 @@ def job_radar():
     except Exception as e:
         err("radar: เก็บสรุปลง store ไม่ได้ ({})", type(e).__name__)
     try:
-        fresh = frames.save(store.path("frames"), m)      # ให้หน้าเว็บเล่นเป็นภาพเคลื่อนไหว
+        fresh, obs_ts, src = frames.save(store.path("frames"), m)   # ให้หน้าเว็บเล่นเป็นภาพเคลื่อนไหว
+        if fresh:
+            log("radar frame: ภาพเวลา {} ({}) ดึงช้ากว่า {:.1f} นาที", time.strftime("%H:%M", time.localtime(obs_ts)),
+                src, (m.get("ts", obs_ts) - obs_ts) / 60)
     except Exception as e:
         err("radar: เก็บเฟรมไม่ได้ ({})", type(e).__name__)
         return
@@ -84,8 +93,11 @@ def main():
         sys.exit(0)
     log("weatherhub start (pid {}) data={}", os.getpid(), store.root)
     api.build(health).start()
+    # compile ตัวอ่านเวลาในภาพ (Swift + Vision) ครั้งแรกใช้ ~40 วิ -- ทำเบื้องหลัง ระหว่างนั้นใช้เวลาดึงแทน
+    threading.Thread(target=lambda: log("ocr: {}", frames.ensure_ocr(store.path("bin")) or "ใช้ไม่ได้ -- ใช้เวลาดึงแทน"),
+                     name="ocr-build", daemon=True).start()
     Scheduler(health).add(
-        Job("radar", job_radar, RADAR_INTERVAL, timeout=RADAR_TIMEOUT, align=True),
+        Job("radar", job_radar, RADAR_INTERVAL, timeout=RADAR_TIMEOUT, align=True, offset=RADAR_OFFSET),
         Job("nowcast", job_nowcast, RADAR_INTERVAL, timeout=RADAR_TIMEOUT, align=True),
         Job("housekeeping", job_housekeeping, HOUSEKEEPING_INTERVAL),
     ).run_forever()

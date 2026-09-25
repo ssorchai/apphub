@@ -748,7 +748,7 @@ const Card = ({
       color: stale ? macos.orange : macos.tertiary,
       fontWeight: stale ? '700' : '400'
     }
-  }, stale ? '● ' : '', meta.last_update, src === 'file' ? ' · file' : '')), /*#__PURE__*/React.createElement("div", {
+  }, stale ? '● ' : '', meta.observed_at ? hhmm(meta.observed_at) : meta.last_update, src === 'file' ? ' · file' : '')), /*#__PURE__*/React.createElement("div", {
     style: {
       position: 'relative',
       width: '100%',
@@ -934,6 +934,10 @@ const fcText = fc => {
     main: 'นอกวงเรดาร์',
     sub: null
   };
+  if (fc.reason === 'stale') return {
+    main: 'ไม่มีข้อมูลสด',
+    sub: `ภาพเรดาร์ล่าสุดเก่า ${fc.age_min} นาที -- ไม่คาดการณ์`
+  };
   const nowTxt = fc.level_now === 2 ? 'ฝนหนักตกอยู่' : fc.level_now === 1 ? 'ฝนตกอยู่' : 'ไม่มีฝน';
   if (!fc.predictable) return {
     main: nowTxt,
@@ -960,26 +964,48 @@ const fcText = fc => {
     main: 'ไม่มีฝนใน 1 ชม.',
     sub: null
   };
-};
+}; // แถบ 13 ช่อง ช่องละ 5 นาที เริ่มที่ t0 (เวลาที่ API คิด ≈ ตอนนี้) + เวลากำกับทุก 15 นาที
+
 
 const Timeline = ({
-  steps
+  steps,
+  t0
 }) => /*#__PURE__*/React.createElement("div", {
   style: {
-    display: 'flex',
-    gap: '2px',
     marginTop: '6px'
+  }
+}, /*#__PURE__*/React.createElement("div", {
+  style: {
+    display: 'flex',
+    gap: '2px'
   }
 }, steps.map((lv, i) => /*#__PURE__*/React.createElement("span", {
   key: i,
-  title: `+${i * 5} นาที`,
+  title: `${hhmm(t0 + i * 300)} · ${['ไม่มีฝน', 'ฝน', 'ฝนหนัก'][lv]}`,
   style: {
     flex: '1 1 0',
     height: '6px',
     borderRadius: '2px',
     background: lv ? LEVEL_COLOR[lv] : wash(0.1)
   }
-})));
+}))), /*#__PURE__*/React.createElement("div", {
+  style: {
+    position: 'relative',
+    height: '13px',
+    marginTop: '2px',
+    fontSize: '10px',
+    color: macos.tertiary
+  }
+}, [0, 3, 6, 9, 12].map(i => /*#__PURE__*/React.createElement("span", {
+  key: i,
+  style: {
+    position: 'absolute',
+    top: 0,
+    left: `${(i + 0.5) / steps.length * 100}%`,
+    transform: i === 0 ? 'translateX(-25%)' : i === 12 ? 'translateX(-75%)' : 'translateX(-50%)',
+    whiteSpace: 'nowrap'
+  }
+}, hhmm(t0 + i * 300)))));
 
 const ForecastRow = ({
   m,
@@ -1029,7 +1055,8 @@ const ForecastRow = ({
       textAlign: 'right'
     }
   }, t.sub), fc && fc.predictable && /*#__PURE__*/React.createElement(Timeline, {
-    steps: fc.timeline
+    steps: fc.timeline,
+    t0: fc.t0
   }));
 };
 
@@ -1148,7 +1175,7 @@ const WebPage = ({
       color: stale || src === 'offline' ? macos.orange : macos.tertiary,
       marginTop: '4px'
     }
-  }, meta.source, " \xB7 \u0E2D\u0E31\u0E1B\u0E40\u0E14\u0E15 ", meta.last_update, " \xB7 via ", meta.via || '?', stale ? ' · ภาพค้างเกิน 20 นาที' : '', src === 'offline' ? ' · offline' : '')), /*#__PURE__*/React.createElement("div", {
+  }, meta.source, " \xB7 \u0E20\u0E32\u0E1E\u0E40\u0E27\u0E25\u0E32 ", meta.observed_at ? hhmm(meta.observed_at) : '?', " (\u0E14\u0E36\u0E07\u0E40\u0E21\u0E37\u0E48\u0E2D ", meta.last_update, ") \xB7 via ", meta.via || '?', stale ? ' · ภาพค้างเกิน 20 นาที' : '', src === 'offline' ? ' · offline' : '')), /*#__PURE__*/React.createElement("div", {
     style: {
       display: 'flex',
       alignItems: 'center',
@@ -1286,7 +1313,7 @@ const WebPage = ({
       color: macos.tertiary,
       marginTop: '4px'
     }
-  }, /*#__PURE__*/React.createElement("span", null, "\u0E41\u0E16\u0E1A\u0E2A\u0E35: \u0E15\u0E2D\u0E19\u0E19\u0E35\u0E49 \u2192 +60 \u0E19\u0E32\u0E17\u0E35"), /*#__PURE__*/React.createElement("span", null, /*#__PURE__*/React.createElement("span", {
+  }, /*#__PURE__*/React.createElement("span", null, "\u0E41\u0E16\u0E1A\u0E2A\u0E35: \u0E17\u0E38\u0E01 5 \u0E19\u0E32\u0E17\u0E35 \xB7 1 \u0E0A\u0E21. \u0E02\u0E49\u0E32\u0E07\u0E2B\u0E19\u0E49\u0E32"), /*#__PURE__*/React.createElement("span", null, /*#__PURE__*/React.createElement("span", {
     style: {
       color: LEVEL_COLOR[1]
     }

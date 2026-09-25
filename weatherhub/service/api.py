@@ -18,6 +18,7 @@ import threading
 import time
 
 import frames
+import point_nowcast as pn
 import rain_nowcast as rn
 import weather_fetcher
 from common.hub import JSON, TEXT, Api, FileCache, Store, WebWidget, config, json_body
@@ -116,6 +117,47 @@ def _age(v):
     return round(time.time() - ts) if isinstance(ts, (int, float)) else None
 
 
+point_snap = FileCache(pn.SNAP_PATH, pn.load_snapshot)
+FORECAST_GRID = 0.01           # ~1.1 กม. -- ละเอียดกว่า GRID ของ /api/state เพราะถามว่า "ตกที่จุดนี้ไหม"
+FORECAST_MAX_POINTS = 8
+
+
+def r_forecast(query):
+    """`?pts=lat,lon;lat,lon` -> ฝนจะเริ่ม/หยุดกี่โมงของแต่ละจุด (ลำดับเดียวกับที่ส่งมา)
+
+    คิดจาก snapshot ที่งาน radar เขียนไว้ ไม่เปิดภาพ/ไม่ยิงต้นทาง / พิกัดปัดกริดก่อนและไม่ log"""
+    raw = ";".join(query.get("pts", [])).split(";")
+    pts = []
+    for item in raw:
+        if not item.strip():
+            continue
+        try:
+            la, lo = (float(v) for v in item.split(","))
+        except ValueError:
+            return 400, JSON, json_body({"error": "pts = lat,lon;lat,lon"})
+        if not (-90 <= la <= 90 and -180 <= lo <= 180):
+            return 400, JSON, json_body({"error": "lat/lon อยู่นอกช่วง"})
+        pts.append((round(round(la / FORECAST_GRID) * FORECAST_GRID, 4),
+                    round(round(lo / FORECAST_GRID) * FORECAST_GRID, 4)))
+    if len(pts) > FORECAST_MAX_POINTS:
+        return 400, JSON, json_body({"error": "สูงสุด {} จุด".format(FORECAST_MAX_POINTS)})
+    snap, _ = point_snap.get()
+    basis = None
+    if snap is not None:
+        basis = {"ts": snap["ts"], "ref_ts": snap.get("ref_ts"), "age": _age(snap),
+                 "observed_at": snap["ts"] - pn.PRODUCT_LAG_MIN * 60,
+                 "motion": ({"from_dir": snap.get("from_dir"), "speed_kmh": snap.get("speed_kmh")}
+                            if snap.get("motion") else None),
+                 "step_min": pn.STEP_MIN, "lookahead_min": pn.LOOKAHEAD_MIN,
+                 "radius_km": pn.POINT_RADIUS_KM}
+    out = []
+    for la, lo in pts:
+        geo = geometry(la, lo)
+        fc = pn.forecast(snap, la, lo) if snap is not None and geo["in_coverage"] else None
+        out.append({"lat": la, "lon": lo, "in_coverage": geo["in_coverage"], "forecast": fc})
+    return 200, JSON, json_body({"schema_version": SCHEMA_VERSION, "basis": basis, "points": out})
+
+
 FRAME_DIR = Store("weatherhub").path("frames")
 FRAMES_DEFAULT = 12            # 1 ชั่วโมง เท่า loop GIF ของ กทม.
 
@@ -181,6 +223,7 @@ def build(health):
     api.route("/api/state", r_state)
     api.route("/api/radar", r_radar)
     api.route("/api/frames", r_frames)
+    api.route("/api/forecast", r_forecast)
     api.route("/api/frame", r_frame)
     api.route("/api/health", lambda q: (200, JSON, json_body(health.snapshot())))
     dash.mount(api)

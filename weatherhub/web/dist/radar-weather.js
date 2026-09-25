@@ -170,10 +170,25 @@ const load = dispatch => {
     });
   }); // ไม่รอพิกัดก่อนโหลด: ขอสิทธิ์ Location ครั้งแรก (ป้ายของเบราว์เซอร์/macOS ค้างรอคนกด)
   // เคยทำให้ทั้งการ์ดว่างเปล่าจนหมด LOC_TIMEOUT -- ยิงด้วยพิกัดที่มีอยู่ก่อน ได้พิกัดใหม่ค่อยยิงซ้ำ
+  // nowcast รายจุด (เฉพาะหน้าเว็บ): 4 สถานที่ + ตำแหน่งเครื่องนี้ ถ้ามี -- ลำดับเดียวกับ MARKERS
 
+
+  const fetchForecast = () => {
+    if (!WEB) return;
+    const pts = MARKERS.map(m => `${m.lat},${m.lon}`).concat(loc ? [`${loc.lat.toFixed(4)},${loc.lon.toFixed(4)}`] : []);
+    fetchJson(API + '/api/forecast?pts=' + encodeURIComponent(pts.join(';'))).then(f => dispatch({
+      type: 'FORECAST',
+      forecast: f,
+      withMe: !!loc
+    })).catch(() => {});
+  };
 
   const known = loc;
-  if (WEB) onFix = l => fetchState(l).catch(() => {});
+  if (WEB) onFix = l => {
+    fetchState(l).catch(() => {});
+    fetchForecast();
+  };
+  fetchForecast();
   const first = fetchState(known).catch(viaFile); // เฟรมย้อนหลังสำหรับภาพเคลื่อนไหว (เฉพาะหน้าเว็บ) -- พังก็แค่เล่นไม่ได้ ภาพล่าสุดยังขึ้น
 
   if (WEB) {
@@ -317,6 +332,10 @@ const updateState = (event, prev) => {
 
   if (event.type === 'LOC_ERR') return { ...prev,
     locErr: event.locErr
+  };
+  if (event.type === 'FORECAST') return { ...prev,
+    forecast: event.forecast,
+    forecastWithMe: event.withMe
   };
   if (event.type === 'FRAMES') return { ...prev,
     frames: event.frames,
@@ -905,7 +924,114 @@ const PlayButton = ({
     lineHeight: '36px',
     padding: 0
   }
-}, playing ? '❚❚' : '▶');
+}, playing ? '❚❚' : '▶'); // ---- nowcast รายจุด ----
+
+
+const LEVEL_COLOR = ['transparent', '#30d158', '#ff9f0a']; // ไม่มี / ฝน / ฝนหนัก
+
+const fcText = fc => {
+  if (!fc) return {
+    main: 'นอกวงเรดาร์',
+    sub: null
+  };
+  const nowTxt = fc.level_now === 2 ? 'ฝนหนักตกอยู่' : fc.level_now === 1 ? 'ฝนตกอยู่' : 'ไม่มีฝน';
+  if (!fc.predictable) return {
+    main: nowTxt,
+    sub: 'ยังคาดเริ่ม/หยุดไม่ได้ (รอเฟรมย้อนหลังพอหาทิศทางฝน)'
+  };
+
+  if (fc.raining_now) {
+    return {
+      main: nowTxt,
+      sub: fc.stop_at ? `หยุด ~${hhmm(fc.stop_at)} (อีก ${fc.stop_min} นาที)` : 'ยังไม่หยุดใน 1 ชม.'
+    };
+  }
+
+  if (fc.start_at) {
+    const stopTxt = fc.stop_at ? ` · หยุด ~${hhmm(fc.stop_at)}` : '';
+    const heavyTxt = fc.heavy_at ? ` · หนัก ~${hhmm(fc.heavy_at)}` : '';
+    return {
+      main: `เริ่ม ~${hhmm(fc.start_at)}`,
+      sub: `อีก ${fc.start_min} นาที${heavyTxt}${stopTxt}`
+    };
+  }
+
+  return {
+    main: 'ไม่มีฝนใน 1 ชม.',
+    sub: null
+  };
+};
+
+const Timeline = ({
+  steps
+}) => /*#__PURE__*/React.createElement("div", {
+  style: {
+    display: 'flex',
+    gap: '2px',
+    marginTop: '6px'
+  }
+}, steps.map((lv, i) => /*#__PURE__*/React.createElement("span", {
+  key: i,
+  title: `+${i * 5} นาที`,
+  style: {
+    flex: '1 1 0',
+    height: '6px',
+    borderRadius: '2px',
+    background: lv ? LEVEL_COLOR[lv] : wash(0.1)
+  }
+})));
+
+const ForecastRow = ({
+  m,
+  fc
+}) => {
+  const t = fcText(fc);
+  const wet = fc && fc.raining_now;
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      padding: '10px 0',
+      borderTop: `0.5px solid ${wash(0.1)}`
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: '10px'
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      width: '24px',
+      height: '24px',
+      borderRadius: '7px',
+      flex: '0 0 auto',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      background: wash(0.08)
+    }
+  }, ICONS[m.icon](btnColor(m))), /*#__PURE__*/React.createElement("span", {
+    style: {
+      flex: '1 1 auto',
+      fontSize: '14px',
+      fontWeight: '600'
+    }
+  }, m.label), /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: '14px',
+      fontWeight: '700',
+      color: wet || fc && fc.start_at ? macos.orange : macos.secondary
+    }
+  }, t.main)), t.sub && /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: '12px',
+      color: macos.tertiary,
+      marginTop: '3px',
+      textAlign: 'right'
+    }
+  }, t.sub), fc && fc.predictable && /*#__PURE__*/React.createElement(Timeline, {
+    steps: fc.timeline
+  }));
+};
 
 const WebPage = ({
   meta,
@@ -916,6 +1042,8 @@ const WebPage = ({
   show,
   theme,
   frames,
+  forecast,
+  forecastWithMe,
   dispatch
 }) => {
   const [idx, setIdx] = React.useState(null); // null = ตามเฟรมล่าสุด
@@ -980,7 +1108,6 @@ const WebPage = ({
     lon: point.lon
   } : null;
   const rain = rainLine(state && state.nowcast);
-  const nc = state && state.nowcast;
   const page = {
     maxWidth: '1320px',
     margin: '0 auto',
@@ -1131,25 +1258,56 @@ const WebPage = ({
       minWidth: '280px'
     }
   }, /*#__PURE__*/React.createElement(Panel, {
-    title: "\u0E1D\u0E19\u0E2B\u0E19\u0E31\u0E01 (nowcast)"
-  }, rain ? /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: '15px',
-      fontWeight: '600',
-      color: macos.orange
-    }
-  }, "\uD83C\uDF27 ", rain) : /*#__PURE__*/React.createElement("div", {
+    title: "\u0E1D\u0E19\u0E23\u0E32\u0E22\u0E08\u0E38\u0E14 \xB7 1 \u0E0A\u0E21. \u0E02\u0E49\u0E32\u0E07\u0E2B\u0E19\u0E49\u0E32"
+  }, !forecast || !forecast.basis ? /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: '14px',
-      color: nc && nc.age != null && nc.age <= NOWCAST_MAX_AGE ? macos.label : macos.secondary
+      color: macos.secondary
     }
-  }, !nc ? 'ยังไม่มีผลการเช็ค' : nc.age != null && nc.age > NOWCAST_MAX_AGE ? 'ผลล่าสุดเก่าเกิน 1 ชม. -- ไม่ใช้ตัดสิน' : 'ไม่มีฝนหนักเข้าใกล้ตำแหน่งนี้'), /*#__PURE__*/React.createElement("div", {
+  }, "\u0E01\u0E33\u0E25\u0E31\u0E07\u0E23\u0E2D\u0E1C\u0E25\u0E27\u0E34\u0E40\u0E04\u0E23\u0E32\u0E30\u0E2B\u0E4C\u0E40\u0E1F\u0E23\u0E21\u0E41\u0E23\u0E01\u2026") : /*#__PURE__*/React.createElement(React.Fragment, null, MARKERS.map((m, i) => /*#__PURE__*/React.createElement(ForecastRow, {
+    key: m.id,
+    m: m,
+    fc: forecast.points[i] && forecast.points[i].forecast
+  })), forecastWithMe && forecast.points[MARKERS.length] ? /*#__PURE__*/React.createElement(ForecastRow, {
+    m: ME,
+    fc: forecast.points[MARKERS.length].forecast
+  }) : /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: '12px',
       color: macos.tertiary,
-      marginTop: '6px'
+      padding: '8px 0',
+      borderTop: `0.5px solid ${wash(0.1)}`
     }
-  }, nc && nc.ts ? `เช็คล่าสุด ${hhmm(nc.ts)} · รัศมี ${nc.radius_km} กม. · มองล่วงหน้า ${nc.lookahead_min} นาที` : 'ยังไม่มีผล -- ระบบเช็คเฉพาะ 16:00–16:45')), /*#__PURE__*/React.createElement(Panel, {
+  }, "\u0E15\u0E33\u0E41\u0E2B\u0E19\u0E48\u0E07\u0E40\u0E04\u0E23\u0E37\u0E48\u0E2D\u0E07\u0E19\u0E35\u0E49: ", meNote || 'รอพิกัด…'), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      justifyContent: 'space-between',
+      fontSize: '10px',
+      color: macos.tertiary,
+      marginTop: '4px'
+    }
+  }, /*#__PURE__*/React.createElement("span", null, "\u0E41\u0E16\u0E1A\u0E2A\u0E35: \u0E15\u0E2D\u0E19\u0E19\u0E35\u0E49 \u2192 +60 \u0E19\u0E32\u0E17\u0E35"), /*#__PURE__*/React.createElement("span", null, /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: LEVEL_COLOR[1]
+    }
+  }, "\u25A0"), " \u0E1D\u0E19 ", /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: LEVEL_COLOR[2]
+    }
+  }, "\u25A0"), " \u0E1D\u0E19\u0E2B\u0E19\u0E31\u0E01")), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: '12px',
+      color: macos.tertiary,
+      marginTop: '10px',
+      lineHeight: 1.5
+    }
+  }, "\u0E2D\u0E34\u0E07\u0E20\u0E32\u0E1E\u0E40\u0E23\u0E14\u0E32\u0E23\u0E4C ~", hhmm(forecast.basis.observed_at), !forecast.basis.motion ? ' · ยังไม่รู้ทิศทางฝน' : forecast.basis.motion.speed_kmh < 3 ? ' · ฝนแทบอยู่กับที่' : ` · ฝนเคลื่อนจากทิศ${forecast.basis.motion.from_dir} ~${Math.round(forecast.basis.motion.speed_kmh)} กม./ชม.`, /*#__PURE__*/React.createElement("br", null), "\u0E09\u0E32\u0E22\u0E1D\u0E19\u0E15\u0E32\u0E21\u0E17\u0E34\u0E28\u0E40\u0E14\u0E34\u0E21 (\u0E1D\u0E19\u0E17\u0E35\u0E48\u0E01\u0E48\u0E2D\u0E15\u0E31\u0E27\u0E43\u0E2B\u0E21\u0E48/\u0E2A\u0E25\u0E32\u0E22\u0E23\u0E30\u0E2B\u0E27\u0E48\u0E32\u0E07\u0E17\u0E32\u0E07\u0E17\u0E32\u0E22\u0E44\u0E21\u0E48\u0E44\u0E14\u0E49) \u0E23\u0E31\u0E28\u0E21\u0E35\u0E08\u0E38\u0E14 ", forecast.basis.radius_km, " \u0E01\u0E21.")), rain && /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: '12px',
+      color: macos.orange,
+      marginTop: '10px'
+    }
+  }, "\u0E41\u0E08\u0E49\u0E07\u0E40\u0E15\u0E37\u0E2D\u0E19 16:xx: ", rain)), /*#__PURE__*/React.createElement(Panel, {
     title: "\u0E2A\u0E16\u0E32\u0E19\u0E17\u0E35\u0E48\u0E1A\u0E19\u0E41\u0E1C\u0E19\u0E17\u0E35\u0E48"
   }, MARKERS.map(m => /*#__PURE__*/React.createElement(PlaceRow, {
     key: m.id,

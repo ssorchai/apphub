@@ -106,8 +106,18 @@ const load = (dispatch) => {
     });
   // ไม่รอพิกัดก่อนโหลด: ขอสิทธิ์ Location ครั้งแรก (ป้ายของเบราว์เซอร์/macOS ค้างรอคนกด)
   // เคยทำให้ทั้งการ์ดว่างเปล่าจนหมด LOC_TIMEOUT -- ยิงด้วยพิกัดที่มีอยู่ก่อน ได้พิกัดใหม่ค่อยยิงซ้ำ
+  // nowcast รายจุด (เฉพาะหน้าเว็บ): 4 สถานที่ + ตำแหน่งเครื่องนี้ ถ้ามี -- ลำดับเดียวกับ MARKERS
+  const fetchForecast = () => {
+    if (!WEB) return;
+    const pts = MARKERS.map((m) => `${m.lat},${m.lon}`)
+      .concat(loc ? [`${loc.lat.toFixed(4)},${loc.lon.toFixed(4)}`] : []);
+    fetchJson(API + '/api/forecast?pts=' + encodeURIComponent(pts.join(';')))
+      .then((f) => dispatch({ type: 'FORECAST', forecast: f, withMe: !!loc }))
+      .catch(() => {});
+  };
   const known = loc;
-  if (WEB) onFix = (l) => fetchState(l).catch(() => {});
+  if (WEB) onFix = (l) => { fetchState(l).catch(() => {}); fetchForecast(); };
+  fetchForecast();
   const first = fetchState(known).catch(viaFile);
   // เฟรมย้อนหลังสำหรับภาพเคลื่อนไหว (เฉพาะหน้าเว็บ) -- พังก็แค่เล่นไม่ได้ ภาพล่าสุดยังขึ้น
   if (WEB) {
@@ -202,6 +212,7 @@ export const updateState = (event, prev) => {
              locErr: event.located ? null : (event.locErr || prev.locErr) };
   }
   if (event.type === 'LOC_ERR') return { ...prev, locErr: event.locErr };
+  if (event.type === 'FORECAST') return { ...prev, forecast: event.forecast, forecastWithMe: event.withMe };
   if (event.type === 'FRAMES') return { ...prev, frames: event.frames, frameMinutes: event.frameMinutes };
   if (event.type === 'OFFLINE') return { ...prev, src: 'offline' };
   if (event.type === 'THEME') return { ...prev, theme: applyTheme(event.name) };
@@ -491,7 +502,56 @@ const PlayButton = ({ playing, onClick }) => (
   }}>{playing ? '❚❚' : '▶'}</button>
 );
 
-const WebPage = ({ meta, state, src, located, locErr, show, theme, frames, dispatch }) => {
+// ---- nowcast รายจุด ----
+const LEVEL_COLOR = ['transparent', '#30d158', '#ff9f0a'];     // ไม่มี / ฝน / ฝนหนัก
+const fcText = (fc) => {
+  if (!fc) return { main: 'นอกวงเรดาร์', sub: null };
+  const nowTxt = fc.level_now === 2 ? 'ฝนหนักตกอยู่' : fc.level_now === 1 ? 'ฝนตกอยู่' : 'ไม่มีฝน';
+  if (!fc.predictable) return { main: nowTxt, sub: 'ยังคาดเริ่ม/หยุดไม่ได้ (รอเฟรมย้อนหลังพอหาทิศทางฝน)' };
+  if (fc.raining_now) {
+    return { main: nowTxt, sub: fc.stop_at ? `หยุด ~${hhmm(fc.stop_at)} (อีก ${fc.stop_min} นาที)` : 'ยังไม่หยุดใน 1 ชม.' };
+  }
+  if (fc.start_at) {
+    const stopTxt = fc.stop_at ? ` · หยุด ~${hhmm(fc.stop_at)}` : '';
+    const heavyTxt = fc.heavy_at ? ` · หนัก ~${hhmm(fc.heavy_at)}` : '';
+    return { main: `เริ่ม ~${hhmm(fc.start_at)}`, sub: `อีก ${fc.start_min} นาที${heavyTxt}${stopTxt}` };
+  }
+  return { main: 'ไม่มีฝนใน 1 ชม.', sub: null };
+};
+
+const Timeline = ({ steps }) => (
+  <div style={{ display: 'flex', gap: '2px', marginTop: '6px' }}>
+    {steps.map((lv, i) => (
+      <span key={i} title={`+${i * 5} นาที`} style={{
+        flex: '1 1 0', height: '6px', borderRadius: '2px',
+        background: lv ? LEVEL_COLOR[lv] : wash(0.1),
+      }} />
+    ))}
+  </div>
+);
+
+const ForecastRow = ({ m, fc }) => {
+  const t = fcText(fc);
+  const wet = fc && fc.raining_now;
+  return (
+    <div style={{ padding: '10px 0', borderTop: `0.5px solid ${wash(0.1)}` }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+        <span style={{ width: '24px', height: '24px', borderRadius: '7px', flex: '0 0 auto', display: 'flex',
+                       alignItems: 'center', justifyContent: 'center', background: wash(0.08) }}>
+          {ICONS[m.icon](btnColor(m))}
+        </span>
+        <span style={{ flex: '1 1 auto', fontSize: '14px', fontWeight: '600' }}>{m.label}</span>
+        <span style={{ fontSize: '14px', fontWeight: '700', color: wet || (fc && fc.start_at) ? macos.orange : macos.secondary }}>
+          {t.main}
+        </span>
+      </div>
+      {t.sub && <div style={{ fontSize: '12px', color: macos.tertiary, marginTop: '3px', textAlign: 'right' }}>{t.sub}</div>}
+      {fc && fc.predictable && <Timeline steps={fc.timeline} />}
+    </div>
+  );
+};
+
+const WebPage = ({ meta, state, src, located, locErr, show, theme, frames, forecast, forecastWithMe, dispatch }) => {
   const [idx, setIdx] = React.useState(null);      // null = ตามเฟรมล่าสุด
   const [playing, setPlaying] = React.useState(true);
   const holdRef = React.useRef(0);
@@ -539,7 +599,6 @@ const WebPage = ({ meta, state, src, located, locErr, show, theme, frames, dispa
   const meNote = !located ? locReason(locErr) : !me ? 'อยู่นอกวงเรดาร์' : null;
   const myLL = located && point && !point.default ? { lat: point.lat, lon: point.lon } : null;
   const rain = rainLine(state && state.nowcast);
-  const nc = state && state.nowcast;
 
   const page = {
     maxWidth: '1320px', margin: '0 auto', padding: '24px 20px 40px', boxSizing: 'border-box',
@@ -600,19 +659,31 @@ const WebPage = ({ meta, state, src, located, locErr, show, theme, frames, dispa
         </section>
 
         <aside style={{ flex: '0 1 340px', minWidth: '280px' }}>
-          <Panel title="ฝนหนัก (nowcast)">
-            {rain
-              ? <div style={{ fontSize: '15px', fontWeight: '600', color: macos.orange }}>🌧 {rain}</div>
-              : <div style={{ fontSize: '14px', color: nc && nc.age != null && nc.age <= NOWCAST_MAX_AGE ? macos.label : macos.secondary }}>
-                  {!nc ? 'ยังไม่มีผลการเช็ค'
-                    : nc.age != null && nc.age > NOWCAST_MAX_AGE ? 'ผลล่าสุดเก่าเกิน 1 ชม. -- ไม่ใช้ตัดสิน'
-                    : 'ไม่มีฝนหนักเข้าใกล้ตำแหน่งนี้'}
-                </div>}
-            <div style={{ fontSize: '12px', color: macos.tertiary, marginTop: '6px' }}>
-              {nc && nc.ts
-                ? `เช็คล่าสุด ${hhmm(nc.ts)} · รัศมี ${nc.radius_km} กม. · มองล่วงหน้า ${nc.lookahead_min} นาที`
-                : 'ยังไม่มีผล -- ระบบเช็คเฉพาะ 16:00–16:45'}
-            </div>
+          <Panel title="ฝนรายจุด · 1 ชม. ข้างหน้า">
+            {!forecast || !forecast.basis
+              ? <div style={{ fontSize: '14px', color: macos.secondary }}>กำลังรอผลวิเคราะห์เฟรมแรก…</div>
+              : (
+                <React.Fragment>
+                  {MARKERS.map((m, i) => <ForecastRow key={m.id} m={m} fc={forecast.points[i] && forecast.points[i].forecast} />)}
+                  {forecastWithMe && forecast.points[MARKERS.length]
+                    ? <ForecastRow m={ME} fc={forecast.points[MARKERS.length].forecast} />
+                    : <div style={{ fontSize: '12px', color: macos.tertiary, padding: '8px 0', borderTop: `0.5px solid ${wash(0.1)}` }}>
+                        ตำแหน่งเครื่องนี้: {meNote || 'รอพิกัด…'}
+                      </div>}
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10px', color: macos.tertiary, marginTop: '4px' }}>
+                    <span>แถบสี: ตอนนี้ → +60 นาที</span>
+                    <span><span style={{ color: LEVEL_COLOR[1] }}>■</span> ฝน <span style={{ color: LEVEL_COLOR[2] }}>■</span> ฝนหนัก</span>
+                  </div>
+                  <div style={{ fontSize: '12px', color: macos.tertiary, marginTop: '10px', lineHeight: 1.5 }}>
+                    อิงภาพเรดาร์ ~{hhmm(forecast.basis.observed_at)}
+                    {!forecast.basis.motion ? ' · ยังไม่รู้ทิศทางฝน'
+                      : forecast.basis.motion.speed_kmh < 3 ? ' · ฝนแทบอยู่กับที่'
+                      : ` · ฝนเคลื่อนจากทิศ${forecast.basis.motion.from_dir} ~${Math.round(forecast.basis.motion.speed_kmh)} กม./ชม.`}
+                    <br />ฉายฝนตามทิศเดิม (ฝนที่ก่อตัวใหม่/สลายระหว่างทางทายไม่ได้) รัศมีจุด {forecast.basis.radius_km} กม.
+                  </div>
+                </React.Fragment>
+              )}
+            {rain && <div style={{ fontSize: '12px', color: macos.orange, marginTop: '10px' }}>แจ้งเตือน 16:xx: {rain}</div>}
           </Panel>
 
           <Panel title="สถานที่บนแผนที่">

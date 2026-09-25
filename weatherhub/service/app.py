@@ -19,6 +19,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(HERE)))
 
 import api  # noqa: E402
 import frames  # noqa: E402
+import point_nowcast  # noqa: E402
 import rain_nowcast  # noqa: E402
 import weather_fetcher  # noqa: E402
 from common.hub import (Health, Job, Scheduler, Store, err, holder_pid,  # noqa: E402
@@ -49,9 +50,19 @@ def job_radar():
     except Exception as e:
         err("radar: เก็บสรุปลง store ไม่ได้ ({})", type(e).__name__)
     try:
-        frames.save(store.path("frames"), m)      # ให้หน้าเว็บเล่นเป็นภาพเคลื่อนไหว
+        fresh = frames.save(store.path("frames"), m)      # ให้หน้าเว็บเล่นเป็นภาพเคลื่อนไหว
     except Exception as e:
         err("radar: เก็บเฟรมไม่ได้ ({})", type(e).__name__)
+        return
+    # nowcast รายจุด: คิดใหม่เฉพาะตอนได้เฟรมใหม่ (หรือยังไม่มี snapshot เช่นเพิ่ง reboot)
+    if fresh or not os.path.exists(point_nowcast.SNAP_PATH):
+        try:
+            res = point_nowcast.update(store.path("frames"))
+            if res:
+                log("point nowcast: rain {} heavy {} px · motion {}", res["rain_px"], res["heavy_px"],
+                    "{} {} km/h".format(res["from_dir"], res["speed_kmh"]) if res.get("from_dir") else "-")
+        except Exception as e:
+            err("point nowcast พัง {}: {}", type(e).__name__, str(e)[:160])
 
 
 def job_nowcast():

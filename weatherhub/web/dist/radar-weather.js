@@ -942,12 +942,15 @@ const fcText = fc => {
   if (!fc.predictable) return {
     main: nowTxt,
     sub: 'ยังคาดเริ่ม/หยุดไม่ได้ (รอเฟรมย้อนหลังพอหาทิศทางฝน)'
-  };
+  }; // แนวโน้มของกลุ่มฝนเหนือจุดนี้ (สัดส่วนฝนในรัศมี 10 กม. เปลี่ยนต่อ 10 นาที)
+
+  const tr = fc.trend && fc.trend.per_10min;
+  const trendTxt = tr == null ? '' : tr <= -0.03 ? ' · ฝนกำลังเบาลง' : tr >= 0.03 ? ' · ฝนกำลังแรงขึ้น' : '';
 
   if (fc.raining_now) {
     return {
       main: nowTxt,
-      sub: fc.stop_at ? `หยุด ~${hhmm(fc.stop_at)} (อีก ${fc.stop_min} นาที)` : 'ยังไม่หยุดใน 1 ชม.'
+      sub: (fc.stop_at ? `หยุด ~${hhmm(fc.stop_at)} (อีก ${fc.stop_min} นาที)` : 'ยังไม่หยุดใน 1 ชม.') + trendTxt
     };
   }
 
@@ -1328,7 +1331,7 @@ const WebPage = ({
       marginTop: '10px',
       lineHeight: 1.5
     }
-  }, "\u0E2D\u0E34\u0E07\u0E20\u0E32\u0E1E\u0E40\u0E23\u0E14\u0E32\u0E23\u0E4C ~", hhmm(forecast.basis.observed_at), !forecast.basis.motion ? ' · ยังไม่รู้ทิศทางฝน' : forecast.basis.motion.speed_kmh < 3 ? ' · ฝนแทบอยู่กับที่' : ` · ฝนเคลื่อนจากทิศ${forecast.basis.motion.from_dir} ~${Math.round(forecast.basis.motion.speed_kmh)} กม./ชม.`, /*#__PURE__*/React.createElement("br", null), "\u0E09\u0E32\u0E22\u0E1D\u0E19\u0E15\u0E32\u0E21\u0E17\u0E34\u0E28\u0E40\u0E14\u0E34\u0E21 (\u0E1D\u0E19\u0E17\u0E35\u0E48\u0E01\u0E48\u0E2D\u0E15\u0E31\u0E27\u0E43\u0E2B\u0E21\u0E48/\u0E2A\u0E25\u0E32\u0E22\u0E23\u0E30\u0E2B\u0E27\u0E48\u0E32\u0E07\u0E17\u0E32\u0E07\u0E17\u0E32\u0E22\u0E44\u0E21\u0E48\u0E44\u0E14\u0E49) \u0E23\u0E31\u0E28\u0E21\u0E35\u0E08\u0E38\u0E14 ", forecast.basis.radius_km, " \u0E01\u0E21.")), rain && /*#__PURE__*/React.createElement("div", {
+  }, "\u0E2D\u0E34\u0E07\u0E20\u0E32\u0E1E\u0E40\u0E23\u0E14\u0E32\u0E23\u0E4C ~", hhmm(forecast.basis.observed_at), !forecast.basis.motion ? ' · ยังไม่รู้ทิศทางฝน' : forecast.basis.motion.speed_kmh < 3 ? ' · ฝนแทบอยู่กับที่' : ` · ฝนเคลื่อนจากทิศ${forecast.basis.motion.from_dir} ~${Math.round(forecast.basis.motion.speed_kmh)} กม./ชม.`, /*#__PURE__*/React.createElement("br", null), "\u0E09\u0E32\u0E22\u0E1D\u0E19\u0E15\u0E32\u0E21\u0E17\u0E34\u0E28\u0E40\u0E14\u0E34\u0E21 + \u0E41\u0E19\u0E27\u0E42\u0E19\u0E49\u0E21\u0E40\u0E1A\u0E32\u0E25\u0E07/\u0E41\u0E23\u0E07\u0E02\u0E36\u0E49\u0E19 30 \u0E19\u0E32\u0E17\u0E35\u0E25\u0E48\u0E32\u0E2A\u0E38\u0E14 (\u0E1D\u0E19\u0E17\u0E35\u0E48\u0E01\u0E48\u0E2D\u0E15\u0E31\u0E27\u0E43\u0E2B\u0E21\u0E48\u0E17\u0E32\u0E22\u0E44\u0E21\u0E48\u0E44\u0E14\u0E49) \u0E23\u0E31\u0E28\u0E21\u0E35\u0E08\u0E38\u0E14 ", forecast.basis.radius_km, " \u0E01\u0E21.")), rain && /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: '12px',
       color: macos.orange,

@@ -509,8 +509,11 @@ const fcText = (fc) => {
   if (fc.reason === 'stale') return { main: 'ไม่มีข้อมูลสด', sub: `ภาพเรดาร์ล่าสุดเก่า ${fc.age_min} นาที -- ไม่คาดการณ์` };
   const nowTxt = fc.level_now === 2 ? 'ฝนหนักตกอยู่' : fc.level_now === 1 ? 'ฝนตกอยู่' : 'ไม่มีฝน';
   if (!fc.predictable) return { main: nowTxt, sub: 'ยังคาดเริ่ม/หยุดไม่ได้ (รอเฟรมย้อนหลังพอหาทิศทางฝน)' };
+  // แนวโน้มของกลุ่มฝนเหนือจุดนี้ (สัดส่วนฝนในรัศมี 10 กม. เปลี่ยนต่อ 10 นาที)
+  const tr = fc.trend && fc.trend.per_10min;
+  const trendTxt = tr == null ? '' : tr <= -0.03 ? ' · ฝนกำลังเบาลง' : tr >= 0.03 ? ' · ฝนกำลังแรงขึ้น' : '';
   if (fc.raining_now) {
-    return { main: nowTxt, sub: fc.stop_at ? `หยุด ~${hhmm(fc.stop_at)} (อีก ${fc.stop_min} นาที)` : 'ยังไม่หยุดใน 1 ชม.' };
+    return { main: nowTxt, sub: (fc.stop_at ? `หยุด ~${hhmm(fc.stop_at)} (อีก ${fc.stop_min} นาที)` : 'ยังไม่หยุดใน 1 ชม.') + trendTxt };
   }
   if (fc.start_at) {
     const stopTxt = fc.stop_at ? ` · หยุด ~${hhmm(fc.stop_at)}` : '';
@@ -693,7 +696,7 @@ const WebPage = ({ meta, state, src, located, locErr, show, theme, frames, forec
                     {!forecast.basis.motion ? ' · ยังไม่รู้ทิศทางฝน'
                       : forecast.basis.motion.speed_kmh < 3 ? ' · ฝนแทบอยู่กับที่'
                       : ` · ฝนเคลื่อนจากทิศ${forecast.basis.motion.from_dir} ~${Math.round(forecast.basis.motion.speed_kmh)} กม./ชม.`}
-                    <br />ฉายฝนตามทิศเดิม (ฝนที่ก่อตัวใหม่/สลายระหว่างทางทายไม่ได้) รัศมีจุด {forecast.basis.radius_km} กม.
+                    <br />ฉายฝนตามทิศเดิม + แนวโน้มเบาลง/แรงขึ้น 30 นาทีล่าสุด (ฝนที่ก่อตัวใหม่ทายไม่ได้) รัศมีจุด {forecast.basis.radius_km} กม.
                   </div>
                 </React.Fragment>
               )}

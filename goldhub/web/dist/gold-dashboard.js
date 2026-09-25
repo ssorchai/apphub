@@ -1225,14 +1225,6 @@ const Asset = ({
 const GoldBlock = ({
   live
 }) => {
-  // คลิก = เปิด vol2vol.com เหมือนการ์ดเดิม (ไม่ให้ทะลุไป copy ของกรอบหลัก)
-  const open = e => {
-    if (e.altKey) return;
-    e.preventDefault();
-    e.stopPropagation();
-    openUrl('https://www.vol2vol.com', true);
-  };
-
   if (!live) {
     return /*#__PURE__*/React.createElement("div", {
       style: {
@@ -1250,9 +1242,6 @@ const GoldBlock = ({
   const spreadColor = !hasDiff ? macos.tertiary : num(live.diff) >= 0 ? macos.label : macos.blue;
   const fo = live.future && live.future.change_open;
   return /*#__PURE__*/React.createElement("div", {
-    onClick: open,
-    onDoubleClick: e => e.stopPropagation(),
-    title: "Click = open vol2vol.com",
     style: {
       width: `${GOLD_W}px`,
       flexShrink: 0,

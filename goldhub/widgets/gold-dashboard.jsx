@@ -616,13 +616,6 @@ const Asset = ({ asset, fallbackName, accent, showOpen }) => {
 };
 
 const GoldBlock = ({ live }) => {
-  // คลิก = เปิด vol2vol.com เหมือนการ์ดเดิม (ไม่ให้ทะลุไป copy ของกรอบหลัก)
-  const open = (e) => {
-    if (e.altKey) return;
-    e.preventDefault();
-    e.stopPropagation();
-    openUrl('https://www.vol2vol.com', true);
-  };
   if (!live) {
     return (
       <div style={{ width: `${GOLD_W}px`, flexShrink: 0, color: macos.tertiary, fontSize: '12px' }}>
@@ -636,9 +629,7 @@ const GoldBlock = ({ live }) => {
   const spreadColor = !hasDiff ? macos.tertiary : num(live.diff) >= 0 ? macos.label : macos.blue;
   const fo = live.future && live.future.change_open;
   return (
-    <div onClick={open} onDoubleClick={(e) => e.stopPropagation()}
-      title="Click = open vol2vol.com"
-      style={{ width: `${GOLD_W}px`, flexShrink: 0, display: 'flex', flexDirection: 'column' }}>
+    <div style={{ width: `${GOLD_W}px`, flexShrink: 0, display: 'flex', flexDirection: 'column' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '4px' }}>
         <div style={{ display: 'flex', gap: '4px' }}>
           {sessionState().map((s) => <SessionLight s={s} key={s.label} />)}

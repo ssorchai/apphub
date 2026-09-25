@@ -340,8 +340,14 @@ weekly ที่จับได้ช่วงเช้าหายไป ถู
     API คิด ETA ของพิกัดไหนก็ได้จากไฟล์นี้ -> ไม่ยิง upstream (กฎข้อ API อ่านอย่างเดียว)
   - นอกวงเรดาร์ 120 กม. = `in_coverage:false`, `img_pct` / `nowcast` เป็น null
   - `FileCache` ย้ายจาก goldhub/api.py ไปอยู่ `common/hub/filecache.py` ใช้ร่วมกัน
-- ⬜ ฝั่ง client: widget/หน้าเว็บส่งพิกัดของเครื่องมา แล้ววาง marker จาก `img_pct`
-  (ตอนนี้ radar-weather.jsx ยัง `cat /tmp/weather_meta.json` + จุด Office/Home ตายตัว)
+- ✅ **widget ใช้ API (25 ก.ย. 26)** `radar-weather.jsx` เป็น function command:
+  ขอพิกัดจาก `navigator.geolocation` ซึ่ง Übersicht ต่อเข้า CoreLocation ของแอปเอง
+  (Resources/geolocation.js + NSLocationUsageDescription -- ไม่ต้องลงอะไรเพิ่ม, ครั้งแรก macOS
+  ถามสิทธิ์ Location ของ Übersicht) ทุก 10 นาที timeout 8 วิ (shim ไม่เคยเรียก onError)
+  -> `/api/state?lat=&lon=` -> จุดเขียว "เครื่องนี้" จาก `img_pct` + บรรทัด ETA ฝน (nowcast
+  อายุ < 1 ชม.) / ภาพจาก `/api/radar` / API ล่มถอยไป cat /tmp เดิม ("· file")
+  จุด Office/Home ตายตัวยังอยู่ / ⬜ หน้าเว็บ: geolocation ต้องเป็น secure context
+  (https หรือ localhost) มือถือเข้าผ่าน IP ตรงๆ จะขอพิกัดไม่ได้
 - ⬜ `weatherhub/deploy/Dockerfile` — เผื่อขึ้น cloud ปรับผ่าน env
   `APPHUB_PORT` / `APPHUB_DATA` / `APPHUB_TOKEN`
 

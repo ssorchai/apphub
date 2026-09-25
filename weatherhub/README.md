@@ -18,7 +18,8 @@ daemon `com.apphub.weatherhub` (ย้ายจาก cron 21 ก.ย.) + API �
   `nowcast` (ETA ฝนหนักเข้ารัศมี 10 กม. ของจุดนั้น จากรอบเช็ค 16:xx ล่าสุด หรือ null)
 - `GET /api/radar` -> ภาพเรดาร์ล่าสุด (jpeg) / `GET /api/health`
 - ค่ารายจุดคิดจากเรดาร์ที่มีอยู่แล้วล้วนๆ ไม่มีแหล่งอื่น และ API ไม่ยิง upstream เอง
-- ยังไม่ทำ: widget ส่งพิกัดของเครื่องมา (ยังอ่าน /tmp + จุด Office/Home ตายตัว), Dockerfile
+- widget `radar-weather.jsx` ขอพิกัดผ่าน geolocation ของ Übersicht แล้วเรียก API (ถอยไปอ่าน /tmp ถ้า API ล่ม)
+- ยังไม่ทำ: Dockerfile
 
 - งาน `radar` ทุก 5 นาที = `weather_fetcher.main()` เขียน `/tmp/weather_meta.json`
 - งาน `nowcast` ทุก 5 นาที = `rain_nowcast.run_check()` ซึ่งตัดสินใจเฉพาะ

@@ -19,6 +19,7 @@ import time
 
 import frames
 import point_nowcast as pn
+import verify
 import rain_nowcast as rn
 import weather_fetcher
 from common.hub import JSON, TEXT, Api, FileCache, Store, WebWidget, config, json_body
@@ -154,11 +155,22 @@ def r_forecast(query):
     for la, lo in pts:
         geo = geometry(la, lo)
         fc = pn.forecast(snap, la, lo) if snap is not None and geo["in_coverage"] else None
-        out.append({"lat": la, "lon": lo, "in_coverage": geo["in_coverage"], "forecast": fc})
+        out.append({"lat": la, "lon": lo, "in_coverage": geo["in_coverage"], "img_pct": geo["img_pct"],
+                    "forecast": fc})
     return 200, JSON, json_body({"schema_version": SCHEMA_VERSION, "basis": basis, "points": out})
 
 
-FRAME_DIR = Store("weatherhub").path("frames")
+STORE = Store("weatherhub")
+FRAME_DIR = STORE.path("frames")
+
+
+def r_verify(query):
+    """ความแม่นของ nowcast รายจุดย้อนหลัง N วัน (verify.py) -- อ่านจาก history อย่างเดียว"""
+    try:
+        days = max(1, min(30, int((query.get("days") or ["7"])[0])))
+    except ValueError:
+        return 400, JSON, json_body({"error": "days ต้องเป็นตัวเลข"})
+    return 200, JSON, json_body(dict(verify.stats(STORE, days), schema_version=SCHEMA_VERSION))
 FRAMES_DEFAULT = 12            # 1 ชั่วโมง เท่า loop GIF ของ กทม.
 
 
@@ -227,6 +239,7 @@ def build(health):
     api.route("/api/radar", r_radar)
     api.route("/api/frames", r_frames)
     api.route("/api/forecast", r_forecast)
+    api.route("/api/verify", r_verify)
     api.route("/api/frame", r_frame)
     api.route("/api/health", lambda q: (200, JSON, json_body(health.snapshot())))
     dash.mount(api)

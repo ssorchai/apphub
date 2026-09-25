@@ -53,6 +53,11 @@ let locErr = null; // code ของ GeolocationPositionError ล่าสุด
 let watchId = null;
 let waiters = [];
 let onFix = null; // load() ตั้งไว้: ได้ fix ใหม่ตอนไม่มีใครรอ (มาช้า/หลัง error) ก็ยิง API ซ้ำทันที
+// จุด custom บนหน้าเว็บ: พิมพ์ lat,lon (หรือวางลิงก์ Google Maps แบบเต็ม) -- **ไม่เก็บที่ไหนเลย**
+// (ผู้ใช้ขอ 25 ก.ย.: กรอกใหม่ทุกรอบ) อยู่ในหน่วยความจำของหน้านี้ reload = หาย
+
+let customLL = null;
+let refreshForecast = null; // load() ตั้งไว้ ให้ปุ่ม "แสดง" ยิงผลทายของจุดใหม่ได้ทันที
 
 const flush = v => {
   const w = waiters;
@@ -170,19 +175,32 @@ const load = dispatch => {
     });
   }); // ไม่รอพิกัดก่อนโหลด: ขอสิทธิ์ Location ครั้งแรก (ป้ายของเบราว์เซอร์/macOS ค้างรอคนกด)
   // เคยทำให้ทั้งการ์ดว่างเปล่าจนหมด LOC_TIMEOUT -- ยิงด้วยพิกัดที่มีอยู่ก่อน ได้พิกัดใหม่ค่อยยิงซ้ำ
-  // nowcast รายจุด (เฉพาะหน้าเว็บ): 4 สถานที่ + ตำแหน่งเครื่องนี้ ถ้ามี -- ลำดับเดียวกับ MARKERS
+  // nowcast รายจุด (เฉพาะหน้าเว็บ): 4 สถานที่ + ตำแหน่งเครื่องนี้ + จุด custom -- ผลเก็บตาม id
 
 
   const fetchForecast = () => {
     if (!WEB) return;
-    const pts = MARKERS.map(m => `${m.lat},${m.lon}`).concat(loc ? [`${loc.lat.toFixed(4)},${loc.lon.toFixed(4)}`] : []);
-    fetchJson(API + '/api/forecast?pts=' + encodeURIComponent(pts.join(';'))).then(f => dispatch({
-      type: 'FORECAST',
-      forecast: f,
-      withMe: !!loc
+    const items = MARKERS.map(m => [m.id, m.lat, m.lon]).concat(loc ? [['me', loc.lat, loc.lon]] : []).concat(customLL ? [['custom', customLL.lat, customLL.lon]] : []);
+    const pts = items.map(([, la, lo]) => `${la.toFixed(4)},${lo.toFixed(4)}`);
+    fetchJson(API + '/api/forecast?pts=' + encodeURIComponent(pts.join(';'))).then(f => {
+      const byId = {};
+      items.forEach(([id], i) => {
+        byId[id] = f.points[i];
+      });
+      dispatch({
+        type: 'FORECAST',
+        basis: f.basis,
+        byId
+      });
+    }).catch(() => {}); // ความแม่นย้อนหลัง (API cache ตาม mtime ของ history -- ถามทุกนาทีได้)
+
+    fetchJson(API + '/api/verify?days=7').then(v => dispatch({
+      type: 'VERIFY',
+      verify: v
     })).catch(() => {});
   };
 
+  refreshForecast = fetchForecast;
   const known = loc;
   if (WEB) onFix = l => {
     fetchState(l).catch(() => {});
@@ -294,7 +312,8 @@ const SHOW_DEFAULT = {
   home: true,
   office2: true,
   home2: true,
-  me: true
+  me: true,
+  custom: true
 };
 
 const savedShow = () => {
@@ -334,8 +353,17 @@ const updateState = (event, prev) => {
     locErr: event.locErr
   };
   if (event.type === 'FORECAST') return { ...prev,
-    forecast: event.forecast,
-    forecastWithMe: event.withMe
+    basis: event.basis,
+    fcById: event.byId
+  };
+  if (event.type === 'VERIFY') return { ...prev,
+    verify: event.verify
+  };
+  if (event.type === 'CUSTOM') return { ...prev,
+    custom: event.ll,
+    fcById: { ...(prev.fcById || {}),
+      custom: null
+    }
   };
   if (event.type === 'FRAMES') return { ...prev,
     frames: event.frames,
@@ -424,6 +452,13 @@ const ME = {
   label: 'ตำแหน่งเครื่องนี้',
   color: '#30d158',
   ink: '#1b8a3a'
+};
+const CUSTOM = {
+  id: 'custom',
+  icon: 'pin',
+  label: 'จุดที่กรอก',
+  color: '#ff5fd2',
+  ink: '#c2189b'
 }; // สีของปุ่ม: ธีมสว่างใช้โทนเข้ม (`ink`) สีอ่อนเดิมจางบนพื้นครีม / จุดบนภาพเรดาร์ใช้ `color` เสมอ
 
 const btnColor = m => macos.ink === LIGHT.ink && m.ink || m.color; // ไอคอนของปุ่ม toggle (SVG วาดเอง ไม่พึ่งฟอนต์/ไฟล์ภายนอก)
@@ -461,6 +496,23 @@ const ICONS = {
     strokeLinecap: "round"
   }), /*#__PURE__*/React.createElement("path", {
     d: "M3.75 6.25v7.5h8.5v-7.5M6.75 13.75v-3.5h2.5v3.5"
+  })),
+  pin: c => /*#__PURE__*/React.createElement("svg", {
+    width: 13 * S,
+    height: 13 * S,
+    viewBox: "0 0 16 16",
+    fill: "none",
+    stroke: c,
+    strokeWidth: "1.5",
+    strokeLinejoin: "round"
+  }, /*#__PURE__*/React.createElement("path", {
+    d: "M8 14.5s4.75-4.2 4.75-8A4.75 4.75 0 0 0 3.25 6.5c0 3.8 4.75 8 4.75 8z"
+  }), /*#__PURE__*/React.createElement("circle", {
+    cx: "8",
+    cy: "6.5",
+    r: "1.6",
+    fill: c,
+    stroke: "none"
   })),
   me: c => /*#__PURE__*/React.createElement("svg", {
     width: 13 * S,
@@ -1048,6 +1100,221 @@ const ForecastRow = ({
     steps: fc.timeline,
     t0: fc.t0
   }));
+}; // ---- จุด custom: อ่านพิกัดจากข้อความที่พิมพ์/วาง (ในเบราว์เซอร์ล้วน ไม่ยิงไปไหน) ----
+// รับ "13.75, 100.50" / "13.75 100.50" / ลิงก์ Google Maps แบบเต็ม (!3d..!4d.. = หมุด, @lat,lon = กลางจอ,
+// ?q= / query= / ll=) -- ลิงก์สั้น maps.app.goo.gl ต้องให้ server ไปถาม Google ซึ่งผู้ใช้เลือกไม่ทำ
+
+
+const parseLatLon = text => {
+  const t = decodeURIComponent((text || '').trim());
+  if (!t) return {
+    error: null
+  };
+  if (/goo\.gl\//i.test(t)) return {
+    error: 'ลิงก์สั้นอ่านพิกัดไม่ได้ -- เปิดลิงก์แล้วคัดลอก URL เต็ม หรือพิมพ์ lat, lon'
+  };
+
+  const pick = (a, b) => {
+    const la = parseFloat(a),
+          lo = parseFloat(b);
+    if (!isFinite(la) || !isFinite(lo) || Math.abs(la) > 90 || Math.abs(lo) > 180) return null;
+    return {
+      lat: la,
+      lon: lo
+    };
+  };
+
+  const pats = [/!3d(-?\d+(?:\.\d+)?)!4d(-?\d+(?:\.\d+)?)/, /[?&](?:q|query|ll|center|destination)=(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)/, /@(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)/, /^\(?\s*(-?\d+(?:\.\d+)?)\s*[,\s]\s*(-?\d+(?:\.\d+)?)\s*\)?$/];
+
+  for (const re of pats) {
+    const m = t.match(re);
+
+    if (m) {
+      const ll = pick(m[1], m[2]);
+      if (ll) return {
+        ll
+      };
+    }
+  }
+
+  return {
+    error: 'อ่านพิกัดไม่ออก -- พิมพ์แบบ 13.7563, 100.5018'
+  };
+};
+
+const CustomInput = ({
+  custom,
+  dispatch
+}) => {
+  const [text, setText] = React.useState('');
+  const [error, setError] = React.useState(null);
+
+  const submit = e => {
+    e.preventDefault();
+    const r = parseLatLon(text);
+
+    if (!r.ll) {
+      setError(r.error);
+      return;
+    }
+
+    setError(null);
+    customLL = r.ll;
+    dispatch({
+      type: 'CUSTOM',
+      ll: r.ll
+    });
+    if (refreshForecast) refreshForecast();
+  };
+
+  const clear = () => {
+    customLL = null;
+    setText('');
+    setError(null);
+    dispatch({
+      type: 'CUSTOM',
+      ll: null
+    });
+  };
+
+  const field = {
+    flex: '1 1 auto',
+    minWidth: 0,
+    fontSize: '13px',
+    padding: '7px 10px',
+    borderRadius: '8px',
+    border: `1px solid ${wash(0.2)}`,
+    background: wash(0.06),
+    color: macos.label,
+    outline: 'none',
+    fontFamily: macos.font
+  };
+  const btn = {
+    fontSize: '13px',
+    fontWeight: '600',
+    padding: '7px 12px',
+    borderRadius: '8px',
+    border: 'none',
+    cursor: 'pointer',
+    background: macos.pillOn,
+    color: macos.label,
+    flex: '0 0 auto'
+  };
+  return /*#__PURE__*/React.createElement("form", {
+    onSubmit: submit,
+    style: {
+      padding: '10px 0 2px',
+      borderTop: `0.5px solid ${wash(0.1)}`
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: '6px'
+    }
+  }, /*#__PURE__*/React.createElement("input", {
+    value: text,
+    onChange: e => setText(e.target.value),
+    style: field,
+    placeholder: "lat, lon \u0E40\u0E0A\u0E48\u0E19 13.7563, 100.5018"
+  }), /*#__PURE__*/React.createElement("button", {
+    type: "submit",
+    style: btn
+  }, "\u0E41\u0E2A\u0E14\u0E07"), custom && /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: clear,
+    style: { ...btn,
+      background: wash(0.12)
+    },
+    title: "\u0E25\u0E1A\u0E08\u0E38\u0E14\u0E19\u0E35\u0E49"
+  }, "\u2715")), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: '11px',
+      color: error ? macos.orange : macos.tertiary,
+      marginTop: '4px'
+    }
+  }, error || 'หรือวางลิงก์ Google Maps แบบเต็ม · ไม่บันทึก reload แล้วหาย'));
+}; // ---- ความแม่นย้อนหลัง (verify.py) ----
+
+
+const MODEL_LABEL = {
+  trend: 'ตัวที่ใช้อยู่',
+  advect: 'ตามทิศอย่างเดียว',
+  persist: 'เหมือนตอนนี้ (ฐาน)'
+};
+const BUCKET_LABEL = {
+  '0-10': '≤10 นาที',
+  '15-30': '15–30',
+  '35-60': '35–60'
+};
+
+const VerifyPanel = ({
+  verify
+}) => {
+  const models = verify && verify.models || {};
+  const order = ['trend', 'advect', 'persist'].filter(k => models[k]);
+  const buckets = Object.keys(BUCKET_LABEL);
+  const cell = {
+    padding: '4px 6px',
+    textAlign: 'right',
+    fontSize: '12px',
+    whiteSpace: 'nowrap'
+  };
+  return /*#__PURE__*/React.createElement(Panel, {
+    title: `ความแม่นย้อนหลัง ${verify ? verify.days : 7} วัน`
+  }, !order.length ? /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: '13px',
+      color: macos.secondary
+    }
+  }, "\u0E22\u0E31\u0E07\u0E44\u0E21\u0E48\u0E21\u0E35\u0E1C\u0E25\u0E17\u0E35\u0E48\u0E04\u0E23\u0E1A\u0E40\u0E27\u0E25\u0E32\u0E43\u0E2B\u0E49\u0E40\u0E17\u0E35\u0E22\u0E1A") : /*#__PURE__*/React.createElement("table", {
+    style: {
+      width: '100%',
+      borderCollapse: 'collapse'
+    }
+  }, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", {
+    style: {
+      color: macos.tertiary
+    }
+  }, /*#__PURE__*/React.createElement("th", {
+    style: { ...cell,
+      textAlign: 'left',
+      fontWeight: '600'
+    }
+  }, "\u0E17\u0E32\u0E22\u0E25\u0E48\u0E27\u0E07\u0E2B\u0E19\u0E49\u0E32"), buckets.map(b => /*#__PURE__*/React.createElement("th", {
+    key: b,
+    style: { ...cell,
+      fontWeight: '600'
+    }
+  }, BUCKET_LABEL[b])))), /*#__PURE__*/React.createElement("tbody", null, order.map(k => /*#__PURE__*/React.createElement("tr", {
+    key: k,
+    style: {
+      borderTop: `0.5px solid ${wash(0.1)}`
+    }
+  }, /*#__PURE__*/React.createElement("td", {
+    style: { ...cell,
+      textAlign: 'left',
+      fontWeight: k === 'trend' ? '700' : '400'
+    }
+  }, MODEL_LABEL[k]), buckets.map(b => {
+    const x = models[k].buckets[b];
+    return /*#__PURE__*/React.createElement("td", {
+      key: b,
+      style: cell,
+      title: x && x.n ? `n=${x.n} · ทายฝนแล้วตกจริง ${x.counts.hit} · ทายฝนแต่ไม่ตก ${x.counts.false_alarm} · ตกแต่ไม่ได้ทาย ${x.counts.miss}` : ''
+    }, x && x.n ? `${Math.round(x.accuracy * 100)}%` : '–', /*#__PURE__*/React.createElement("span", {
+      style: {
+        color: macos.tertiary,
+        fontSize: '10px'
+      }
+    }, x && x.n ? ` ·${x.n}` : ''));
+  }))))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: '11px',
+      color: macos.tertiary,
+      marginTop: '8px',
+      lineHeight: 1.5
+    }
+  }, "\u0E16\u0E39\u0E01 = \u0E17\u0E32\u0E22 \"\u0E1D\u0E19/\u0E44\u0E21\u0E48\u0E1D\u0E19\" \u0E15\u0E23\u0E07\u0E01\u0E31\u0E1A\u0E20\u0E32\u0E1E\u0E08\u0E23\u0E34\u0E07\u0E43\u0E19\u0E23\u0E31\u0E28\u0E21\u0E35 2 \u0E01\u0E21. \u0E02\u0E2D\u0E07 4 \u0E2A\u0E16\u0E32\u0E19\u0E17\u0E35\u0E48 \xB7 \u0E15\u0E31\u0E27\u0E40\u0E25\u0E02\u0E40\u0E25\u0E47\u0E01 = \u0E08\u0E33\u0E19\u0E27\u0E19\u0E04\u0E23\u0E31\u0E49\u0E07\u0E17\u0E35\u0E48\u0E40\u0E17\u0E35\u0E22\u0E1A \xB7 \u0E40\u0E2D\u0E32\u0E40\u0E21\u0E32\u0E2A\u0E4C\u0E0A\u0E35\u0E49\u0E14\u0E39\u0E23\u0E32\u0E22\u0E25\u0E30\u0E40\u0E2D\u0E35\u0E22\u0E14"));
 };
 
 const WebPage = ({
@@ -1059,8 +1326,10 @@ const WebPage = ({
   show,
   theme,
   frames,
-  forecast,
-  forecastWithMe,
+  basis,
+  fcById,
+  verify,
+  custom,
   dispatch
 }) => {
   const [idx, setIdx] = React.useState(null); // null = ตามเฟรมล่าสุด
@@ -1224,6 +1493,11 @@ const WebPage = ({
     key: m.id
   })), me && show.me && /*#__PURE__*/React.createElement(MeMarker, {
     pct: me
+  }), custom && show.custom && fcById && fcById.custom && fcById.custom.img_pct && /*#__PURE__*/React.createElement(Marker, {
+    m: { ...CUSTOM,
+      left: `${fcById.custom.img_pct.left}%`,
+      top: `${fcById.custom.img_pct.top}%`
+    }
   }), /*#__PURE__*/React.createElement("span", {
     style: {
       position: 'absolute',
@@ -1276,22 +1550,33 @@ const WebPage = ({
     }
   }, /*#__PURE__*/React.createElement(Panel, {
     title: "\u0E2A\u0E16\u0E32\u0E19\u0E17\u0E35\u0E48 \xB7 \u0E1D\u0E19 1 \u0E0A\u0E21. \u0E02\u0E49\u0E32\u0E07\u0E2B\u0E19\u0E49\u0E32"
-  }, MARKERS.map((m, i) => /*#__PURE__*/React.createElement(ForecastRow, {
+  }, MARKERS.map(m => /*#__PURE__*/React.createElement(ForecastRow, {
     key: m.id,
     m: m,
     on: show[m.id],
     dispatch: dispatch,
-    pending: !forecast || !forecast.basis,
-    fc: forecast && forecast.points[i] && forecast.points[i].forecast,
+    pending: !basis,
+    fc: fcById && fcById[m.id] && fcById[m.id].forecast,
     dist: myLL ? `ห่างจากเครื่องนี้ ${kmBetween(myLL, m).toFixed(1)} กม.` : null
   })), /*#__PURE__*/React.createElement(ForecastRow, {
     m: ME,
     on: show.me,
     dispatch: dispatch,
-    pending: !forecast || !forecast.basis,
-    note: !forecastWithMe || !forecast || !forecast.points[MARKERS.length] ? meNote || 'รอพิกัด…' : null,
-    fc: forecastWithMe && forecast && forecast.points[MARKERS.length] && forecast.points[MARKERS.length].forecast,
+    pending: !basis,
+    note: !(fcById && fcById.me) ? meNote || 'รอพิกัด…' : null,
+    fc: fcById && fcById.me && fcById.me.forecast,
     dist: point && !point.default ? `ห่างสถานีเรดาร์ ${point.distance_km} กม.` : null
+  }), custom && /*#__PURE__*/React.createElement(ForecastRow, {
+    m: CUSTOM,
+    on: show.custom,
+    dispatch: dispatch,
+    pending: !(fcById && fcById.custom),
+    note: fcById && fcById.custom && !fcById.custom.in_coverage ? 'อยู่นอกวงเรดาร์ (120 กม. จากหนองจอก)' : null,
+    fc: fcById && fcById.custom && fcById.custom.forecast,
+    dist: `${custom.lat.toFixed(4)}, ${custom.lon.toFixed(4)}${myLL ? ` · ห่างจากเครื่องนี้ ${kmBetween(myLL, custom).toFixed(1)} กม.` : ''}`
+  }), /*#__PURE__*/React.createElement(CustomInput, {
+    custom: custom,
+    dispatch: dispatch
   }), /*#__PURE__*/React.createElement("div", {
     style: {
       display: 'flex',
@@ -1308,20 +1593,22 @@ const WebPage = ({
     style: {
       color: LEVEL_COLOR[2]
     }
-  }, "\u25A0"), " \u0E1D\u0E19\u0E2B\u0E19\u0E31\u0E01")), forecast && forecast.basis && /*#__PURE__*/React.createElement("div", {
+  }, "\u25A0"), " \u0E1D\u0E19\u0E2B\u0E19\u0E31\u0E01")), basis && /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: '12px',
       color: macos.tertiary,
       marginTop: '10px',
       lineHeight: 1.5
     }
-  }, "\u0E2D\u0E34\u0E07\u0E20\u0E32\u0E1E\u0E40\u0E23\u0E14\u0E32\u0E23\u0E4C ~", hhmm(forecast.basis.observed_at), !forecast.basis.motion ? ' · ยังไม่รู้ทิศทางฝน' : forecast.basis.motion.speed_kmh < 3 ? ' · ฝนแทบอยู่กับที่' : ` · ฝนเคลื่อนจากทิศ${forecast.basis.motion.from_dir} ~${Math.round(forecast.basis.motion.speed_kmh)} กม./ชม.`, /*#__PURE__*/React.createElement("br", null), "\u0E09\u0E32\u0E22\u0E1D\u0E19\u0E15\u0E32\u0E21\u0E17\u0E34\u0E28\u0E40\u0E14\u0E34\u0E21 + \u0E41\u0E19\u0E27\u0E42\u0E19\u0E49\u0E21\u0E40\u0E1A\u0E32\u0E25\u0E07/\u0E41\u0E23\u0E07\u0E02\u0E36\u0E49\u0E19 30 \u0E19\u0E32\u0E17\u0E35\u0E25\u0E48\u0E32\u0E2A\u0E38\u0E14 (\u0E1D\u0E19\u0E17\u0E35\u0E48\u0E01\u0E48\u0E2D\u0E15\u0E31\u0E27\u0E43\u0E2B\u0E21\u0E48\u0E17\u0E32\u0E22\u0E44\u0E21\u0E48\u0E44\u0E14\u0E49) \u0E23\u0E31\u0E28\u0E21\u0E35\u0E08\u0E38\u0E14 ", forecast.basis.radius_km, " \u0E01\u0E21."), rain && /*#__PURE__*/React.createElement("div", {
+  }, "\u0E2D\u0E34\u0E07\u0E20\u0E32\u0E1E\u0E40\u0E23\u0E14\u0E32\u0E23\u0E4C ~", hhmm(basis.observed_at), !basis.motion ? ' · ยังไม่รู้ทิศทางฝน' : basis.motion.speed_kmh < 3 ? ' · ฝนแทบอยู่กับที่' : ` · ฝนเคลื่อนจากทิศ${basis.motion.from_dir} ~${Math.round(basis.motion.speed_kmh)} กม./ชม.`, /*#__PURE__*/React.createElement("br", null), "\u0E09\u0E32\u0E22\u0E1D\u0E19\u0E15\u0E32\u0E21\u0E17\u0E34\u0E28\u0E40\u0E14\u0E34\u0E21 + \u0E41\u0E19\u0E27\u0E42\u0E19\u0E49\u0E21\u0E40\u0E1A\u0E32\u0E25\u0E07/\u0E41\u0E23\u0E07\u0E02\u0E36\u0E49\u0E19 30 \u0E19\u0E32\u0E17\u0E35\u0E25\u0E48\u0E32\u0E2A\u0E38\u0E14 (\u0E1D\u0E19\u0E17\u0E35\u0E48\u0E01\u0E48\u0E2D\u0E15\u0E31\u0E27\u0E43\u0E2B\u0E21\u0E48\u0E17\u0E32\u0E22\u0E44\u0E21\u0E48\u0E44\u0E14\u0E49) \u0E23\u0E31\u0E28\u0E21\u0E35\u0E08\u0E38\u0E14 ", basis.radius_km, " \u0E01\u0E21."), rain && /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: '12px',
       color: macos.orange,
       marginTop: '10px'
     }
-  }, "\u0E41\u0E08\u0E49\u0E07\u0E40\u0E15\u0E37\u0E2D\u0E19 16:xx: ", rain)), /*#__PURE__*/React.createElement("div", {
+  }, "\u0E41\u0E08\u0E49\u0E07\u0E40\u0E15\u0E37\u0E2D\u0E19 16:xx: ", rain)), /*#__PURE__*/React.createElement(VerifyPanel, {
+    verify: verify
+  }), /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: '12px',
       color: macos.tertiary,

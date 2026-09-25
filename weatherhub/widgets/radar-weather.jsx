@@ -37,6 +37,10 @@ let locErr = null;                      // code ของ GeolocationPositionErr
 let watchId = null;
 let waiters = [];
 let onFix = null;          // load() ตั้งไว้: ได้ fix ใหม่ตอนไม่มีใครรอ (มาช้า/หลัง error) ก็ยิง API ซ้ำทันที
+// จุด custom บนหน้าเว็บ: พิมพ์ lat,lon (หรือวางลิงก์ Google Maps แบบเต็ม) -- **ไม่เก็บที่ไหนเลย**
+// (ผู้ใช้ขอ 25 ก.ย.: กรอกใหม่ทุกรอบ) อยู่ในหน่วยความจำของหน้านี้ reload = หาย
+let customLL = null;
+let refreshForecast = null;  // load() ตั้งไว้ ให้ปุ่ม "แสดง" ยิงผลทายของจุดใหม่ได้ทันที
 const flush = (v) => { const w = waiters; waiters = []; w.forEach((f) => f(v)); };
 const locateWeb = (geo) => {
   if (watchId == null) {
@@ -106,15 +110,24 @@ const load = (dispatch) => {
     });
   // ไม่รอพิกัดก่อนโหลด: ขอสิทธิ์ Location ครั้งแรก (ป้ายของเบราว์เซอร์/macOS ค้างรอคนกด)
   // เคยทำให้ทั้งการ์ดว่างเปล่าจนหมด LOC_TIMEOUT -- ยิงด้วยพิกัดที่มีอยู่ก่อน ได้พิกัดใหม่ค่อยยิงซ้ำ
-  // nowcast รายจุด (เฉพาะหน้าเว็บ): 4 สถานที่ + ตำแหน่งเครื่องนี้ ถ้ามี -- ลำดับเดียวกับ MARKERS
+  // nowcast รายจุด (เฉพาะหน้าเว็บ): 4 สถานที่ + ตำแหน่งเครื่องนี้ + จุด custom -- ผลเก็บตาม id
   const fetchForecast = () => {
     if (!WEB) return;
-    const pts = MARKERS.map((m) => `${m.lat},${m.lon}`)
-      .concat(loc ? [`${loc.lat.toFixed(4)},${loc.lon.toFixed(4)}`] : []);
+    const items = MARKERS.map((m) => [m.id, m.lat, m.lon])
+      .concat(loc ? [['me', loc.lat, loc.lon]] : [])
+      .concat(customLL ? [['custom', customLL.lat, customLL.lon]] : []);
+    const pts = items.map(([, la, lo]) => `${la.toFixed(4)},${lo.toFixed(4)}`);
     fetchJson(API + '/api/forecast?pts=' + encodeURIComponent(pts.join(';')))
-      .then((f) => dispatch({ type: 'FORECAST', forecast: f, withMe: !!loc }))
+      .then((f) => {
+        const byId = {};
+        items.forEach(([id], i) => { byId[id] = f.points[i]; });
+        dispatch({ type: 'FORECAST', basis: f.basis, byId });
+      })
       .catch(() => {});
+    // ความแม่นย้อนหลัง (API cache ตาม mtime ของ history -- ถามทุกนาทีได้)
+    fetchJson(API + '/api/verify?days=7').then((v) => dispatch({ type: 'VERIFY', verify: v })).catch(() => {});
   };
+  refreshForecast = fetchForecast;
   const known = loc;
   if (WEB) onFix = (l) => { fetchState(l).catch(() => {}); fetchForecast(); };
   fetchForecast();
@@ -196,7 +209,7 @@ applyTheme(WEB ? readTheme() : 'dark');
 
 // ปุ่มเปิด/ปิดจุด (Office/Home 1-2 + ตำแหน่งเครื่องนี้) -- จำไว้ใน localStorage ข้าม reboot
 const SHOW_KEY = 'radar-weather.markers';
-const SHOW_DEFAULT = { office: true, home: true, office2: true, home2: true, me: true };
+const SHOW_DEFAULT = { office: true, home: true, office2: true, home2: true, me: true, custom: true };
 const savedShow = () => {
   try { return { ...SHOW_DEFAULT, ...JSON.parse(localStorage.getItem(SHOW_KEY)) }; } catch (e) { return SHOW_DEFAULT; }
 };
@@ -212,7 +225,9 @@ export const updateState = (event, prev) => {
              locErr: event.located ? null : (event.locErr || prev.locErr) };
   }
   if (event.type === 'LOC_ERR') return { ...prev, locErr: event.locErr };
-  if (event.type === 'FORECAST') return { ...prev, forecast: event.forecast, forecastWithMe: event.withMe };
+  if (event.type === 'FORECAST') return { ...prev, basis: event.basis, fcById: event.byId };
+  if (event.type === 'VERIFY') return { ...prev, verify: event.verify };
+  if (event.type === 'CUSTOM') return { ...prev, custom: event.ll, fcById: { ...(prev.fcById || {}), custom: null } };
   if (event.type === 'FRAMES') return { ...prev, frames: event.frames, frameMinutes: event.frameMinutes };
   if (event.type === 'OFFLINE') return { ...prev, src: 'offline' };
   if (event.type === 'THEME') return { ...prev, theme: applyTheme(event.name) };
@@ -234,6 +249,7 @@ const MARKERS = [
   { id: 'home2', icon: 'home', n: 2, label: 'Home 2', lat: 13.873365, lon: 100.6494155, left: '42.72%', top: '48.22%', color: '#ff6b6b', ink: '#d03a3a' },       // 13.873365, 100.6494155
 ];
 const ME = { id: 'me', icon: 'me', label: 'ตำแหน่งเครื่องนี้', color: '#30d158', ink: '#1b8a3a' };
+const CUSTOM = { id: 'custom', icon: 'pin', label: 'จุดที่กรอก', color: '#ff5fd2', ink: '#c2189b' };
 // สีของปุ่ม: ธีมสว่างใช้โทนเข้ม (`ink`) สีอ่อนเดิมจางบนพื้นครีม / จุดบนภาพเรดาร์ใช้ `color` เสมอ
 const btnColor = (m) => (macos.ink === LIGHT.ink && m.ink) || m.color;
 
@@ -249,6 +265,12 @@ const ICONS = {
     <svg width={13 * S} height={13 * S} viewBox="0 0 16 16" fill="none" stroke={c} strokeWidth="1.5" strokeLinejoin="round">
       <path d="M2 7.5 8 2.5l6 5" strokeLinecap="round" />
       <path d="M3.75 6.25v7.5h8.5v-7.5M6.75 13.75v-3.5h2.5v3.5" />
+    </svg>
+  ),
+  pin: (c) => (
+    <svg width={13 * S} height={13 * S} viewBox="0 0 16 16" fill="none" stroke={c} strokeWidth="1.5" strokeLinejoin="round">
+      <path d="M8 14.5s4.75-4.2 4.75-8A4.75 4.75 0 0 0 3.25 6.5c0 3.8 4.75 8 4.75 8z" />
+      <circle cx="8" cy="6.5" r="1.6" fill={c} stroke="none" />
     </svg>
   ),
   me: (c) => (
@@ -563,7 +585,118 @@ const ForecastRow = ({ m, fc, on, dispatch, dist, note, pending }) => {
   );
 };
 
-const WebPage = ({ meta, state, src, located, locErr, show, theme, frames, forecast, forecastWithMe, dispatch }) => {
+// ---- จุด custom: อ่านพิกัดจากข้อความที่พิมพ์/วาง (ในเบราว์เซอร์ล้วน ไม่ยิงไปไหน) ----
+// รับ "13.75, 100.50" / "13.75 100.50" / ลิงก์ Google Maps แบบเต็ม (!3d..!4d.. = หมุด, @lat,lon = กลางจอ,
+// ?q= / query= / ll=) -- ลิงก์สั้น maps.app.goo.gl ต้องให้ server ไปถาม Google ซึ่งผู้ใช้เลือกไม่ทำ
+const parseLatLon = (text) => {
+  const t = decodeURIComponent((text || '').trim());
+  if (!t) return { error: null };
+  if (/goo\.gl\//i.test(t)) return { error: 'ลิงก์สั้นอ่านพิกัดไม่ได้ -- เปิดลิงก์แล้วคัดลอก URL เต็ม หรือพิมพ์ lat, lon' };
+  const pick = (a, b) => {
+    const la = parseFloat(a), lo = parseFloat(b);
+    if (!isFinite(la) || !isFinite(lo) || Math.abs(la) > 90 || Math.abs(lo) > 180) return null;
+    return { lat: la, lon: lo };
+  };
+  const pats = [
+    /!3d(-?\d+(?:\.\d+)?)!4d(-?\d+(?:\.\d+)?)/,
+    /[?&](?:q|query|ll|center|destination)=(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)/,
+    /@(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)/,
+    /^\(?\s*(-?\d+(?:\.\d+)?)\s*[,\s]\s*(-?\d+(?:\.\d+)?)\s*\)?$/,
+  ];
+  for (const re of pats) {
+    const m = t.match(re);
+    if (m) {
+      const ll = pick(m[1], m[2]);
+      if (ll) return { ll };
+    }
+  }
+  return { error: 'อ่านพิกัดไม่ออก -- พิมพ์แบบ 13.7563, 100.5018' };
+};
+
+const CustomInput = ({ custom, dispatch }) => {
+  const [text, setText] = React.useState('');
+  const [error, setError] = React.useState(null);
+  const submit = (e) => {
+    e.preventDefault();
+    const r = parseLatLon(text);
+    if (!r.ll) { setError(r.error); return; }
+    setError(null);
+    customLL = r.ll;
+    dispatch({ type: 'CUSTOM', ll: r.ll });
+    if (refreshForecast) refreshForecast();
+  };
+  const clear = () => { customLL = null; setText(''); setError(null); dispatch({ type: 'CUSTOM', ll: null }); };
+  const field = {
+    flex: '1 1 auto', minWidth: 0, fontSize: '13px', padding: '7px 10px', borderRadius: '8px',
+    border: `1px solid ${wash(0.2)}`, background: wash(0.06), color: macos.label, outline: 'none',
+    fontFamily: macos.font,
+  };
+  const btn = {
+    fontSize: '13px', fontWeight: '600', padding: '7px 12px', borderRadius: '8px', border: 'none',
+    cursor: 'pointer', background: macos.pillOn, color: macos.label, flex: '0 0 auto',
+  };
+  return (
+    <form onSubmit={submit} style={{ padding: '10px 0 2px', borderTop: `0.5px solid ${wash(0.1)}` }}>
+      <div style={{ display: 'flex', gap: '6px' }}>
+        <input value={text} onChange={(e) => setText(e.target.value)} style={field}
+          placeholder="lat, lon เช่น 13.7563, 100.5018" />
+        <button type="submit" style={btn}>แสดง</button>
+        {custom && <button type="button" onClick={clear} style={{ ...btn, background: wash(0.12) }} title="ลบจุดนี้">✕</button>}
+      </div>
+      <div style={{ fontSize: '11px', color: error ? macos.orange : macos.tertiary, marginTop: '4px' }}>
+        {error || 'หรือวางลิงก์ Google Maps แบบเต็ม · ไม่บันทึก reload แล้วหาย'}
+      </div>
+    </form>
+  );
+};
+
+// ---- ความแม่นย้อนหลัง (verify.py) ----
+const MODEL_LABEL = { trend: 'ตัวที่ใช้อยู่', advect: 'ตามทิศอย่างเดียว', persist: 'เหมือนตอนนี้ (ฐาน)' };
+const BUCKET_LABEL = { '0-10': '≤10 นาที', '15-30': '15–30', '35-60': '35–60' };
+const VerifyPanel = ({ verify }) => {
+  const models = (verify && verify.models) || {};
+  const order = ['trend', 'advect', 'persist'].filter((k) => models[k]);
+  const buckets = Object.keys(BUCKET_LABEL);
+  const cell = { padding: '4px 6px', textAlign: 'right', fontSize: '12px', whiteSpace: 'nowrap' };
+  return (
+    <Panel title={`ความแม่นย้อนหลัง ${verify ? verify.days : 7} วัน`}>
+      {!order.length
+        ? <div style={{ fontSize: '13px', color: macos.secondary }}>ยังไม่มีผลที่ครบเวลาให้เทียบ</div>
+        : (
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead>
+              <tr style={{ color: macos.tertiary }}>
+                <th style={{ ...cell, textAlign: 'left', fontWeight: '600' }}>ทายล่วงหน้า</th>
+                {buckets.map((b) => <th key={b} style={{ ...cell, fontWeight: '600' }}>{BUCKET_LABEL[b]}</th>)}
+              </tr>
+            </thead>
+            <tbody>
+              {order.map((k) => (
+                <tr key={k} style={{ borderTop: `0.5px solid ${wash(0.1)}` }}>
+                  <td style={{ ...cell, textAlign: 'left', fontWeight: k === 'trend' ? '700' : '400' }}>{MODEL_LABEL[k]}</td>
+                  {buckets.map((b) => {
+                    const x = models[k].buckets[b];
+                    return (
+                      <td key={b} style={cell} title={x && x.n ? `n=${x.n} · ทายฝนแล้วตกจริง ${x.counts.hit} · ทายฝนแต่ไม่ตก ${x.counts.false_alarm} · ตกแต่ไม่ได้ทาย ${x.counts.miss}` : ''}>
+                        {x && x.n ? `${Math.round(x.accuracy * 100)}%` : '–'}
+                        <span style={{ color: macos.tertiary, fontSize: '10px' }}>{x && x.n ? ` ·${x.n}` : ''}</span>
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      <div style={{ fontSize: '11px', color: macos.tertiary, marginTop: '8px', lineHeight: 1.5 }}>
+        ถูก = ทาย "ฝน/ไม่ฝน" ตรงกับภาพจริงในรัศมี 2 กม. ของ 4 สถานที่ · ตัวเลขเล็ก = จำนวนครั้งที่เทียบ
+        · เอาเมาส์ชี้ดูรายละเอียด
+      </div>
+    </Panel>
+  );
+};
+
+const WebPage = ({ meta, state, src, located, locErr, show, theme, frames, basis, fcById, verify, custom, dispatch }) => {
   const [idx, setIdx] = React.useState(null);      // null = ตามเฟรมล่าสุด
   const [playing, setPlaying] = React.useState(true);
   const holdRef = React.useRef(0);
@@ -647,6 +780,9 @@ const WebPage = ({ meta, state, src, located, locErr, show, theme, frames, forec
             <img src={imgSrc} style={{ width: '100%', display: 'block' }} />
             {MARKERS.filter((m) => show[m.id]).map((m) => <Marker m={m} key={m.id} />)}
             {me && show.me && <MeMarker pct={me} />}
+            {custom && show.custom && fcById && fcById.custom && fcById.custom.img_pct && (
+              <Marker m={{ ...CUSTOM, left: `${fcById.custom.img_pct.left}%`, top: `${fcById.custom.img_pct.top}%` }} />
+            )}
             <span style={{
               position: 'absolute', top: '12px', right: '12px', lineHeight: 1.2,
               padding: '5px 10px', borderRadius: '999px', fontSize: '13px', fontWeight: '700',
@@ -672,33 +808,42 @@ const WebPage = ({ meta, state, src, located, locErr, show, theme, frames, forec
 
         <aside style={{ flex: '0 1 340px', minWidth: '280px' }}>
           <Panel title="สถานที่ · ฝน 1 ชม. ข้างหน้า">
-            {MARKERS.map((m, i) => (
+            {MARKERS.map((m) => (
               <ForecastRow key={m.id} m={m} on={show[m.id]} dispatch={dispatch}
-                pending={!forecast || !forecast.basis}
-                fc={forecast && forecast.points[i] && forecast.points[i].forecast}
+                pending={!basis} fc={fcById && fcById[m.id] && fcById[m.id].forecast}
                 dist={myLL ? `ห่างจากเครื่องนี้ ${kmBetween(myLL, m).toFixed(1)} กม.` : null} />
             ))}
             <ForecastRow m={ME} on={show.me} dispatch={dispatch}
-              pending={!forecast || !forecast.basis}
-              note={!forecastWithMe || !forecast || !forecast.points[MARKERS.length] ? (meNote || 'รอพิกัด…') : null}
-              fc={forecastWithMe && forecast && forecast.points[MARKERS.length] && forecast.points[MARKERS.length].forecast}
+              pending={!basis}
+              note={!(fcById && fcById.me) ? (meNote || 'รอพิกัด…') : null}
+              fc={fcById && fcById.me && fcById.me.forecast}
               dist={point && !point.default ? `ห่างสถานีเรดาร์ ${point.distance_km} กม.` : null} />
+            {custom && (
+              <ForecastRow m={CUSTOM} on={show.custom} dispatch={dispatch}
+                pending={!(fcById && fcById.custom)}
+                note={fcById && fcById.custom && !fcById.custom.in_coverage ? 'อยู่นอกวงเรดาร์ (120 กม. จากหนองจอก)' : null}
+                fc={fcById && fcById.custom && fcById.custom.forecast}
+                dist={`${custom.lat.toFixed(4)}, ${custom.lon.toFixed(4)}${myLL ? ` · ห่างจากเครื่องนี้ ${kmBetween(myLL, custom).toFixed(1)} กม.` : ''}`} />
+            )}
+            <CustomInput custom={custom} dispatch={dispatch} />
 
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10px', color: macos.tertiary, marginTop: '6px' }}>
               <span>แถบสี: ทุก 5 นาที · สวิตช์ = จุดบนแผนที่</span>
               <span><span style={{ color: LEVEL_COLOR[1] }}>■</span> ฝน <span style={{ color: LEVEL_COLOR[2] }}>■</span> ฝนหนัก</span>
             </div>
-            {forecast && forecast.basis && (
+            {basis && (
               <div style={{ fontSize: '12px', color: macos.tertiary, marginTop: '10px', lineHeight: 1.5 }}>
-                อิงภาพเรดาร์ ~{hhmm(forecast.basis.observed_at)}
-                {!forecast.basis.motion ? ' · ยังไม่รู้ทิศทางฝน'
-                  : forecast.basis.motion.speed_kmh < 3 ? ' · ฝนแทบอยู่กับที่'
-                  : ` · ฝนเคลื่อนจากทิศ${forecast.basis.motion.from_dir} ~${Math.round(forecast.basis.motion.speed_kmh)} กม./ชม.`}
-                <br />ฉายฝนตามทิศเดิม + แนวโน้มเบาลง/แรงขึ้น 30 นาทีล่าสุด (ฝนที่ก่อตัวใหม่ทายไม่ได้) รัศมีจุด {forecast.basis.radius_km} กม.
+                อิงภาพเรดาร์ ~{hhmm(basis.observed_at)}
+                {!basis.motion ? ' · ยังไม่รู้ทิศทางฝน'
+                  : basis.motion.speed_kmh < 3 ? ' · ฝนแทบอยู่กับที่'
+                  : ` · ฝนเคลื่อนจากทิศ${basis.motion.from_dir} ~${Math.round(basis.motion.speed_kmh)} กม./ชม.`}
+                <br />ฉายฝนตามทิศเดิม + แนวโน้มเบาลง/แรงขึ้น 30 นาทีล่าสุด (ฝนที่ก่อตัวใหม่ทายไม่ได้) รัศมีจุด {basis.radius_km} กม.
               </div>
             )}
             {rain && <div style={{ fontSize: '12px', color: macos.orange, marginTop: '10px' }}>แจ้งเตือน 16:xx: {rain}</div>}
           </Panel>
+
+          <VerifyPanel verify={verify} />
 
           <div style={{ fontSize: '12px', color: macos.tertiary, lineHeight: 1.6, padding: '0 4px' }}>
             ภาพเคลื่อนไหว = ภาพนิ่งที่ดึงทุก 5 นาทีย้อนหลัง 1 ชม. (ไม่ยิงเว็บ กทม. เพิ่ม)

@@ -22,6 +22,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(HERE)))
 import api  # noqa: E402
 import frames  # noqa: E402
 import point_nowcast  # noqa: E402
+import verify  # noqa: E402
 import rain_nowcast  # noqa: E402
 import weather_fetcher  # noqa: E402
 from common.hub import (Health, Job, Scheduler, Store, err, holder_pid,  # noqa: E402
@@ -35,7 +36,7 @@ RADAR_INTERVAL = 300       # เท่าบรรทัด cron เดิม (*
 RADAR_OFFSET = 150
 RADAR_TIMEOUT = 60
 HOUSEKEEPING_INTERVAL = 24 * 3600
-RETENTION_DAYS = 7
+RETENTION_DAYS = 30        # history/forecast + observed ใช้วัดความแม่น (~0.5 MB/วัน)
 RETENTION_CAP_MB = 200
 
 store = Store(SERVICE)
@@ -67,6 +68,13 @@ def job_radar():
     if fresh or not os.path.exists(point_nowcast.SNAP_PATH):
         try:
             res = point_nowcast.update(store.path("frames"))
+            if res and fresh:
+                # เก็บผลทาย + ฝนจริงของรอบนี้ไว้วัดความแม่น (verify.py) -- ไม่ขวางงานหลักถ้าพัง
+                try:
+                    with open(point_nowcast.SNAP_PATH) as f:
+                        verify.record(store, point_nowcast.load_snapshot(f.read()))
+                except Exception as e:
+                    err("verify: บันทึกไม่ได้ {}: {}", type(e).__name__, str(e)[:160])
             if res:
                 log("point nowcast: rain {} heavy {} px · motion {}", res["rain_px"], res["heavy_px"],
                     "{} {} km/h".format(res["from_dir"], res["speed_kmh"]) if res.get("from_dir") else "-")

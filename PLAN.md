@@ -345,7 +345,22 @@ weekly ที่จับได้ช่วงเช้าหายไป ถู
 ## เฟส 5 — เก็บกวาด
 
 - ลบ cron ทั้งสามบรรทัด (หลังจากทุกอย่างอยู่ใน launchd แล้ว)
-- `~/src/my-cronjob/` เหลือเป็นประวัติ ใส่ README ชี้มา apphub เหมือนสามโฟลเดอร์ก่อนหน้า
+- ✅ **รวมทุกโฟลเดอร์เข้า apphub (25 ก.ย. 26)** — แทนข้อ "ใส่ README ชี้มา apphub" เดิม
+  เพราะผู้ใช้เลิกใช้ `cme_scraping` / `mac_widget` / `tdw_indi` / `my-cronjob` ทั้งหมด
+  - ตรวจไฟล์ที่ทับกันก่อน: fetcher 4 ตัวกับ widget เหมือน apphub ทุก byte ส่วน
+    `cme-putcall.jsx`, `cme-ticker.jsx`, `INTRADAY-TICKER-EXPLAINED.md`, `oi_block.pine`
+    ของ apphub **ใหม่กว่า** -> ไม่มีอะไรต้อง copy ย้อนกลับ
+  - ย้ายเข้ามาใหม่ 26 ไฟล์ (260 KB): `goldhub/research/` (backtest_sd.py + CSV 2 รุ่น
+    + README สรุปข้อสรุป 2σ/3σ SL 25$), `goldhub/legacy/quikstrike/` (fetch_all.py,
+    capture/parse/build_table + samples), `goldhub/legacy/first-version/`,
+    `weatherhub/legacy/first-version/`
+  - ประวัติ git ทั้ง 3 repo fetch เข้ามาเป็น branch `archive/mac-widget` (58),
+    `archive/tdw-indi` (15), `archive/my-cronjob` (40) — tag save-*/savepoint-1 ทุกตัว
+    เป็น ancestor ของ master แล้ว (ตรวจด้วย merge-base) จึงไม่ต้องเก็บ tag
+  - ที่ไม่ย้าย: `captures/` 156 ไฟล์จากการสำรวจ มิ.ย., `.pw-profile`, `session.json`,
+    `.claude/settings.local.json` (allowlist ผูกกับ path เดิม) -> อยู่ในถุง
+    `_archive/retired-projects-2026-09-25.tar.gz` (6 MB, มี .git ของทุก repo)
+  - เหลือขั้นสุดท้าย: ลบ 4 โฟลเดอร์ทิ้ง (ต้องทำจาก session ที่ไม่ได้ cd อยู่ในนั้น)
 - ✅ **โฟลเดอร์ widget ของ Übersicht เลิกเป็น git repo (25 ก.ย. 26)**
   - เดิม `~/Library/Application Support/Übersicht/widgets/` เป็น git repo แยก (37 commit,
     branch master + tag save-2/3/4) ทำให้มีต้นทาง 2 ที่ ต้อง sync มือทุกครั้ง

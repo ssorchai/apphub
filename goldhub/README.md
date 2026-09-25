@@ -31,20 +31,25 @@ Pine ข้าม key ที่ไม่รู้จัก → เพิ่ม k
 `force_overlay` ของ Pine v6) · ช่องใส่ระดับ zone ทำให้ alert ยิงเฉพาะตอนราคาอยู่ใกล้ zone
 ตั้งค่ามาสำหรับ TF 5 นาที (หน้าต่าง 3 แท่ง = 15 นาที) ใช้ TVC:DXY เพราะ ICEUS:DX1! ดีเลย์
 
-ของเดิมอยู่ที่ `claude_code/tdw_indi/oi_block.pine` (git 14 คอมมิต) — ยังไม่ได้ลบ
-ถ้าจะเลิกใช้ที่เดิม ค่อยใส่ README ชี้มาที่นี่
+ที่นี่คือที่เดียวแล้ว — `claude_code/tdw_indi` เลิกใช้ 25 ก.ย. 26 ประวัติ 15 คอมมิต
+อยู่ใน branch `archive/tdw-indi` ของ repo นี้
 
 ## โครงโฟลเดอร์
 
 ```
 goldhub/
-├── service/     cme_fetcher.py (Barchart+QuikStrike+clip+กราฟ), gold_fetcher.py (ราคาสด)
-│                cme_ticker.py.old = ต้นฉบับ ก.ค. 2026 ยังรันไม่ได้ ใช้เป็นต้นแบบ logic
-├── widgets/     cme-putcall.jsx (การ์ดหลัก), cme-ticker.jsx (ticker — ยังไม่ได้ต่อของใหม่)
+├── service/     app.py (daemon), cme_fetcher.py (Barchart+QuikStrike+clip+กราฟ),
+│                gold_fetcher.py + gold_job.py (ราคาสด), ticker.py, api.py
+│                cme_ticker.py.old = ต้นฉบับ ก.ค. 2026 รันไม่ได้ ใช้เป็นต้นแบบ logic
+├── widgets/     gold-dashboard.jsx = การ์ดที่ใช้จริง (รวม 3 การ์ดเดิม)
+│                cme-putcall.jsx / cme-ticker.jsx / gold-update.jsx = สามตัวเดิม เลิกใช้
+├── web/         หน้าเว็บของ dashboard (build.js + dist/ + vendor/ ไม่พึ่ง CDN)
 ├── indicator/   oi_block.pine — ฝั่ง TradingView ที่กิน /api/clip
-├── mobile/      termux/ — สคริปต์บน Android (จะเปลี่ยนมาดึงผ่าน API แทนการ scrape เอง)
+├── mobile/      termux/ — สคริปต์บน Android แบบ standalone (ไม่พึ่ง API)
+├── research/    backtest ของกรอบ SD — ที่มาของกฎ fade 2σ/3σ SL 25$
+├── legacy/      โค้ดยุค QuikStrike + รุ่นแรกสุด เก็บไว้อ่าน ห้ามรัน
 ├── docs/        pipeline-notes.md (บันทึกกลไกทั้งหมด), INTRADAY-TICKER-EXPLAINED.md
-└── deploy/      launchd plist / Dockerfile
+└── deploy/      launchd plist + `install.sh widgets` สำหรับ copy widget ขึ้น Übersicht
 ```
 
 ## ต้นทาง / ปลายทาง

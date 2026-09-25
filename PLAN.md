@@ -329,11 +329,20 @@ weekly ที่จับได้ช่วงเช้าหายไป ถู
 - ~~ย้าย `weather_fetcher.py` + `rain_nowcast.py` เข้า `weatherhub/service/`~~
   ✅ ทำไปก่อนแล้ว 21 ก.ย. เพราะอยากปิด cron ให้หมดในวันเดียวกับที่ย้าย gold
   (daemon `com.apphub.weatherhub` งาน radar + nowcast ทุก 5 นาที `align=True`)
-  **ที่เหลือของเฟส 4 คือ API + พิกัดจากผู้เรียก ยังไม่ได้ทำ**
-- `/api/state?lat=&lon=` — ไม่ส่งมาใช้ default, cache ต่อช่องกริด ~0.05°
-  (กันยิง upstream ซ้ำ และไม่เก็บพิกัดตรงๆ ของผู้ใช้)
-- เรดาร์ผูกกับพื้นที่: อยู่นอก bbox กรุงเทพฯ = ไม่มี layer เรดาร์ ส่งเฉพาะค่ารายจุด
-- `weatherhub/deploy/Dockerfile` — เผื่อขึ้น cloud ปรับผ่าน env
+- ✅ **API ฝั่ง server (25 ก.ย. 26)** `weatherhub/service/api.py` พอร์ต 8788
+  `/api/state?lat=&lon=`, `/api/radar` (ภาพ jpeg ตรงๆ), `/api/health`, `/`
+  - พิกัดมาจาก location service ของอุปกรณ์ที่เรียก ปัดเป็นกริด 0.05° ก่อนทำอะไรทั้งนั้น
+    ตอบกลับเป็นค่าที่ปัดแล้ว ไม่ log / ไม่ส่งมา = `weather.default` ใน config.json หรือ Office
+  - **ค่ารายจุดมาจากเรดาร์อย่างเดียว** (ผู้ใช้เลือก: ไม่เพิ่มแหล่งใหม่ และไม่เพิ่มรอบโหลด
+    loop GIF -- ยังโหลดเฉพาะตอนเช็ค 16:xx): ตำแหน่งบนภาพเป็น % (วาง marker ได้เลย),
+    ระยะ/ทิศจากหนองจอก, ETA ฝนหนักจากรอบเช็คล่าสุด (`nowcast.age` บอกว่าเก่าแค่ไหน)
+  - rain_nowcast เขียน `/tmp/weather_nowcast.json` (จุดฝนหนัก + motion) ทุกครั้งที่วิเคราะห์
+    API คิด ETA ของพิกัดไหนก็ได้จากไฟล์นี้ -> ไม่ยิง upstream (กฎข้อ API อ่านอย่างเดียว)
+  - นอกวงเรดาร์ 120 กม. = `in_coverage:false`, `img_pct` / `nowcast` เป็น null
+  - `FileCache` ย้ายจาก goldhub/api.py ไปอยู่ `common/hub/filecache.py` ใช้ร่วมกัน
+- ⬜ ฝั่ง client: widget/หน้าเว็บส่งพิกัดของเครื่องมา แล้ววาง marker จาก `img_pct`
+  (ตอนนี้ radar-weather.jsx ยัง `cat /tmp/weather_meta.json` + จุด Office/Home ตายตัว)
+- ⬜ `weatherhub/deploy/Dockerfile` — เผื่อขึ้น cloud ปรับผ่าน env
   `APPHUB_PORT` / `APPHUB_DATA` / `APPHUB_TOKEN`
 
 **เสร็จเมื่อ** มือถือกดปุ่มเดียวได้ clip ผ่าน VPN และ weatherhub ตอบตามพิกัดที่ส่งมา
@@ -344,7 +353,9 @@ weekly ที่จับได้ช่วงเช้าหายไป ถู
 
 ## เฟส 5 — เก็บกวาด
 
-- ลบ cron ทั้งสามบรรทัด (หลังจากทุกอย่างอยู่ใน launchd แล้ว)
+- ✅ **ลบ cron ทั้งสามบรรทัดแล้ว (25 ก.ย. 26)** — `crontab -r` เพราะเหลือแต่ comment ที่ชี้ไป
+  `my-cronjob` ซึ่งเลิกใช้แล้ว (ถอยกลับไม่ได้จริงอยู่ดี) daemon เดินมา 4 วันไม่มีปัญหา
+  ตอนนี้ `crontab -l` = "no crontab"
 - ✅ **รวมทุกโฟลเดอร์เข้า apphub (25 ก.ย. 26)** — แทนข้อ "ใส่ README ชี้มา apphub" เดิม
   เพราะผู้ใช้เลิกใช้ `cme_scraping` / `mac_widget` / `tdw_indi` / `my-cronjob` ทั้งหมด
   - ตรวจไฟล์ที่ทับกันก่อน: fetcher 4 ตัวกับ widget เหมือน apphub ทุก byte ส่วน
@@ -510,4 +521,4 @@ tail -f ~/Library/Logs/apphub/goldhub.log
 ทุกงานเดินด้วย launchd สองตัว: `com.apphub.goldhub` (cme รายชั่วโมง + gold ทุก 5 วิ)
 และ `com.apphub.weatherhub` (radar + nowcast ทุก 5 นาที)
 
-ค่อยลบ comment ทิ้งตอนเฟส 5 หลังปล่อยให้เดินสัก 2-3 วัน
+ค่อยลบ comment ทิ้งตอนเฟส 5 หลังปล่อยให้เดินสัก 2-3 วัน — ✅ ลบแล้ว 25 ก.ย. (ดูเฟส 5)

@@ -3,8 +3,7 @@
 แยก service กับ goldhub คนละ process คนละ plist: งานคนละเรื่อง แหล่งข้อมูลคนละเจ้า
 พังฝั่งหนึ่งอีกฝั่งต้องไม่สะเทือน (และตอนขึ้น cloud จะแยก container ได้เลย)
 
-เฟสนี้ยัง "เปลี่ยนแค่ตัวขับเคลื่อน": ยังเป็นพิกัดตายตัวของหนองจอก ยังไม่มี API
-เรื่องรับ lat/lon จากเครื่องที่เรียก อยู่เฟส 4
+API อ่านอย่างเดียวที่พอร์ต 8788 (เฟส 4, 25 ก.ย.) รับ lat/lon จากเครื่องที่เรียก ดู api.py
 
 `align=True` สำคัญกับงานคู่นี้: rain_nowcast ตัดสินใจเฉพาะ 16:00/16:15/16:30/16:45
 (รับความคลาดเคลื่อนได้ 2 นาที) ถ้านับคาบต่อจากรอบที่แล้วแบบธรรมดา เวลาจะเลื่อนสะสม
@@ -18,6 +17,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.dirname(os.path.dirname(HERE)))
 
+import api  # noqa: E402
 import rain_nowcast  # noqa: E402
 import weather_fetcher  # noqa: E402
 from common.hub import (Health, Job, Scheduler, Store, err, holder_pid,  # noqa: E402
@@ -67,6 +67,7 @@ def main():
         err("มี weatherhub ตัวอื่นรันอยู่แล้ว (pid {}) — ออก", holder_pid(lockfile))
         sys.exit(0)
     log("weatherhub start (pid {}) data={}", os.getpid(), store.root)
+    api.build(health).start()
     Scheduler(health).add(
         Job("radar", job_radar, RADAR_INTERVAL, timeout=RADAR_TIMEOUT, align=True),
         Job("nowcast", job_nowcast, RADAR_INTERVAL, timeout=RADAR_TIMEOUT, align=True),

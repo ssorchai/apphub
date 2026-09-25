@@ -1,0 +1,150 @@
+"""API ของ weatherhub (พอร์ต 8788) — อ่านจากไฟล์ที่งาน radar/nowcast เขียนไว้แล้วเท่านั้น
+
+พิกัดมาจากอุปกรณ์ที่เรียก (location service ของ Mac/มือถือ): `/api/state?lat=&lon=`
+  - ปัดเป็นกริด GRID องศา (~5 กม.) ก่อนทำอะไรทั้งนั้น ตอบกลับเป็นค่าที่ปัดแล้ว และไม่ log พิกัด
+  - ไม่ส่งมา = ใช้ `weather.default` ใน config.json ([lat, lon]) ถ้าไม่ตั้ง = Office
+  - ค่ารายจุดคิดจากเรดาร์ที่มีอยู่แล้วล้วนๆ (ผู้ใช้เลือก 25 ก.ย. 26 ไม่เพิ่มแหล่งใหม่
+    และไม่เพิ่มรอบโหลด loop GIF): ตำแหน่งบนภาพ, ระยะ/ทิศจากสถานี และ ETA ฝนหนัก
+    จากรอบเช็ค nowcast ล่าสุด (16:00-16:45 เท่านั้น -- ดู `nowcast.age` ก่อนเชื่อ)
+  - นอกวงเรดาร์ (> RADAR_RANGE_KM จากหนองจอก) = ไม่มีค่าเรดาร์ของจุดนั้น
+
+schema_version: เพิ่ม field ได้โดยไม่ต้องขยับ / เปลี่ยนความหมายหรือลบ field = ขยับเลข
+"""
+import base64
+import json
+import math
+import threading
+import time
+
+import rain_nowcast as rn
+import weather_fetcher
+from common.hub import JSON, TEXT, Api, FileCache, config, json_body
+
+SCHEMA_VERSION = 1
+PORT = 8788
+GRID = 0.05                    # องศา -- ช่องละ ~5.5 กม. กันเก็บพิกัดตรงๆ
+IMG_W, IMG_H = 965, 800        # ภาพเรดาร์ BMA (ภาพนิ่งกับ loop เรขาคณิตเดียวกัน)
+RADAR_RANGE_KM = 120.0         # วงนอกสุดของภาพ
+DEFAULT_LATLON = rn.LOCATIONS["Office"]
+
+
+def _radar(txt):
+    m = json.loads(txt)
+    m["img"] = base64.b64decode(m.pop("img_base64", "") or b"")
+    return m
+
+
+def _nowcast(txt):
+    n = json.loads(txt)
+    n["heavy"] = {tuple(p) for p in n.get("heavy") or ()}
+    return n
+
+
+radar = FileCache(weather_fetcher.JSON_PATH, _radar)
+nowcast = FileCache(rn.NOWCAST_PATH, _nowcast)
+
+# ETA ต่อช่องกริด: คิดใหม่เฉพาะตอน snapshot ของ nowcast เปลี่ยน
+_eta_cache = {}
+_eta_lock = threading.Lock()
+
+
+def snap(v):
+    return round(round(v / GRID) * GRID, 4)
+
+
+def parse_point(query, default):
+    """คืน (lat, lon, is_default) หรือ raise ValueError ถ้าส่งมาไม่ครบ/ผิดรูป"""
+    lat, lon = (query.get("lat") or [""])[0], (query.get("lon") or [""])[0]
+    if not lat and not lon:
+        return snap(default[0]), snap(default[1]), True
+    try:
+        la, lo = float(lat), float(lon)
+    except ValueError:
+        raise ValueError("lat/lon ต้องเป็นตัวเลขทั้งคู่")
+    if not (-90 <= la <= 90 and -180 <= lo <= 180) or math.isnan(la) or math.isnan(lo):
+        raise ValueError("lat/lon อยู่นอกช่วง")
+    return snap(la), snap(lo), False
+
+
+def geometry(lat, lon):
+    """ตำแหน่งของจุดเทียบสถานีเรดาร์ + ตำแหน่งบนภาพเป็น % (ใช้วาง marker ได้ตรงๆ)"""
+    r_lat, r_lon = rn.RADAR_LATLON
+    dn = (lat - r_lat) * 110.9
+    de = (lon - r_lon) * 111.32 * math.cos(math.radians(r_lat))
+    dist = math.hypot(dn, de)
+    x = rn.CENTER_PX[0] + de / rn.KM_PER_PX
+    y = rn.CENTER_PX[1] - dn / rn.KM_PER_PX
+    covered = dist <= RADAR_RANGE_KM and 0 <= x < IMG_W and 0 <= y < IMG_H
+    return {
+        "in_coverage": covered,
+        "distance_km": round(dist, 1),
+        "bearing_deg": round((math.degrees(math.atan2(de, dn)) + 360) % 360),
+        "img_pct": {"left": round(x / IMG_W * 100, 2), "top": round(y / IMG_H * 100, 2)} if covered else None,
+    }
+
+
+def point_nowcast(lat, lon, covered):
+    n, mtime = nowcast.get()
+    if n is None or not covered:           # นอกวงเรดาร์ = ภาพนี้บอกอะไรเกี่ยวกับจุดนั้นไม่ได้
+        return None
+    out = {"ts": n.get("ts"), "age": _age(n), "radius_km": rn.RADIUS_KM,
+           "lookahead_min": rn.LOOKAHEAD_MIN, "from_dir": n.get("from_dir"),
+           "speed_kmh": n.get("speed_kmh"), "eta_min": None}
+    key = (lat, lon)
+    with _eta_lock:
+        hit = _eta_cache.get(key)
+        if hit is None or hit[0] != mtime:
+            if len(_eta_cache) > 512:
+                _eta_cache.clear()
+            v = tuple(n["motion"]) if n.get("motion") else None
+            hit = (mtime, rn.eta_at(n["heavy"], v, lat, lon))
+            _eta_cache[key] = hit
+    out["eta_min"] = hit[1]        # 0 = ตกในรัศมีแล้ว / None = ไม่ถึงใน lookahead
+    return out
+
+
+def _age(v):
+    ts = (v or {}).get("ts")
+    return round(time.time() - ts) if isinstance(ts, (int, float)) else None
+
+
+def build(health):
+    cfg = config.load()
+    default = tuple((cfg.get("weather") or {}).get("default") or DEFAULT_LATLON)
+
+    def r_state(query):
+        try:
+            lat, lon, is_default = parse_point(query, default)
+        except ValueError as e:
+            return 400, JSON, json_body({"error": str(e)})
+        m, _ = radar.get()
+        geo = geometry(lat, lon)
+        radar_obj = None
+        if m is not None:
+            radar_obj = {k: m.get(k) for k in ("ts", "last_update", "source", "via", "mime")}
+            radar_obj["image"] = "/api/radar"
+        return 200, JSON, json_body({
+            "schema_version": SCHEMA_VERSION,
+            "service": "weatherhub",
+            "ts": round(time.time(), 3),
+            "age": {"radar": _age(m)},
+            "point": dict({"lat": lat, "lon": lon, "default": is_default, "grid_deg": GRID}, **geo),
+            "radar": radar_obj,
+            "nowcast": point_nowcast(lat, lon, geo["in_coverage"]),
+        })
+
+    def r_radar(query):
+        m, _ = radar.get()
+        if m is None or not m.get("img"):
+            return 503, TEXT, "ยังไม่มีภาพเรดาร์ (รอรอบ 5 นาทีแรก)\n"
+        return 200, m.get("mime") or "image/png", m["img"]
+
+    api = Api("weatherhub", PORT, token=cfg.get("token"),
+              extra_binds=cfg.get("bind"), extra_hosts=cfg.get("hosts"))
+    api.route("/api/state", r_state)
+    api.route("/api/radar", r_radar)
+    api.route("/api/health", lambda q: (200, JSON, json_body(health.snapshot())))
+    api.route("/", lambda q: (200, JSON, json_body({"service": "weatherhub",
+                                                     "schema_version": SCHEMA_VERSION,
+                                                     "routes": sorted(api.routes)})))
+    return api

@@ -36,7 +36,7 @@ fi
 if [ "$1" = "uninstall" ]; then
   launchctl bootout "gui/$UID/$LABEL" 2>/dev/null || launchctl unload "$PLIST" 2>/dev/null || true
   rm -f "$PLIST"
-  echo "ถอด $LABEL แล้ว — อย่าลืม uncomment บรรทัด cme ใน crontab ถ้าจะกลับไปใช้ cron"
+  echo "ถอด $LABEL แล้ว (cron เดิมลบไปแล้ว 25 ก.ย. 26 -- ไม่มีทางถอยไป cron อีก)"
   echo "widget ยังอยู่บนจอ (ถอย daemon แล้ว widget อ่านไฟล์ /tmp ต่อได้เอง)"
   exit 0
 fi

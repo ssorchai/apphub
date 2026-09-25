@@ -21,6 +21,9 @@ from io import BytesIO
 from PIL import Image, ImageSequence
 
 STATE_PATH = "/tmp/weather_notify_state.json"  # ครั้งเดียวต่อวัน
+# ผลวิเคราะห์ของรอบเช็คล่าสุด (จุดฝนหนัก + motion) -- API ของ weatherhub ใช้คิด ETA
+# ให้พิกัดไหนก็ได้โดยไม่ต้องโหลดภาพเอง (กฎ: API ห้ามยิง upstream)
+NOWCAST_PATH = "/tmp/weather_nowcast.json"
 HEADERS = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}
 
 # แหล่ง loop GIF: เว็บ กทม. (ต้นทางจริง ต้องส่ง Referer) ก่อน แล้ว fallback TMD (mirror)
@@ -115,22 +118,41 @@ def describe_motion(v):
     return THAI_DIRS[int((bearing + 22.5) // 45) % 8], speed_kmh
 
 
+def eta_at(heavy_pts, v, lat, lon):
+    """อีกกี่นาทีฝนหนักจะเข้ารัศมี RADIUS_KM ของพิกัดนี้ (0 = ตกในรัศมีแล้ว, None = ไม่ถึงใน LOOKAHEAD)"""
+    r = RADIUS_KM / KM_PER_PX / DS
+    cx, cy = latlon_to_ds_px(lat, lon)
+    if any((x - cx) ** 2 + (y - cy) ** 2 <= r * r for (x, y) in heavy_pts):
+        return 0
+    if v:
+        for t in range(1, LOOKAHEAD_MIN // FRAME_MINUTES + 1):
+            ox, oy = v[0] * t, v[1] * t
+            if any((x + ox - cx) ** 2 + (y + oy - cy) ** 2 <= r * r for (x, y) in heavy_pts):
+                return t * FRAME_MINUTES
+    return None
+
+
 def check_locations(heavy_pts, v):
     """คืน dict {ชื่อจุด: อีกกี่นาที (0 = ตกในรัศมีแล้ว)}"""
     results = {}
-    r = RADIUS_KM / KM_PER_PX / DS
     for name, (lat, lon) in LOCATIONS.items():
-        cx, cy = latlon_to_ds_px(lat, lon)
-        if any((x - cx) ** 2 + (y - cy) ** 2 <= r * r for (x, y) in heavy_pts):
-            results[name] = 0
-            continue
-        if v:
-            for t in range(1, LOOKAHEAD_MIN // FRAME_MINUTES + 1):
-                ox, oy = v[0] * t, v[1] * t
-                if any((x + ox - cx) ** 2 + (y + oy - cy) ** 2 <= r * r for (x, y) in heavy_pts):
-                    results[name] = t * FRAME_MINUTES
-                    break
+        eta = eta_at(heavy_pts, v, lat, lon)
+        if eta is not None:
+            results[name] = eta
     return results
+
+
+def save_snapshot(heavy_pts, all_count, v):
+    """เก็บผลวิเคราะห์รอบนี้ไว้ให้ API -- จุดเป็นพิกัด downsampled (~ไม่กี่พันจุด ไฟล์เล็ก)"""
+    snap = {"ts": int(datetime.now().timestamp()), "rain_px": all_count,
+            "heavy": sorted(heavy_pts), "motion": list(v) if v else None}
+    if v:
+        direction, speed = describe_motion(v)
+        snap["from_dir"], snap["speed_kmh"] = direction, round(speed, 1)
+    temp = NOWCAST_PATH + ".tmp"
+    with open(temp, "w") as f:
+        json.dump(snap, f, separators=(",", ":"))
+    os.replace(temp, NOWCAST_PATH)
 
 
 def build_message(results, v):
@@ -217,6 +239,10 @@ def run_check(force=False, dry_run=False):
     old_all, _ = rain_points(frames[-1 - back])
     new_all, new_heavy = rain_points(frames[-1])
     v = motion_vector(old_all, new_all, steps=back)
+    try:
+        save_snapshot(new_heavy, len(new_all), v)
+    except Exception as e:                        # ไฟล์ให้ API พัง ไม่ควรขวางการแจ้งเตือน
+        print("⚠️ nowcast snapshot not saved: {}".format(e))
     results = check_locations(new_heavy, v)
 
     print("🌧 nowcast: rain_px={} heavy_px={} motion={} results={}".format(

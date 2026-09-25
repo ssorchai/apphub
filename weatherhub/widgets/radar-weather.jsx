@@ -54,13 +54,17 @@ const load = (dispatch) => {
   const viaFile = WEB ? () => dispatch({ type: 'OFFLINE' }) : () => run(FILE_CMD).then((out) => {
     try { dispatch({ type: 'DATA', meta: JSON.parse(out), state: null, src: 'file' }); } catch (e) {}
   });
-  return locate()
-    .then((l) => fetchJson(API + '/api/state' + (l ? `?lat=${l.lat}&lon=${l.lon}` : ''))
-      .then((s) => {
-        if (!s.radar) throw new Error('no radar yet');
-        dispatch({ type: 'DATA', meta: s.radar, state: s, src: 'api', located: !!l });
-      }))
-    .catch(viaFile);
+  const fetchState = (l) => fetchJson(API + '/api/state' + (l ? `?lat=${l.lat}&lon=${l.lon}` : ''))
+    .then((s) => {
+      if (!s.radar) throw new Error('no radar yet');
+      dispatch({ type: 'DATA', meta: s.radar, state: s, src: 'api', located: !!l });
+    });
+  // ไม่รอพิกัดก่อนโหลด: ขอสิทธิ์ Location ครั้งแรก (ป้ายของเบราว์เซอร์/macOS ค้างรอคนกด)
+  // เคยทำให้ทั้งการ์ดว่างเปล่าจนหมด LOC_TIMEOUT -- ยิงด้วยพิกัดที่มีอยู่ก่อน ได้พิกัดใหม่ค่อยยิงซ้ำ
+  const known = loc;
+  const first = fetchState(known).catch(viaFile);
+  locate().then((l) => { if (l && l !== known) fetchState(l).catch(() => {}); });
+  return first;
 };
 
 export const command = load;
@@ -286,7 +290,15 @@ const altDrag = (e) => {
 };
 
 export const render = ({ meta, state, src, located, show, theme }, dispatch) => {
-  if (!meta) return null;
+  if (!meta) {
+    // เว็บ: บอกว่ากำลังโหลด (หรือเรียก API ไม่ได้) แทนหน้าว่าง / desktop: ยังไม่วาดการ์ด
+    if (!WEB) return null;
+    return (
+      <div style={{ padding: '40px', color: macos.tertiary, fontFamily: macos.font, fontSize: '13px' }}>
+        {src === 'offline' ? 'เรียก API ของ weatherhub ไม่ได้ -- daemon รันอยู่ไหม?' : 'กำลังโหลดเรดาร์…'}
+      </div>
+    );
+  }
 
   // ภาพเก่ากว่า 20 นาที = เตือนว่าค้าง
   const stale = meta.ts && Date.now() / 1000 - meta.ts > 1200;

@@ -79,7 +79,8 @@ const load = dispatch => {
       });
     } catch (e) {}
   });
-  return locate().then(l => fetchJson(API + '/api/state' + (l ? `?lat=${l.lat}&lon=${l.lon}` : '')).then(s => {
+
+  const fetchState = l => fetchJson(API + '/api/state' + (l ? `?lat=${l.lat}&lon=${l.lon}` : '')).then(s => {
     if (!s.radar) throw new Error('no radar yet');
     dispatch({
       type: 'DATA',
@@ -88,7 +89,16 @@ const load = dispatch => {
       src: 'api',
       located: !!l
     });
-  })).catch(viaFile);
+  }); // ไม่รอพิกัดก่อนโหลด: ขอสิทธิ์ Location ครั้งแรก (ป้ายของเบราว์เซอร์/macOS ค้างรอคนกด)
+  // เคยทำให้ทั้งการ์ดว่างเปล่าจนหมด LOC_TIMEOUT -- ยิงด้วยพิกัดที่มีอยู่ก่อน ได้พิกัดใหม่ค่อยยิงซ้ำ
+
+
+  const known = loc;
+  const first = fetchState(known).catch(viaFile);
+  locate().then(l => {
+    if (l && l !== known) fetchState(l).catch(() => {});
+  });
+  return first;
 };
 
 const command = load;
@@ -512,7 +522,19 @@ const render = ({
   show,
   theme
 }, dispatch) => {
-  if (!meta) return null; // ภาพเก่ากว่า 20 นาที = เตือนว่าค้าง
+  if (!meta) {
+    // เว็บ: บอกว่ากำลังโหลด (หรือเรียก API ไม่ได้) แทนหน้าว่าง / desktop: ยังไม่วาดการ์ด
+    if (!WEB) return null;
+    return /*#__PURE__*/React.createElement("div", {
+      style: {
+        padding: '40px',
+        color: macos.tertiary,
+        fontFamily: macos.font,
+        fontSize: '13px'
+      }
+    }, src === 'offline' ? 'เรียก API ของ weatherhub ไม่ได้ -- daemon รันอยู่ไหม?' : 'กำลังโหลดเรดาร์…');
+  } // ภาพเก่ากว่า 20 นาที = เตือนว่าค้าง
+
 
   const stale = meta.ts && Date.now() / 1000 - meta.ts > 1200; // โหมด API: ภาพมาจาก /api/radar (ใส่ ts กัน cache) / โหมดไฟล์: base64 ในไฟล์เหมือนเดิม
 

@@ -58,6 +58,26 @@ def live_future(und_sym):
     return None, None
 
 
+def atm_iv(rows, F, span=5, tol=0.20):
+    """IV ที่ ATM แบบทนโควตเสีย -- ของเดิม interpolate ที่ F เป๊ะๆ ถ้าสไตรค์ที่ติด ATM มีโควตกว้าง
+    ผิดปกติ ค่าจะพุ่งทันที (25 ก.ย. 26: สไตรค์ 4320 ให้ IV 36 ขณะที่เพื่อนบ้านให้ 24.6-26.4
+    กราฟเลยขึ้น 41 ทั้งที่ CME บอก 25.6)
+
+    วิธี: เอา span สไตรค์ที่ใกล้ F สุด หา median เป็นหลักยึด แล้วทิ้งตัวที่ห่างเกิน tol
+    ก่อนค่อย interpolate -- เหลือน้อยกว่า 2 ตัวก็ใช้ median ไปเลย"""
+    if not rows or not F:
+        return None
+    near = sorted(rows, key=lambda r: abs(r[0] - F))[:span]
+    if not near:
+        return None
+    vals = sorted(v for _, v in near)
+    med = vals[len(vals) // 2]
+    keep = sorted(r for r in near if abs(r[1] - med) <= tol * med)
+    if len(keep) < 2:
+        return med
+    return C.iv_at(keep, F) or med
+
+
 def greeks(iv_rows, F, dte, K):
     """(delta ของฝั่งที่ยัง OTM, p_touch ≈ 2 x delta) จาก smile ของ bid/ask
     smile ไม่พอ / ใกล้หมดอายุเกินไป -> (None, None) เหมือนเส้น delta ในกราฟ"""
@@ -124,7 +144,7 @@ def update(snap, store):
     # 10-15 นาที อ่านที่ราคาสด = เอาสองช่วงเวลามาปนกัน (22 ก.ย. 26 11:02 ห่างกัน 3.6 จุด)
     # ส่วน delta/dist ข้างบนยังใช้ราคาสดตั้งใจ: อยากรู้ว่า strike ห่างจากราคา "ตอนนี้" แค่ไหน
     F_iv = snap["F"]
-    iv = C.iv_at(iv_rows, F_iv) if iv_rows and F_iv else None
+    iv = atm_iv(iv_rows, F_iv)
     iv = round(iv, 2) if iv else None
     iv_chg = snap.get("iv_settle_chg")
     if iv is not None and (not iv_hist or iv_hist[-1]["iv"] != iv or ts - iv_hist[-1]["ts"] >= 240):

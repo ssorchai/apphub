@@ -833,24 +833,24 @@ const Card = ({
       gap: '8px'
     },
     title: meta.source
-  }, MARKERS.map(m => /*#__PURE__*/React.createElement(ToggleButton, {
-    m: m,
-    on: show[m.id],
+  }, /*#__PURE__*/React.createElement(ToggleButton, {
+    m: ME,
+    on: show.me,
     dispatch: dispatch,
-    key: m.id
-  })), /*#__PURE__*/React.createElement("div", {
+    note: show.me ? meNote : null
+  }), /*#__PURE__*/React.createElement("div", {
     style: {
       width: '1px',
       height: '14px',
       background: wash(0.18),
       margin: '0 2px'
     }
-  }), /*#__PURE__*/React.createElement(ToggleButton, {
-    m: ME,
-    on: show.me,
+  }), MARKERS.map(m => /*#__PURE__*/React.createElement(ToggleButton, {
+    m: m,
+    on: show[m.id],
     dispatch: dispatch,
-    note: show.me ? meNote : null
-  })), /*#__PURE__*/React.createElement("span", {
+    key: m.id
+  }))), /*#__PURE__*/React.createElement("span", {
     style: {
       fontSize: '11px',
       color: stale ? macos.orange : macos.tertiary,

@@ -466,9 +466,9 @@ const Card = ({ meta, state, src, located, locErr, show, dispatch }) => {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
         {/* หัวการ์ด = แถวปุ่มเปิด/ปิดจุด (แทนชื่อแหล่ง "BMA Radar" เดิม -- ผู้ใช้ขอ 25 ก.ย.) */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }} title={meta.source}>
-          {MARKERS.map((m) => <ToggleButton m={m} on={show[m.id]} dispatch={dispatch} key={m.id} />)}
-          <div style={{ width: '1px', height: '14px', background: wash(0.18), margin: '0 2px' }} />
           <ToggleButton m={ME} on={show.me} dispatch={dispatch} note={show.me ? meNote : null} />
+          <div style={{ width: '1px', height: '14px', background: wash(0.18), margin: '0 2px' }} />
+          {MARKERS.map((m) => <ToggleButton m={m} on={show[m.id]} dispatch={dispatch} key={m.id} />)}
         </div>
         <span style={{ fontSize: '11px', color: stale ? macos.orange : macos.tertiary, fontWeight: stale ? '700' : '400' }}>
           {stale ? '● ' : ''}{meta.observed_at ? hhmm(meta.observed_at) : meta.last_update}{src === 'file' ? ' · file' : ''}

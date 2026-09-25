@@ -251,9 +251,12 @@ export const render = ({ meta, state, src, located, show }, dispatch) => {
   return (
     <div style={container} onClick={handleClick} onMouseDown={altDrag}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
-        <span style={{ fontSize: '11px', color: macos.secondary, fontWeight: '600', letterSpacing: '0.5px', textTransform: 'uppercase' }}>
-          {meta.source}
-        </span>
+        {/* หัวการ์ด = แถวปุ่มเปิด/ปิดจุด (แทนชื่อแหล่ง "BMA Radar" เดิม -- ผู้ใช้ขอ 25 ก.ย.) */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }} title={meta.source}>
+          {MARKERS.map((m) => <ToggleButton m={m} on={show[m.id]} dispatch={dispatch} key={m.id} />)}
+          <div style={{ width: '1px', height: '14px', background: 'rgba(255,255,255,0.18)', margin: '0 2px' }} />
+          <ToggleButton m={ME} on={show.me} dispatch={dispatch} note={show.me ? meNote : null} />
+        </div>
         <span style={{ fontSize: '11px', color: stale ? macos.orange : macos.tertiary, fontWeight: stale ? '700' : '400' }}>
           {stale ? '● ' : ''}{meta.last_update}{src === 'file' ? ' · file' : ''}
         </span>
@@ -263,12 +266,6 @@ export const render = ({ meta, state, src, located, show }, dispatch) => {
         <img src={imgSrc} style={{ width: '100%', display: 'block' }} />
         {MARKERS.filter((m) => show[m.id]).map((m) => <Marker m={m} key={m.id} />)}
         {me && show.me && <MeMarker pct={me} />}
-      </div>
-
-      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '10px' }}>
-        {MARKERS.map((m) => <ToggleButton m={m} on={show[m.id]} dispatch={dispatch} key={m.id} />)}
-        <div style={{ width: '1px', height: '14px', background: 'rgba(255,255,255,0.18)', margin: '0 2px' }} />
-        <ToggleButton m={ME} on={show.me} dispatch={dispatch} note={show.me ? meNote : null} />
       </div>
 
       {rain && (

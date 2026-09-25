@@ -265,12 +265,12 @@ export const updateState = (event, prev) => {
 // (เรดาร์หนองจอก 13.8348127,100.8463349 = px(483,400), สเกล 0.3008 กม./px)
 // (คำนวณด้วยสูตรเดียวกับ geometry() ใน weatherhub/service/api.py)
 const MARKERS = [
-  { id: 'office', icon: 'office', n: 1, label: 'Forth', lat: 13.7733, lon: 100.5426, left: '38.74%', top: '52.84%', color: '#64d2ff', ink: '#1a86b8' },  // 13.7733, 100.5426
+  { id: 'office', icon: 'office', n: 1, label: 'FORTH', lat: 13.7733, lon: 100.5426, left: '38.74%', top: '52.84%', color: '#64d2ff', ink: '#1a86b8' },  // 13.7733, 100.5426
   { id: 'office2', icon: 'office', n: 2, label: 'SCG', lat: 13.8062486, lon: 100.5352885, left: '38.47%', top: '51.32%', color: '#bf8cff', ink: '#7c4dd1' }, // 13.8062486, 100.5352885
   { id: 'home', icon: 'home', n: 1, label: "Loon's Home", lat: 13.8873269, lon: 100.6026284, left: '40.98%', top: '47.58%', color: '#ffb340', ink: '#c2710a' },        // 13.8873269, 100.6026284
   { id: 'home2', icon: 'home', n: 2, label: "Pum's Home", lat: 13.873365, lon: 100.6494155, left: '42.72%', top: '48.22%', color: '#ff6b6b', ink: '#d03a3a' },       // 13.873365, 100.6494155
 ];
-const ME = { id: 'me', icon: 'me', label: 'ตำแหน่งเครื่องนี้', color: '#30d158', ink: '#1b8a3a' };
+const ME = { id: 'me', icon: 'me', label: 'My Location', color: '#30d158', ink: '#1b8a3a' };
 const CUSTOM = { id: 'custom', icon: 'pin', label: 'จุดที่กรอก', color: '#ff5fd2', ink: '#c2189b' };
 // สีของปุ่ม: ธีมสว่างใช้โทนเข้ม (`ink`) สีอ่อนเดิมจางบนพื้นครีม / จุดบนภาพเรดาร์ใช้ `color` เสมอ
 const btnColor = (m) => (macos.ink === LIGHT.ink && m.ink) || m.color;
@@ -858,16 +858,17 @@ const WebPage = ({ meta, state, src, located, locErr, show, theme, frames, basis
 
         <aside style={{ flex: '0 1 340px', minWidth: '280px' }}>
           <Panel title="สถานที่ · ฝน 1 ชม. ข้างหน้า">
-            {MARKERS.map((m) => (
-              <ForecastRow key={m.id} m={m} on={show[m.id]} dispatch={dispatch}
-                pending={!basis} fc={fcById && fcById[m.id] && fcById[m.id].forecast}
-                dist={myLL ? `ห่างจากเครื่องนี้ ${kmBetween(myLL, m).toFixed(1)} กม.` : null} />
-            ))}
+            {/* My Location อยู่บนสุด (ผู้ใช้ขอ 25 ก.ย.) */}
             <ForecastRow m={ME} on={show.me} dispatch={dispatch}
               pending={!basis}
               note={!(fcById && fcById.me) ? `${meNote || 'รอพิกัด…'} [${geoDiagText()}]` : null}
               fc={fcById && fcById.me && fcById.me.forecast}
               dist={point && !point.default ? `ห่างสถานีเรดาร์ ${point.distance_km} กม.` : null} />
+            {MARKERS.map((m) => (
+              <ForecastRow key={m.id} m={m} on={show[m.id]} dispatch={dispatch}
+                pending={!basis} fc={fcById && fcById[m.id] && fcById[m.id].forecast}
+                dist={myLL ? `ห่างจากเครื่องนี้ ${kmBetween(myLL, m).toFixed(1)} กม.` : null} />
+            ))}
             {custom && (
               <ForecastRow m={CUSTOM} on={show.custom} dispatch={dispatch}
                 pending={!(fcById && fcById.custom)}

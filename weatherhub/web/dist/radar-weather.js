@@ -447,7 +447,7 @@ const MARKERS = [{
   id: 'office',
   icon: 'office',
   n: 1,
-  label: 'Forth',
+  label: 'FORTH',
   lat: 13.7733,
   lon: 100.5426,
   left: '38.74%',
@@ -495,7 +495,7 @@ const MARKERS = [{
 const ME = {
   id: 'me',
   icon: 'me',
-  label: 'ตำแหน่งเครื่องนี้',
+  label: 'My Location',
   color: '#30d158',
   ink: '#1b8a3a'
 };
@@ -1638,15 +1638,7 @@ const WebPage = ({
     }
   }, /*#__PURE__*/React.createElement(Panel, {
     title: "\u0E2A\u0E16\u0E32\u0E19\u0E17\u0E35\u0E48 \xB7 \u0E1D\u0E19 1 \u0E0A\u0E21. \u0E02\u0E49\u0E32\u0E07\u0E2B\u0E19\u0E49\u0E32"
-  }, MARKERS.map(m => /*#__PURE__*/React.createElement(ForecastRow, {
-    key: m.id,
-    m: m,
-    on: show[m.id],
-    dispatch: dispatch,
-    pending: !basis,
-    fc: fcById && fcById[m.id] && fcById[m.id].forecast,
-    dist: myLL ? `ห่างจากเครื่องนี้ ${kmBetween(myLL, m).toFixed(1)} กม.` : null
-  })), /*#__PURE__*/React.createElement(ForecastRow, {
+  }, /*#__PURE__*/React.createElement(ForecastRow, {
     m: ME,
     on: show.me,
     dispatch: dispatch,
@@ -1654,7 +1646,15 @@ const WebPage = ({
     note: !(fcById && fcById.me) ? `${meNote || 'รอพิกัด…'} [${geoDiagText()}]` : null,
     fc: fcById && fcById.me && fcById.me.forecast,
     dist: point && !point.default ? `ห่างสถานีเรดาร์ ${point.distance_km} กม.` : null
-  }), custom && /*#__PURE__*/React.createElement(ForecastRow, {
+  }), MARKERS.map(m => /*#__PURE__*/React.createElement(ForecastRow, {
+    key: m.id,
+    m: m,
+    on: show[m.id],
+    dispatch: dispatch,
+    pending: !basis,
+    fc: fcById && fcById[m.id] && fcById[m.id].forecast,
+    dist: myLL ? `ห่างจากเครื่องนี้ ${kmBetween(myLL, m).toFixed(1)} กม.` : null
+  })), custom && /*#__PURE__*/React.createElement(ForecastRow, {
     m: CUSTOM,
     on: show.custom,
     dispatch: dispatch,

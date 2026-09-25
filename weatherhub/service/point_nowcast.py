@@ -185,10 +185,12 @@ def _offsets():
     return _OFFSETS
 
 
-def forecast(snap, lat, lon, now=None, use_trend=True, stale_min=STALE_MIN):
+def forecast(snap, lat, lon, now=None, use_trend=True, stale_min=STALE_MIN, features=False):
     """timeline ของจุดนี้: level ทุก STEP_MIN นาที (0 ไม่มี / 1 ฝน / 2 ฝนหนัก) นับจาก "ตอนนี้"
 
     ตำแหน่งของฝนที่เวลา t = mask ล่าสุดเลื่อนไป v*t -> จุด p มีฝนที่ t ถ้า mask มีฝนที่ p - v*t
+    features=True: แนบค่าดิบทุกช่อง (level ก่อนตัดด้วยแนวโน้ม, สัดส่วนฝนรอบๆ, ความชัน) ให้ verify เก็บไว้
+    จูน F_DRY/รัศมีย้อนหลังได้โดยไม่ต้องมีภาพ -- ช่องที่ advection แห้งอยู่แล้วไม่คิดแนวโน้ม (None)
     """
     now = now or time.time()
     obs = snap["ts"]                                  # เวลาในภาพ
@@ -198,6 +200,7 @@ def forecast(snap, lat, lon, now=None, use_trend=True, stale_min=STALE_MIN):
     offs = _offsets()
     lead0 = (now - obs) / 60.0                        # ภาพเก่าไปกี่นาทีแล้ว = ต้องฉายไปข้างหน้าเท่านี้ก่อน
     steps = []
+    raw, fs, ss = [], [], []
     trend_info = None
     for k in range(LOOKAHEAD_MIN // STEP_MIN + 1):
         lead = lead0 + k * STEP_MIN                    # นาทีนับจากเวลาภาพ
@@ -206,6 +209,8 @@ def forecast(snap, lat, lon, now=None, use_trend=True, stale_min=STALE_MIN):
         cx, cy = int(round(sx)), int(round(sy))
         cells = [(cx + dx, cy + dy) for dx, dy in offs]
         level = 2 if any(c in heavy for c in cells) else 1 if any(c in rain for c in cells) else 0
+        raw.append(level)
+        f_now = slope = None
         if level and use_trend:
             # กลุ่มฝนที่จะมาถึงจุดนี้ตอน lead: ตอนนี้อยู่ที่ (sx, sy) -- ถ้าแนวโน้มบอกว่าสลายแล้ว = แห้ง
             f_now, slope = trend(snap, sx, sy)
@@ -214,6 +219,8 @@ def forecast(snap, lat, lon, now=None, use_trend=True, stale_min=STALE_MIN):
                     trend_info = {"frac_now": round(f_now, 2), "per_10min": round(slope * 10, 3)}
                 if f_now + slope * lead < F_DRY:
                     level = 0
+        fs.append(None if f_now is None else round(f_now, 4))
+        ss.append(None if slope is None else round(slope, 5))
         steps.append(level)
 
     def first(pred, start=0):
@@ -236,9 +243,14 @@ def forecast(snap, lat, lon, now=None, use_trend=True, stale_min=STALE_MIN):
     start = None if raining else first(lambda lv: lv > 0)
     stop = first(lambda lv: lv == 0) if raining else (first(lambda lv: lv == 0, start) if start is not None else None)
     heavy_i = first(lambda lv: lv == 2)
-    return {
+    out = {
         "predictable": True, "t0": int(now), "raining_now": raining, "level_now": steps[0],
         "start_at": at(start), "start_min": None if start is None else start * STEP_MIN,
         "stop_at": at(stop), "stop_min": None if stop is None else stop * STEP_MIN,
         "heavy_at": at(heavy_i), "timeline": steps, "trend": trend_info,
     }
+    if features:
+        out["features"] = {"lead0": round(lead0, 2), "raw": raw}
+        if any(f is not None for f in fs):         # แห้งทั้งชั่วโมง = ไม่ต้องเก็บ (ประหยัดที่)
+            out["features"].update(f=fs, s=ss)
+    return out

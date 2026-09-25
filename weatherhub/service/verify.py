@@ -10,6 +10,12 @@
 
 stats() จับคู่ช่องทำนายกับ observed ที่เวลาเดียวกัน แยกตามระยะทายล่วงหน้า
 ตัดสินแค่ "ฝน / ไม่ฝน" (level > 0) -- ฝนหนักยังไม่วัด
+
+ข้อมูลไว้จูนโมเดล (ยังไม่จูน -- เก็บก่อน, ผู้ใช้ขอ 25 ก.ย.):
+  - ผลทาย trend ของ PLACES แนบ features (level ดิบ + สัดส่วนฝนรอบๆ + ความชันทุกช่อง) + via/motion
+  - GRID: จุดตัวอย่างทั่ว กทม. อีก 30 จุด ได้ข้อมูลเร็วกว่า 4 สถานที่ ~8 เท่า เก็บ model "raw"
+    อย่างเดียว (features ล้วน) -- trend/advect/persist คิดย้อนหลังจากมันได้หมดด้วย F_DRY ค่าไหนก็ได้
+    ไม่นับในตารางบนหน้าเว็บ (stats ดูแค่ PLACES)
 """
 import glob
 import json
@@ -28,6 +34,9 @@ PLACES = {
     "home": (13.8873269, 100.6026284),
     "home2": (13.873365, 100.6494155),
 }
+# กริด 0.1° ครอบ กทม.+ปริมณฑล (lat 13.6-14.0 x lon 100.35-100.85) -- ชื่อจุดมีพิกัดในตัว เปลี่ยนกริดทีหลังข้อมูลเก่าไม่ปน
+GRID = {"g{:.2f},{:.2f}".format(la, lo): (la, lo)
+        for la in (13.6, 13.7, 13.8, 13.9, 14.0) for lo in (100.35, 100.45, 100.55, 100.65, 100.75, 100.85)}
 FRAME_SEC = 300
 MATCH_TOL = 120                 # วินาที -- เฟรม OCR ตรงกริดพอดี เฟรม fallback (เวลาดึง - 6 นาที) คลาดได้
 LEAD_BUCKETS = [(0, 10), (15, 30), (35, 60)]   # นาทีนับจาก t0
@@ -49,20 +58,30 @@ def record(store, snap, now=None, via=None):
     stale_min = pn.stale_limit(via)
     obs = snap["ts"]
     t0 = obs + FRAME_SEC * max(0, math.ceil((now - obs) / FRAME_SEC))
+    fresh = (now - obs) / 60 <= stale_min      # ภาพเก่า ตัวทายจริงก็ไม่ทาย -- ไม่นับ
+    ctx = {"via": via, "motion": snap.get("motion"), "ref_ts": snap.get("ref_ts"), "f_dry": pn.F_DRY}
+    steps = pn.LOOKAHEAD_MIN // pn.STEP_MIN + 1
     n = 0
-    for place, (la, lo) in PLACES.items():
+    for place, (la, lo) in list(PLACES.items()) + list(GRID.items()):
         lv = _level_at(snap, la, lo)
         store.append_history("observed", {"ts": obs, "place": place, "level": lv})
-        if (now - obs) / 60 > stale_min:
-            continue                          # ภาพเก่า ตัวทายจริงก็ไม่ทาย -- ไม่นับ
-        steps = pn.LOOKAHEAD_MIN // pn.STEP_MIN + 1
-        store.append_history("forecast", {"made": int(now), "obs": obs, "t0": t0, "place": place,
-                                          "model": "persist", "timeline": [lv] * steps})
-        for model, use_trend in (("trend", True), ("advect", False)):
-            fc = pn.forecast(snap, la, lo, now=t0, use_trend=use_trend, stale_min=stale_min)
+        if not fresh:
+            continue
+        base = {"made": int(now), "obs": obs, "t0": t0, "place": place}
+        if place in GRID:
+            fc = pn.forecast(snap, la, lo, now=t0, stale_min=stale_min, features=True)
             if fc.get("predictable"):
-                store.append_history("forecast", {"made": int(now), "obs": obs, "t0": t0, "place": place,
-                                                  "model": model, "timeline": fc["timeline"]})
+                store.append_history("forecast", dict(base, model="raw", **ctx, features=fc["features"]))
+                n += 1
+            continue
+        store.append_history("forecast", dict(base, model="persist", timeline=[lv] * steps))
+        for model, use_trend in (("trend", True), ("advect", False)):
+            fc = pn.forecast(snap, la, lo, now=t0, use_trend=use_trend, stale_min=stale_min, features=use_trend)
+            if fc.get("predictable"):
+                rec = dict(base, model=model, timeline=fc["timeline"])
+                if use_trend:
+                    rec.update(ctx, features=fc["features"])
+                store.append_history("forecast", rec)
                 n += 1
     return n
 
@@ -103,7 +122,7 @@ def stats(store, days=7):
     res = {}
     first = last = None
     for fc in _read(store, "forecast", since):
-        if fc["made"] < since:
+        if fc["made"] < since or fc["place"] not in PLACES:
             continue
         m = res.setdefault(fc["model"], {"buckets": {"{}-{}".format(a, b): [0, 0, 0, 0] for a, b in LEAD_BUCKETS}})
         for k, lv in enumerate(fc["timeline"]):

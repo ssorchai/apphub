@@ -9,6 +9,8 @@ const FILE_CMD = 'cat /tmp/weather_meta.json';
 // พิกัดเครื่อง: Übersicht ต่อ navigator.geolocation เข้ากับ CoreLocation ของแอปเอง
 // (Resources/geolocation.js) ครั้งแรก macOS จะถามสิทธิ์ Location ของ Übersicht
 // ตัว shim ไม่เคยเรียก onError -> ต้องมี timeout เอง / ไม่ได้พิกัด = ไม่ส่ง lat/lon
+// ⚠️ native ของ Übersicht ส่งกลับเป็น { position: { coords }, address } ไม่ใช่ Position
+// มาตรฐาน (strings ในตัวแอป) -- อ่าน p.coords ตรงๆ = undefined แล้วหมดเวลาทุกรอบ
 // (API ใช้จุด default) และไม่วาดจุด "ฉัน" / เก็บพิกัดไว้ในหน่วยความจำเท่านั้น
 const LOC_TIMEOUT = 8000;
 const LOC_MAX_AGE = 10 * 60 * 1000;     // ขอพิกัดใหม่ทุก 10 นาที
@@ -23,7 +25,11 @@ const locate = () => {
   if (!geo) return Promise.resolve(loc);
   locPending = Promise.race([
     new Promise((res) => geo.getCurrentPosition(
-      (p) => res({ lat: p.coords.latitude, lon: p.coords.longitude, at: Date.now() }),
+      (p) => {
+        const c = (p && p.position && p.position.coords) || (p && p.coords);
+        res(c && isFinite(c.latitude) && isFinite(c.longitude)
+          ? { lat: c.latitude, lon: c.longitude, at: Date.now() } : null);
+      },
       () => res(null))),
     new Promise((res) => setTimeout(() => res(null), LOC_TIMEOUT)),
   ]).then((got) => { if (got) loc = got; locPending = null; return loc; });
@@ -40,27 +46,30 @@ const load = (dispatch) => {
     try { dispatch({ type: 'DATA', meta: JSON.parse(out), state: null, src: 'file' }); } catch (e) {}
   });
   return locate()
-    .then((l) => fetchJson(API + '/api/state' + (l ? `?lat=${l.lat}&lon=${l.lon}` : '')))
-    .then((s) => {
-      if (!s.radar) throw new Error('no radar yet');
-      dispatch({ type: 'DATA', meta: s.radar, state: s, src: 'api' });
-    })
+    .then((l) => fetchJson(API + '/api/state' + (l ? `?lat=${l.lat}&lon=${l.lon}` : ''))
+      .then((s) => {
+        if (!s.radar) throw new Error('no radar yet');
+        dispatch({ type: 'DATA', meta: s.radar, state: s, src: 'api', located: !!l });
+      }))
     .catch(viaFile);
 };
 
 export const command = load;
 export const refreshFrequency = 60000;
 
-// ปุ่มเปิด/ปิดจุด Office/Home -- จำไว้ใน localStorage ข้าม reboot
+// ปุ่มเปิด/ปิดจุด (Office/Home 1-2 + ตำแหน่งเครื่องนี้) -- จำไว้ใน localStorage ข้าม reboot
 const SHOW_KEY = 'radar-weather.markers';
+const SHOW_DEFAULT = { office: true, home: true, office2: true, home2: true, me: true };
 const savedShow = () => {
-  try { return { office: true, home: true, ...JSON.parse(localStorage.getItem(SHOW_KEY)) }; } catch (e) { return { office: true, home: true }; }
+  try { return { ...SHOW_DEFAULT, ...JSON.parse(localStorage.getItem(SHOW_KEY)) }; } catch (e) { return SHOW_DEFAULT; }
 };
 
-export const initialState = { meta: null, state: null, src: null, show: savedShow() };
+export const initialState = { meta: null, state: null, src: null, located: false, show: savedShow() };
 export const updateState = (event, prev) => {
   // command เป็นฟังก์ชัน Übersicht จะยิง UB/COMMAND_RAN เองแบบไม่มี output -- ไม่ใช้ event นั้นเลย
-  if (event.type === 'DATA') return { ...prev, meta: event.meta, state: event.state, src: event.src };
+  if (event.type === 'DATA') {
+    return { ...prev, meta: event.meta, state: event.state, src: event.src, located: !!event.located };
+  }
   if (event.type === 'TOGGLE') {
     const show = { ...prev.show, [event.id]: !prev.show[event.id] };
     try { localStorage.setItem(SHOW_KEY, JSON.stringify(show)); } catch (e) {}
@@ -89,10 +98,14 @@ const macos = {
 
 // ตำแหน่ง Office/บ้าน เป็น % ของภาพเรดาร์ 965x800
 // (เรดาร์หนองจอก 13.8348127,100.8463349 = px(483,400), สเกล 0.3008 กม./px)
+// (คำนวณด้วยสูตรเดียวกับ geometry() ใน weatherhub/service/api.py)
 const MARKERS = [
-  { id: 'office', label: 'Office', left: '38.7%', top: '52.8%', color: '#64d2ff' },  // 13.7733, 100.5426
-  { id: 'home', label: 'Home', left: '41.0%', top: '47.6%', color: '#ffb340' },      // 13.8873, 100.6026
+  { id: 'office', icon: 'office', n: 1, label: 'Office 1', left: '38.74%', top: '52.84%', color: '#64d2ff' },  // 13.7733, 100.5426
+  { id: 'office2', icon: 'office', n: 2, label: 'Office 2', left: '38.47%', top: '51.32%', color: '#bf8cff' }, // 13.8062486, 100.5352885
+  { id: 'home', icon: 'home', n: 1, label: 'Home 1', left: '40.98%', top: '47.58%', color: '#ffb340' },        // 13.8873269, 100.6026284
+  { id: 'home2', icon: 'home', n: 2, label: 'Home 2', left: '42.72%', top: '48.22%', color: '#ff6b6b' },       // 13.873365, 100.6494155
 ];
+const ME = { id: 'me', icon: 'me', label: 'ตำแหน่งเครื่องนี้', color: '#30d158' };
 
 // ไอคอนของปุ่ม toggle (SVG วาดเอง ไม่พึ่งฟอนต์/ไฟล์ภายนอก)
 const ICONS = {
@@ -108,23 +121,38 @@ const ICONS = {
       <path d="M3.75 6.25v7.5h8.5v-7.5M6.75 13.75v-3.5h2.5v3.5" />
     </svg>
   ),
+  me: (c) => (
+    <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke={c} strokeWidth="1.5" strokeLinecap="round">
+      <circle cx="8" cy="8" r="4.25" />
+      <circle cx="8" cy="8" r="1.25" fill={c} stroke="none" />
+      <path d="M8 1v2M8 13v2M1 8h2M13 8h2" />
+    </svg>
+  ),
 };
 
 // กดแล้วต้องไม่ไปเปิด Chrome (คลิกการ์ด) และไม่เริ่ม ⌥-drag
 const stop = (e) => e.stopPropagation();
-const ToggleButton = ({ m, on, dispatch }) => (
+const ToggleButton = ({ m, on, dispatch, note }) => (
   <div
-    title={`${on ? 'ซ่อน' : 'แสดง'}จุด ${m.label}`}
+    title={`${on ? 'ซ่อน' : 'แสดง'}จุด ${m.label}${note ? ` (${note})` : ''}`}
     onMouseDown={stop}
     onClick={(e) => { e.stopPropagation(); e.preventDefault(); dispatch({ type: 'TOGGLE', id: m.id }); }}
     style={{
-      width: '22px', height: '22px', borderRadius: '50%', boxSizing: 'border-box',
+      position: 'relative', width: '22px', height: '22px', borderRadius: '50%', boxSizing: 'border-box',
       display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer',
       background: on ? 'rgba(255,255,255,0.16)' : 'transparent',
-      border: `1px solid ${on ? m.color : 'rgba(255,255,255,0.22)'}`,
+      // ปุ่มเปิดอยู่แต่ยังวาดจุดไม่ได้ (เช่นยังไม่ได้พิกัด) = ขอบเส้นประ
+      border: `1px ${note ? 'dashed' : 'solid'} ${on ? m.color : 'rgba(255,255,255,0.22)'}`,
       opacity: on ? 1 : 0.55,
     }}>
-    {ICONS[m.id](on ? m.color : 'rgba(255,255,255,0.7)')}
+    {ICONS[m.icon](on ? m.color : 'rgba(255,255,255,0.7)')}
+    {m.n && (
+      <span style={{
+        position: 'absolute', right: '-3px', bottom: '-3px', minWidth: '10px', height: '10px',
+        borderRadius: '5px', background: 'rgba(24,26,33,0.9)', color: on ? m.color : 'rgba(255,255,255,0.7)',
+        fontSize: '8px', fontWeight: '700', lineHeight: '10px', textAlign: 'center',
+      }}>{m.n}</span>
+    )}
   </div>
 );
 
@@ -187,7 +215,7 @@ const altDrag = (e) => {
   window.addEventListener('mouseup', up);
 };
 
-export const render = ({ meta, state, src, show }, dispatch) => {
+export const render = ({ meta, state, src, located, show }, dispatch) => {
   if (!meta) return null;
 
   // ภาพเก่ากว่า 20 นาที = เตือนว่าค้าง
@@ -198,6 +226,9 @@ export const render = ({ meta, state, src, show }, dispatch) => {
     : `data:${meta.mime || 'image/png'};base64,${meta.img_base64}`;
   const point = state && state.point;
   const me = point && !point.default && point.img_pct;
+  // ปุ่มจุด "ฉัน" เปิดอยู่แต่วาดไม่ได้ -> บอกเหตุผลใน tooltip
+  const meNote = !located ? 'ยังไม่ได้พิกัด -- เช็คสิทธิ์ Location ของ Übersicht'
+    : !me ? 'อยู่นอกวงเรดาร์' : null;
   const rain = rainLine(state && state.nowcast);
 
   const container = {
@@ -223,18 +254,21 @@ export const render = ({ meta, state, src, show }, dispatch) => {
         <span style={{ fontSize: '11px', color: macos.secondary, fontWeight: '600', letterSpacing: '0.5px', textTransform: 'uppercase' }}>
           {meta.source}
         </span>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-          {MARKERS.map((m) => <ToggleButton m={m} on={show[m.id]} dispatch={dispatch} key={m.id} />)}
-          <span style={{ marginLeft: '4px', fontSize: '11px', color: stale ? macos.orange : macos.tertiary, fontWeight: stale ? '700' : '400' }}>
-            {stale ? '● ' : ''}{meta.last_update}{src === 'file' ? ' · file' : ''}
-          </span>
-        </div>
+        <span style={{ fontSize: '11px', color: stale ? macos.orange : macos.tertiary, fontWeight: stale ? '700' : '400' }}>
+          {stale ? '● ' : ''}{meta.last_update}{src === 'file' ? ' · file' : ''}
+        </span>
       </div>
 
       <div style={{ position: 'relative', width: '100%', borderRadius: '14px', overflow: 'hidden', background: 'rgba(255, 255, 255, 0.1)', minHeight: '200px', display: 'flex', alignItems: 'center' }}>
         <img src={imgSrc} style={{ width: '100%', display: 'block' }} />
         {MARKERS.filter((m) => show[m.id]).map((m) => <Marker m={m} key={m.id} />)}
-        {me && <MeMarker pct={me} />}
+        {me && show.me && <MeMarker pct={me} />}
+      </div>
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '10px' }}>
+        {MARKERS.map((m) => <ToggleButton m={m} on={show[m.id]} dispatch={dispatch} key={m.id} />)}
+        <div style={{ width: '1px', height: '14px', background: 'rgba(255,255,255,0.18)', margin: '0 2px' }} />
+        <ToggleButton m={ME} on={show.me} dispatch={dispatch} note={show.me ? meNote : null} />
       </div>
 
       {rain && (

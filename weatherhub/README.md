@@ -19,7 +19,7 @@ daemon `com.apphub.weatherhub` (ย้ายจาก cron 21 ก.ย.) + API �
 - `GET /api/radar` -> ภาพเรดาร์ล่าสุด (jpeg) / `GET /api/health`
 - `GET /api/frames?n=12` + `GET /api/frame?ts=` -> เฟรมย้อนหลัง (ภาพนิ่งที่งาน radar ดึงอยู่แล้ว เก็บ 2 ชม.
   ใน <store>/frames/ ภาพซ้ำไม่เก็บ -- ดู service/frames.py) ให้หน้าเว็บเล่นเป็นภาพเคลื่อนไหว ไม่ยิง กทม. เพิ่ม
-- `GET /api/forecast?pts=lat,lon;lat,lon` -> nowcast รายจุด (สูงสุด 8 จุด ปัดกริด 0.01°): ตกอยู่ไหม /
+- `GET /api/forecast?pts=lat,lon;lat,lon` -> nowcast รายจุด (สูงสุด 8 จุด ใช้พิกัดตามที่ส่งมา ไม่ปัด): ตกอยู่ไหม /
   เริ่มกี่โมง / หยุดกี่โมง / timeline ทุก 5 นาที 1 ชม. -- คิดจาก snapshot ของ service/point_nowcast.py
   ที่งาน radar เขียนทุกครั้งที่ได้เฟรมใหม่ (motion จากเฟรม ~30 นาทีก่อน ในหน้าต่าง 60 กม. รอบ กทม.
   + เฟรมใช้เวลาในภาพที่อ่านด้วย OCR -- service/ocr_time.swift, Vision ของ macOS) ไม่ยิงต้นทางเพิ่ม

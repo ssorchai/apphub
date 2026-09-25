@@ -119,14 +119,17 @@ def _age(v):
 
 
 point_snap = FileCache(pn.SNAP_PATH, pn.load_snapshot)
-FORECAST_GRID = 0.01           # ~1.1 กม. -- ละเอียดกว่า GRID ของ /api/state เพราะถามว่า "ตกที่จุดนี้ไหม"
+# /api/forecast ไม่ปัดพิกัด (เดิมปัด 0.01° ~1.1 กม. ทำให้จุด custom บนภาพคลาดได้ ~550 ม. -- ผู้ใช้เห็น 25 ก.ย.)
+# จุดที่ส่งมาเป็นสถานที่ประจำ/จุดที่พิมพ์เอง ไม่ใช่ตำแหน่งติดตามตัว และ API ไม่เก็บ/ไม่ log พิกัดอยู่แล้ว
+# ตัดทศนิยมที่ 6 หลัก (~0.1 ม.) พอ -- mask ฝนละเอียดแค่ ~0.6 กม./ช่อง
+FORECAST_DECIMALS = 6
 FORECAST_MAX_POINTS = 8
 
 
 def r_forecast(query):
     """`?pts=lat,lon;lat,lon` -> ฝนจะเริ่ม/หยุดกี่โมงของแต่ละจุด (ลำดับเดียวกับที่ส่งมา)
 
-    คิดจาก snapshot ที่งาน radar เขียนไว้ ไม่เปิดภาพ/ไม่ยิงต้นทาง / พิกัดปัดกริดก่อนและไม่ log"""
+    คิดจาก snapshot ที่งาน radar เขียนไว้ ไม่เปิดภาพ/ไม่ยิงต้นทาง / ไม่เก็บและไม่ log พิกัด"""
     raw = ";".join(query.get("pts", [])).split(";")
     pts = []
     for item in raw:
@@ -138,8 +141,7 @@ def r_forecast(query):
             return 400, JSON, json_body({"error": "pts = lat,lon;lat,lon"})
         if not (-90 <= la <= 90 and -180 <= lo <= 180):
             return 400, JSON, json_body({"error": "lat/lon อยู่นอกช่วง"})
-        pts.append((round(round(la / FORECAST_GRID) * FORECAST_GRID, 4),
-                    round(round(lo / FORECAST_GRID) * FORECAST_GRID, 4)))
+        pts.append((round(la, FORECAST_DECIMALS), round(lo, FORECAST_DECIMALS)))
     if len(pts) > FORECAST_MAX_POINTS:
         return 400, JSON, json_body({"error": "สูงสุด {} จุด".format(FORECAST_MAX_POINTS)})
     snap, _ = point_snap.get()

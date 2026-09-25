@@ -181,7 +181,8 @@ const load = dispatch => {
   const fetchForecast = () => {
     if (!WEB) return;
     const items = MARKERS.map(m => [m.id, m.lat, m.lon]).concat(loc ? [['me', loc.lat, loc.lon]] : []).concat(customLL ? [['custom', customLL.lat, customLL.lon]] : []);
-    const pts = items.map(([, la, lo]) => `${la.toFixed(4)},${lo.toFixed(4)}`);
+    const pts = items.map(([, la, lo]) => `${la.toFixed(6)},${lo.toFixed(6)}`); // ไม่ปัด -- จุดบนภาพต้องตรงที่กรอก
+
     fetchJson(API + '/api/forecast?pts=' + encodeURIComponent(pts.join(';'))).then(f => {
       const byId = {};
       items.forEach(([id], i) => {
@@ -1573,7 +1574,7 @@ const WebPage = ({
     pending: !(fcById && fcById.custom),
     note: fcById && fcById.custom && !fcById.custom.in_coverage ? 'อยู่นอกวงเรดาร์ (120 กม. จากหนองจอก)' : null,
     fc: fcById && fcById.custom && fcById.custom.forecast,
-    dist: `${custom.lat.toFixed(4)}, ${custom.lon.toFixed(4)}${myLL ? ` · ห่างจากเครื่องนี้ ${kmBetween(myLL, custom).toFixed(1)} กม.` : ''}`
+    dist: `${custom.lat}, ${custom.lon}${myLL ? ` · ห่างจากเครื่องนี้ ${kmBetween(myLL, custom).toFixed(1)} กม.` : ''}`
   }), /*#__PURE__*/React.createElement(CustomInput, {
     custom: custom,
     dispatch: dispatch

@@ -12,7 +12,8 @@ stats() จับคู่ช่องทำนายกับ observed ที�
 ตัดสินแค่ "ฝน / ไม่ฝน" (level > 0) -- ฝนหนักยังไม่วัด
 
 ข้อมูลไว้จูนโมเดล (ยังไม่จูน -- เก็บก่อน, ผู้ใช้ขอ 25 ก.ย.):
-  - ผลทาย trend ของ PLACES แนบ features (level ดิบ + สัดส่วนฝนรอบๆ + ความชันทุกช่อง) + via/motion
+  - ผลทาย trend ของ PLACES แนบ features (level ดิบ + สัดส่วนฝนรอบๆ + ความชันทุกช่อง + ชุดรัศมี/
+    ช่วงย้อนหลังทางเลือกใน features.var) + via/motion -- ตัวจูน = tune_nowcast.py
   - GRID: จุดตัวอย่างทั่ว กทม. อีก 30 จุด ได้ข้อมูลเร็วกว่า 4 สถานที่ ~8 เท่า เก็บ model "raw"
     อย่างเดียว (features ล้วน) -- trend/advect/persist คิดย้อนหลังจากมันได้หมดด้วย F_DRY ค่าไหนก็ได้
     ไม่นับในตารางบนหน้าเว็บ (stats ดูแค่ PLACES)
@@ -59,7 +60,8 @@ def record(store, snap, now=None, via=None):
     obs = snap["ts"]
     t0 = obs + FRAME_SEC * max(0, math.ceil((now - obs) / FRAME_SEC))
     fresh = (now - obs) / 60 <= stale_min      # ภาพเก่า ตัวทายจริงก็ไม่ทาย -- ไม่นับ
-    ctx = {"via": via, "motion": snap.get("motion"), "ref_ts": snap.get("ref_ts"), "f_dry": pn.F_DRY}
+    ctx = {"via": via, "motion": snap.get("motion"), "ref_ts": snap.get("ref_ts"), "f_dry": pn.F_DRY,
+           "trend": pn.trend_name(pn.TREND_RADIUS_KM, pn.TREND_WINDOW_MIN)}   # ชุดที่ features.f/s ใช้
     steps = pn.LOOKAHEAD_MIN // pn.STEP_MIN + 1
     n = 0
     for place, (la, lo) in list(PLACES.items()) + list(GRID.items()):

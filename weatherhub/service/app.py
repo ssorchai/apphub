@@ -36,8 +36,8 @@ RADAR_INTERVAL = 300       # เท่าบรรทัด cron เดิม (*
 RADAR_OFFSET = 150
 RADAR_TIMEOUT = 60
 HOUSEKEEPING_INTERVAL = 24 * 3600
-RETENTION_DAYS = 30        # history/forecast + observed ใช้วัดความแม่น/จูนโมเดล (~5 MB/วัน รวม GRID + features)
-RETENTION_CAP_MB = 300
+RETENTION_DAYS = 30        # history/forecast + observed ใช้วัดความแม่น/จูนโมเดล (วันฝนตก ~10 MB/วัน รวม GRID + features)
+RETENTION_CAP_MB = 500
 
 store = Store(SERVICE)
 health = Health(store)

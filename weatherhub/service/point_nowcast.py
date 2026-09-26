@@ -50,6 +50,14 @@ TREND_MIN_SPAN = 10            # ต้องมีข้อมูลห่า�
 TREND_RADIUS_KM = 10           # วัดสัดส่วนฝนรอบๆ ในรัศมีนี้
 F_DRY = 0.22                   # สัดส่วนฝนรอบๆ ต่ำกว่านี้ จุดกลางมักแห้งแล้ว (Home 1/2 หยุดที่ 0.23/0.19
                                # ยังตกที่ 0.24 -- ได้จากเหตุการณ์เดียว 25 ก.ย. ควรปรับเมื่อมีข้อมูลมากขึ้น)
+# ชุดรัศมี/ช่วงย้อนหลังทางเลือก -- verify เก็บค่าของทุกชุดไว้ให้ tune_nowcast.py เทียบกับชุดที่ใช้จริง
+# (ชุดจริง = TREND_RADIUS_KM / TREND_WINDOW_MIN อยู่ใน features.f/s แล้ว) ตัวทายบนหน้าเว็บไม่ได้ใช้
+TREND_VARIANTS = [(5, 30), (15, 30), (10, 20), (10, 45)]      # (รัศมี กม., ย้อนหลัง นาที)
+HIST_MAX_MIN = max([TREND_WINDOW_MIN] + [w for _, w in TREND_VARIANTS])
+
+
+def trend_name(radius_km, window_min):
+    return "r{:g}w{:g}".format(radius_km, window_min)
 AOI = rn.LOCATIONS["Office"]   # ศูนย์กลางพื้นที่ที่สนใจ (กรุงเทพฯ)
 
 
@@ -110,7 +118,7 @@ def analyze(folder, listing, cache=None):
             "rain": _rle(rain), "heavy": _rle(heavy),
             # เฟรมย้อนหลังสำหรับแนวโน้ม (ฝนอย่างเดียว) -- ไม่รวมเฟรมล่าสุด
             "hist": [{"ts": t, "rain": _rle(_masks(folder, n, cache)[0])} for t, n in listing[:-1]
-                     if 0 < (ts - t) / 60 <= TREND_WINDOW_MIN]}
+                     if 0 < (ts - t) / 60 <= HIST_MAX_MIN]}
     if motion:
         d, spd = rn.describe_motion(motion)
         snap["from_dir"], snap["speed_kmh"] = d, round(spd, 1)
@@ -149,21 +157,23 @@ def _disk(r_km):
     return _DISK[r_km]
 
 
-def _frac(mask, x, y):
+def _frac(mask, x, y, radius_km=TREND_RADIUS_KM):
     cx, cy = int(round(x)), int(round(y))
-    d = _disk(TREND_RADIUS_KM)
+    d = _disk(radius_km)
     return sum((cx + dx, cy + dy) in mask for dx, dy in d) / len(d)
 
 
-def trend(snap, x, y):
+def trend(snap, x, y, radius_km=TREND_RADIUS_KM, window_min=TREND_WINDOW_MIN):
     """(สัดส่วนฝนรอบ (x,y) ในภาพล่าสุด, ความชันต่อนาที | None) -- ตามกลุ่มฝนย้อนเวลาด้วย motion"""
     v = snap.get("motion") or (0.0, 0.0)
     obs = snap["ts"]
-    f_now = _frac(snap["rain"], x, y)
+    f_now = _frac(snap["rain"], x, y, radius_km)
     pts = [(0.0, f_now)]
     for h in snap.get("hist") or []:
         back = (obs - h["ts"]) / 60.0                  # นาทีก่อนภาพล่าสุด
-        pts.append((-back, _frac(h["rain"], x - v[0] * back / STEP_MIN, y - v[1] * back / STEP_MIN)))
+        if back > window_min:
+            continue
+        pts.append((-back, _frac(h["rain"], x - v[0] * back / STEP_MIN, y - v[1] * back / STEP_MIN, radius_km)))
     span = max(t for t, _ in pts) - min(t for t, _ in pts)
     if len(pts) < 2 or span < TREND_MIN_SPAN:
         return f_now, None
@@ -201,6 +211,7 @@ def forecast(snap, lat, lon, now=None, use_trend=True, stale_min=STALE_MIN, feat
     lead0 = (now - obs) / 60.0                        # ภาพเก่าไปกี่นาทีแล้ว = ต้องฉายไปข้างหน้าเท่านี้ก่อน
     steps = []
     raw, fs, ss = [], [], []
+    var = {rw: ([], []) for rw in TREND_VARIANTS} if features else {}
     trend_info = None
     for k in range(LOOKAHEAD_MIN // STEP_MIN + 1):
         lead = lead0 + k * STEP_MIN                    # นาทีนับจากเวลาภาพ
@@ -221,6 +232,12 @@ def forecast(snap, lat, lon, now=None, use_trend=True, stale_min=STALE_MIN, feat
                     level = 0
         fs.append(None if f_now is None else round(f_now, 4))
         ss.append(None if slope is None else round(slope, 5))
+        for rw, (vf, vs) in var.items():
+            f2 = s2 = None
+            if raw[-1] and use_trend:
+                f2, s2 = trend(snap, sx, sy, *rw)
+            vf.append(None if f2 is None else round(f2, 4))
+            vs.append(None if s2 is None else round(s2, 5))
         steps.append(level)
 
     def first(pred, start=0):
@@ -252,5 +269,5 @@ def forecast(snap, lat, lon, now=None, use_trend=True, stale_min=STALE_MIN, feat
     if features:
         out["features"] = {"lead0": round(lead0, 2), "raw": raw}
         if any(f is not None for f in fs):         # แห้งทั้งชั่วโมง = ไม่ต้องเก็บ (ประหยัดที่)
-            out["features"].update(f=fs, s=ss)
+            out["features"].update(f=fs, s=ss, var={trend_name(*rw): {"f": vf, "s": vs} for rw, (vf, vs) in var.items()})
     return out
